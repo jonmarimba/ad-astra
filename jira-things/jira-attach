@@ -1,0 +1,906 @@
+#!/usr/bin/env python3
+"""Attach files to a Jira issue and build/extend its comments or description.
+
+ATTACH ONLY (default):
+    jira-attach MHMAPPS-1 shot.png a.pdf
+
+BUILD A NEW COMMENT / REPLACE A COMMENT / REPLACE THE DESCRIPTION  (full formatting):
+    jira-attach --comment            MHMAPPS-1 --text 'h3. Findings' --image a.png --text 'See [^spec.pdf].' --file spec.pdf
+    jira-attach --replace-comment 45210 MHMAPPS-1 --text '*Updated* summary.'
+    jira-attach --replace-description   MHMAPPS-1 --text 'h2. Overview' --image arch.png
+
+    In these modes --text is Jira WIKI markup (h3., *bold*, _italic_, {code}, lists,
+    tables, etc.). It is assembled and posted via the v2 API, which Jira converts to
+    ADF server-side. --image/--file parts embed the attachment inline by filename.
+
+APPEND TO A COMMENT / THE DESCRIPTION  (byte-safe; existing content is never rewritten):
+    jira-attach --append-comment 45210 MHMAPPS-1 --text 'A follow-up note.' --image b.png
+    jira-attach --append-description    MHMAPPS-1 --text 'Update:' --file log.txt
+
+    Append fetches the existing content as ADF and only concatenates new nodes, so
+    existing panels / expands / task lists / anything are preserved exactly. Because
+    that means the new chunk is built locally (there is no server-side wiki->ADF for a
+    fragment), APPEND SUPPORTS PLAIN TEXT + IMAGES + FILE CARDS ONLY. If a --text part
+    in an append contains wiki/markdown formatting, the command errors — it will not
+    silently flatten or drop it. For formatted additions, post a new comment (or
+    replace the description) instead.
+
+CONTENT PARTS (ordered, repeatable; emitted in command-line order):
+    --text  T     a text block  (wiki in rich modes; plain in append modes)
+    --image F     an image file: attached, embedded inline
+    --file  F     any file:      attached, embedded as a file card
+
+Positional FILE args are attached; in a build/append mode they are appended as
+trailing --image (images) or --file (everything else) parts, in order.
+
+SETUP:
+    jira-attach --configure
+
+    Prompts for the Jira site and the account email, saves them to
+    ~/.config/jira-attach/config.json, and stores an API token if none is held yet.
+    The first ordinary run prompts for anything still missing. Per-run overrides:
+    --site / --email.
+
+The Atlassian API token is kept in the macOS keychain (never on a command line, never
+in the config file). Requests use the api.atlassian.com gateway addressed by cloudId,
+fetched from the site's public /_edge/tenant_info endpoint.
+
+Settings resolve as: command-line option, then environment, then config file, then a
+prompt. Environment overrides:
+    JIRA_SITE / JIRA_EMAIL / JIRA_KEYCHAIN_SERVICE / JIRA_CLOUD_ID / JIRA_ATTACH_CONFIG
+"""
+
+import argparse
+import base64
+import getpass
+import json
+import mimetypes
+import os
+import re
+import struct
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
+
+GATEWAY = "https://api.atlassian.com/ex/jira"
+DEFAULT_KEYCHAIN_SERVICE = "atlassian-api-token"
+CONFIG_PATH = Path(os.environ.get("JIRA_ATTACH_CONFIG")
+                   or Path.home() / ".config" / "jira-attach" / "config.json")
+TOKEN_URL = "https://id.atlassian.com/manage-profile/security/api-tokens"
+
+HTTP_TIMEOUT = 60          # seconds, per network request
+KEYCHAIN_TIMEOUT = 15      # seconds, per `security` invocation
+
+ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
+COMMENT_ID_PATTERN = re.compile(r"^\d+$")
+UUID_IN_MEDIA_URL = re.compile(r"/file/([0-9a-fA-F-]{36})")
+
+
+class _Ambiguous(Exception):
+    """A mutating request failed with no server response, so it may or may not have
+    committed. Destructive rollback is unsafe (it could delete a committed write's
+    attachment), so these are handled without deleting."""
+
+# Conservative detector for wiki/markdown formatting that append cannot honor.
+# Deliberately targets clear intent (headings, macros, lists, tables, links,
+# paired emphasis) and leaves genuinely ambiguous punctuation alone.
+WIKI_FORMATTING = re.compile(
+    r"""(^\s*h[1-6]\.\s)             # h1. .. h6. headings
+      | (^\s*bq\.\s)                 # bq. blockquote
+      | (^\s{0,3}[-*#]+\s+\S)        # * - # list items (wiki + markdown)
+      | (^\s{0,3}\d+\.\s+\S)         # markdown 1. ordered list
+      | (^\s*>\s+\S)                 # markdown > blockquote
+      | (^\s*\|\|?)                  # || table header / | table row
+      | (\{(code|noformat|panel|quote|color|expand|tip|note|info|warning|section|column)[:}\s])  # wiki macros
+      | (\{\{.+?\}\})                # {{monospaced}}
+      | (`[^`\n]+`)                  # `inline code`
+      | (\[[^\]|]*\|[^\]]*\])        # [text|url] wiki links
+      | (\[[^\]]*://[^\]]*\])        # [http://url] bracketed link
+      | ((?<![\w*])\*[^\s*./][^*\n]*\*(?![\w*]))  # *bold* (excludes *.glob paths)
+      | ((?<![\w_])_[^\s_][^_\n]*_(?![\w_]))    # _italic_
+      | (\*\*[^\s*][^*\n]*\*\*)      # markdown **bold**
+      | (\[[^\]]*\]\([^)]*\))        # markdown [text](url)
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
+
+# --------------------------------------------------------------------------- #
+# Settings (site / email / keychain service)
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class Settings:
+    """Who we are and where we talk to. Resolved once, then passed explicitly."""
+    site: str
+    email: str
+    keychain_service: str
+
+
+@dataclass(frozen=True)
+class Credentials:
+    """An authenticated identity: the email the token belongs to, and the token."""
+    email: str
+    token: str
+
+    @property
+    def auth_header(self) -> str:
+        return "Basic " + base64.b64encode(f"{self.email}:{self.token}".encode()).decode()
+
+
+CONFIG_KEYS = ("site", "email", "keychain_service")
+
+
+def load_config() -> dict[str, str]:
+    """Read the saved settings. A missing file is normal (first run); a malformed one
+    is an error rather than a silent reset, so a typo is never mistaken for 'unset'."""
+    try:
+        raw = CONFIG_PATH.read_text()
+    except FileNotFoundError:
+        return {}
+    except OSError as error:
+        sys.exit(f"Could not read {CONFIG_PATH}: {error}")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as error:
+        sys.exit(f"{CONFIG_PATH} is not valid JSON ({error}). Fix or delete it, "
+                 "then re-run with --configure.")
+    if not isinstance(data, dict):
+        sys.exit(f"{CONFIG_PATH} must contain a JSON object. Fix or delete it, "
+                 "then re-run with --configure.")
+    bad = [key for key in CONFIG_KEYS if key in data and not isinstance(data[key], str)]
+    if bad:
+        sys.exit(f"{CONFIG_PATH} has non-string value(s) for: {', '.join(bad)}. "
+                 "Fix or delete it, then re-run with --configure.")
+    return {key: data[key] for key in CONFIG_KEYS if key in data}
+
+
+def save_config(settings: Settings) -> None:
+    """Persist settings for later runs. Written user-only and replaced atomically, so
+    a crash mid-write cannot leave a half-written config behind."""
+    data = {"site": settings.site, "email": settings.email}
+    if settings.keychain_service != DEFAULT_KEYCHAIN_SERVICE:
+        data["keychain_service"] = settings.keychain_service
+    temporary = CONFIG_PATH.with_name(CONFIG_PATH.name + f".{os.getpid()}.tmp")
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temporary.write_text(json.dumps(data, indent=2) + "\n")
+        temporary.chmod(0o600)
+        os.replace(temporary, CONFIG_PATH)
+    except OSError as error:
+        temporary.unlink(missing_ok=True)
+        sys.exit(f"Could not write {CONFIG_PATH}: {error}")
+    print(f"Saved settings to {CONFIG_PATH}")
+
+
+def normalize_site(raw: str) -> str:
+    """'enharmonichq.atlassian.net', with or without scheme or trailing path, becomes
+    'https://enharmonichq.atlassian.net'."""
+    site = raw.strip().rstrip("/")
+    if "://" not in site:
+        site = "https://" + site
+    parts = urlsplit(site)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise ValueError(f"'{raw}' is not a site URL (expected https://your-team.atlassian.net)")
+    if "." not in parts.netloc:
+        raise ValueError(f"'{raw}' is missing a domain (expected https://your-team.atlassian.net)")
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def validate_email(raw: str) -> str:
+    email = raw.strip()
+    if "@" not in email or email.split("@")[-1].count(".") < 1 or any(c.isspace() for c in email):
+        raise ValueError(f"'{raw}' is not an email address (the Atlassian account's login email)")
+    return email
+
+
+def _ask(label: str, current: str | None, validate) -> str:
+    while True:
+        try:
+            answer = input(f"{label}{f' [{current}]' if current else ''}: ").strip() or (current or "")
+        except (EOFError, OSError):
+            sys.exit("Setup needs an interactive terminal. Run `jira-attach --configure` from a "
+                     "terminal, or pass --site/--email (or set JIRA_SITE/JIRA_EMAIL).")
+        if not answer:
+            print("  A value is required.")
+            continue
+        try:
+            return validate(answer)
+        except ValueError as error:
+            print(f"  {error}")
+
+
+def _first_provided(*candidates: tuple[str | None, str]) -> tuple[str | None, str | None]:
+    """The highest-precedence value that was actually provided, with the name of where
+    it came from — so an invalid value can be reported against its real source."""
+    for value, origin in candidates:
+        if value:
+            return value, origin
+    return None, None
+
+
+def resolve_settings(site_option: str | None, email_option: str | None,
+                     *, reconfigure: bool) -> Settings:
+    """Settings come from (in order) the command line, the environment, the config
+    file, then a prompt. Prompted values — and only those — are saved, so --site and
+    --email stay one-run overrides."""
+    stored = load_config()
+    site, site_origin = _first_provided((site_option, "--site"),
+                                        (os.environ.get("JIRA_SITE"), "JIRA_SITE"),
+                                        (stored.get("site"), str(CONFIG_PATH)))
+    email, email_origin = _first_provided((email_option, "--email"),
+                                          (os.environ.get("JIRA_EMAIL"), "JIRA_EMAIL"),
+                                          (stored.get("email"), str(CONFIG_PATH)))
+    service = (os.environ.get("JIRA_KEYCHAIN_SERVICE") or stored.get("keychain_service")
+               or DEFAULT_KEYCHAIN_SERVICE)
+
+    # Outside --configure a bad value is fatal: silently prompting past it would hide
+    # a typo in the config or the environment. --configure is how you fix one.
+    if not reconfigure:
+        for value, origin, normalize in ((site, site_origin, normalize_site),
+                                         (email, email_origin, validate_email)):
+            if value is None:
+                continue
+            try:
+                normalize(value)
+            except ValueError as error:
+                sys.exit(f"Invalid value from {origin}: {error}\n"
+                         "Re-run with --configure to set it, or override with --site/--email.")
+        if site and email:
+            return Settings(site=normalize_site(site), email=validate_email(email),
+                            keychain_service=service)
+        print("First run — jira-attach needs to know which Jira site and account to use.")
+    settings = Settings(
+        site=_ask("Jira site URL", site, normalize_site),
+        email=_ask("Atlassian account email", email, validate_email),
+        keychain_service=service,
+    )
+    save_config(settings)
+    return settings
+
+
+# --------------------------------------------------------------------------- #
+# Token / keychain
+# --------------------------------------------------------------------------- #
+
+def read_token_from_keychain(settings: Settings) -> str | None:
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password",
+             "-a", settings.email, "-s", settings.keychain_service, "-w"],
+            capture_output=True, text=True, timeout=KEYCHAIN_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        sys.exit("Timed out reading the token from the keychain.")
+    return result.stdout.strip() or None if result.returncode == 0 else None
+
+
+def store_token_in_keychain(settings: Settings, token: str) -> None:
+    try:
+        result = subprocess.run(
+            ["security", "add-generic-password",
+             "-a", settings.email, "-s", settings.keychain_service, "-w", token, "-U"],
+            capture_output=True, text=True, timeout=KEYCHAIN_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        sys.exit("Timed out storing the token in the keychain.")
+    if result.returncode != 0:
+        sys.exit(f"Could not store token in keychain: {result.stderr.strip()}")
+
+
+def prompt_for_token(settings: Settings, *, replacing: bool = False) -> str:
+    lead = "Replacing the API token stored for" if replacing else "No API token stored for"
+    print(f"{lead} {settings.email} (keychain service '{settings.keychain_service}').")
+    print(f"Create one at {TOKEN_URL}")
+    try:
+        token = getpass.getpass("Paste the API token (input hidden): ").strip()
+    except (EOFError, OSError):
+        sys.exit("A token is required — run this interactively so it can be entered.")
+    if not token:
+        sys.exit("No token entered.")
+    store_token_in_keychain(settings, token)
+    print("Token stored in keychain.")
+    return token
+
+
+def obtain_credentials(settings: Settings, force_new: bool = False) -> Credentials:
+    token = (prompt_for_token(settings, replacing=True) if force_new
+             else (read_token_from_keychain(settings) or prompt_for_token(settings)))
+    return Credentials(email=settings.email, token=token)
+
+
+# --------------------------------------------------------------------------- #
+# HTTP
+# --------------------------------------------------------------------------- #
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+class _StripAuthCrossOrigin(urllib.request.HTTPRedirectHandler):
+    """Follow redirects, but never carry the Authorization header to a different
+    origin — otherwise a redirect off api.atlassian.com would leak the token."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urlsplit(newurl).netloc != urlsplit(req.full_url).netloc:
+            new.remove_header("Authorization")
+        return new
+
+
+_no_redirect_opener = urllib.request.build_opener(_NoRedirect)
+_opener = urllib.request.build_opener(_StripAuthCrossOrigin)
+
+
+def get_cloud_id(settings: Settings) -> str:
+    override = os.environ.get("JIRA_CLOUD_ID")
+    if override:
+        return override
+    try:
+        with urllib.request.urlopen(f"{settings.site}/_edge/tenant_info",
+                                    timeout=HTTP_TIMEOUT) as response:
+            return json.loads(response.read())["cloudId"]
+    except (urllib.error.URLError, KeyError, json.JSONDecodeError) as error:
+        sys.exit(f"Could not fetch cloudId from {settings.site}/_edge/tenant_info: {error}")
+
+
+def api(method: str, url: str, credentials: Credentials, *, json_body=None) -> dict | list | None:
+    data = json.dumps(json_body).encode() if json_body is not None else None
+    headers = {"Authorization": credentials.auth_header, "Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with _opener.open(request, timeout=HTTP_TIMEOUT) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as error:
+        # A 5xx on a write may have committed server-side despite the error response,
+        # so it is ambiguous (like a lost connection). 4xx means the write was rejected.
+        if method in ("POST", "PUT") and error.code >= 500:
+            body = error.read().decode(errors="replace")
+            raise _Ambiguous(f"Jira returned {error.code} {error.reason} to a {method} ({url}); the "
+                             f"write may or may not have committed — verify the issue.\n{body}")
+        _die_http(error, url)
+    except urllib.error.URLError as error:
+        # A GET that never reached the server is a safe, definitive failure. A POST/PUT
+        # with no response may or may not have committed — surface that ambiguity.
+        if method in ("POST", "PUT"):
+            raise _Ambiguous(f"Network error during a {method} to {url} ({error.reason}); "
+                             "the write may or may not have committed — verify the issue.")
+        sys.exit(f"Could not reach the Jira gateway: {error.reason}")
+
+
+def _die_http(error: urllib.error.HTTPError, url: str) -> None:
+    detail = error.read().decode(errors="replace")
+    if error.code == 401:
+        detail += "\n\nThe stored token may be revoked. Re-run with --reset-token."
+    elif error.code == 404:
+        detail += ("\n\nA 404 here usually means the token can't SEE the issue/comment — "
+                   "it needs the coarse 'read:jira-work' scope. A classic (unscoped) or "
+                   "coarsely-scoped token fixes this.")
+    sys.exit(f"Jira returned {error.code} {error.reason} for {url}\n{detail}")
+
+
+def _require_json(result, what: str):
+    if result is None:
+        sys.exit(f"Unexpected empty response from Jira where {what} was expected.")
+    return result
+
+
+def _best_effort(method: str, url: str, credentials: Credentials, json_body=None) -> bool:
+    """A DELETE/PUT used only for rollback cleanup; never raises. Returns whether
+    the request appeared to succeed (2xx)."""
+    data = json.dumps(json_body).encode() if json_body is not None else None
+    headers = {"Authorization": credentials.auth_header}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    try:
+        with _opener.open(urllib.request.Request(url, data=data, method=method, headers=headers),
+                          timeout=HTTP_TIMEOUT) as response:
+            return 200 <= response.status < 300
+    except Exception:
+        return False
+
+
+class Rollback:
+    """Undo partial work when an embed/append fails, so an automated retry stays
+    clean: restore replaced content, delete a just-created comment, and remove the
+    attachments uploaded this run.
+
+    Order matters for safety: content (a replaced comment/description or a just-
+    created comment) is cleaned up FIRST, and the uploaded attachments are removed
+    only if that succeeded — otherwise the attachments may still be referenced, so
+    they are left in place and the failure is reported truthfully."""
+
+    def __init__(self, base3: str, credentials: Credentials, issue: str):
+        self.base3, self.credentials, self.issue = base3, credentials, issue
+        self.attachment_ids: list[str] = []
+        self.delete_comment_id: str | None = None
+        self.restore: tuple[str, dict] | None = None
+
+    def run(self, destructive: bool = True) -> None:
+        if not destructive:
+            if self.attachment_ids or self.delete_comment_id or self.restore:
+                print(f"Left partial work in place ({len(self.attachment_ids)} attachment(s)) "
+                      "because the outcome is uncertain — verify the issue and clean up if needed.",
+                      file=sys.stderr)
+            return
+
+        actions: list[str] = []
+        content_ok = True
+        if self.restore:
+            ok = _best_effort("PUT", self.restore[0], self.credentials, self.restore[1])
+            content_ok = content_ok and ok
+            actions.append("restored prior content" if ok else "FAILED to restore prior content")
+        if self.delete_comment_id:
+            ok = _best_effort("DELETE", f"{self.base3}/issue/{self.issue}/comment/{self.delete_comment_id}", self.credentials)
+            content_ok = content_ok and ok
+            actions.append(f"deleted comment {self.delete_comment_id}" if ok
+                           else f"FAILED to delete comment {self.delete_comment_id}")
+        if self.attachment_ids:
+            if content_ok:
+                removed = sum(_best_effort("DELETE", f"{self.base3}/attachment/{aid}", self.credentials)
+                              for aid in self.attachment_ids)
+                actions.append(f"removed {removed}/{len(self.attachment_ids)} attachment(s)")
+            else:
+                actions.append(f"LEFT {len(self.attachment_ids)} attachment(s) in place "
+                               "(content cleanup failed; remove manually if orphaned)")
+        if actions:
+            print("Rollback: " + "; ".join(actions) + ".", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- #
+# Attach + media-id resolution
+# --------------------------------------------------------------------------- #
+
+def _header_filename(name: str) -> str:
+    """RFC 6266 quoted-string safety: drop CR/LF (which would inject header lines)
+    and escape backslash and double-quote so the Content-Disposition can't break."""
+    return name.replace("\r", "").replace("\n", "").replace("\\", "\\\\").replace('"', '\\"')
+
+
+def build_multipart_body(paths: list[Path]) -> tuple[bytes, str]:
+    boundary = f"----jira-attach-{uuid.uuid4().hex}"
+    parts: list[bytes] = []
+    for path in paths:
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        parts.append(
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{_header_filename(path.name)}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n".encode()
+        )
+        parts.append(path.read_bytes())
+        parts.append(b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), boundary
+
+
+def attach_one(base3: str, credentials: Credentials, issue: str, path: Path) -> dict:
+    """Upload a SINGLE file and return its attachment record. Uploading one file per
+    request makes each response unambiguously that file's — no reliance on multi-file
+    response ordering (which Jira does not guarantee), so duplicate basenames or a
+    reordered batch can never bind media to the wrong content part."""
+    body, boundary = build_multipart_body([path])
+    request = urllib.request.Request(
+        f"{base3}/issue/{issue}/attachments", data=body, method="POST",
+        headers={
+            "Authorization": credentials.auth_header,
+            "X-Atlassian-Token": "no-check",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with _opener.open(request, timeout=HTTP_TIMEOUT) as response:
+            records = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        _die_http(error, f"{base3}/issue/{issue}/attachments")
+    except urllib.error.URLError as error:
+        # An attachment is not referenced by any content yet, so cleanup of the other
+        # confirmed uploads is safe — treat this as a definitive failure.
+        sys.exit(f"Could not reach the Jira gateway uploading {path.name}: {error.reason}")
+    if len(records) != 1:
+        sys.exit(f"Uploading {path.name} returned {len(records)} record(s); expected 1.")
+    return records[0]
+
+
+def resolve_media_id(base3: str, credentials: Credentials, attachment_id: str) -> str:
+    request = urllib.request.Request(
+        f"{base3}/attachment/content/{attachment_id}",
+        headers={"Authorization": credentials.auth_header},
+    )
+    try:
+        _no_redirect_opener.open(request, timeout=HTTP_TIMEOUT)
+    except urllib.error.HTTPError as error:
+        if error.code in (301, 302, 303, 307, 308):
+            match = UUID_IN_MEDIA_URL.search(error.headers.get("Location", ""))
+            if match:
+                return match.group(1)
+            sys.exit(f"No media id in redirect for attachment {attachment_id}.")
+        _die_http(error, f"{base3}/attachment/content/{attachment_id}")
+    except urllib.error.URLError as error:
+        sys.exit(f"Could not reach the Jira gateway: {error.reason}")
+    sys.exit(f"Expected a redirect resolving media id for attachment {attachment_id}.")
+
+
+# --------------------------------------------------------------------------- #
+# Image dimensions (png / jpeg / gif)
+# --------------------------------------------------------------------------- #
+
+def image_size(path: Path) -> tuple[int, int] | None:
+    """Best-effort width/height from the header. Returns None (embed at natural
+    size) for unknown formats or unreadable/truncated files — never raises."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(26)
+        if len(head) >= 24 and head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
+            return struct.unpack(">II", head[16:24])
+        if len(head) >= 10 and head[:6] in (b"GIF87a", b"GIF89a"):
+            return struct.unpack("<HH", head[6:10])
+        if head[:2] == b"\xff\xd8":
+            return _jpeg_size(path)
+    except (struct.error, OSError):
+        return None
+    return None
+
+
+def _jpeg_size(path: Path) -> tuple[int, int] | None:
+    with open(path, "rb") as handle:
+        handle.read(2)
+        while True:
+            marker = handle.read(2)
+            if len(marker) < 2 or marker[0] != 0xFF:
+                return None
+            kind = marker[1]
+            if 0xC0 <= kind <= 0xCF and kind not in (0xC4, 0xC8, 0xCC):
+                handle.read(3)
+                height, width = struct.unpack(">HH", handle.read(4))
+                return width, height
+            length = handle.read(2)
+            if len(length) < 2:
+                return None
+            handle.seek(struct.unpack(">H", length)[0] - 2, 1)
+
+
+def is_image(path: Path) -> bool:
+    guessed = mimetypes.guess_type(path.name)[0] or ""
+    return guessed.startswith("image/")
+
+
+# --------------------------------------------------------------------------- #
+# ADF construction (append path)
+# --------------------------------------------------------------------------- #
+
+def plain_paragraphs(text: str) -> list[dict]:
+    """Plain text -> paragraph nodes: blank lines split paragraphs, single
+    newlines become hardBreaks. Empty input yields nothing."""
+    nodes: list[dict] = []
+    for block in re.split(r"\n\s*\n", text.strip()):
+        block = block.strip("\n")
+        if not block:
+            continue
+        content: list[dict] = []
+        for i, line in enumerate(block.split("\n")):
+            if i:
+                content.append({"type": "hardBreak"})
+            if line:
+                content.append({"type": "text", "text": line})
+        nodes.append({"type": "paragraph", "content": content or [{"type": "text", "text": ""}]})
+    return nodes
+
+
+def media_single_node(media_uuid: str, size: tuple[int, int] | None) -> dict:
+    attrs = {"type": "file", "id": media_uuid, "collection": ""}
+    if size:
+        attrs["width"], attrs["height"] = size
+    return {"type": "mediaSingle", "attrs": {"layout": "center"},
+            "content": [{"type": "media", "attrs": attrs}]}
+
+
+def media_group_node(media_uuid: str) -> dict:
+    return {"type": "mediaGroup",
+            "content": [{"type": "media", "attrs": {"type": "file", "id": media_uuid, "collection": ""}}]}
+
+
+# --------------------------------------------------------------------------- #
+# Parts -> wiki (rich path)
+# --------------------------------------------------------------------------- #
+
+def assemble_wiki(parts: list[tuple[str, object]], tokens: dict[int, str]) -> str:
+    """Wiki string: text parts verbatim; each image/file part is emitted as its
+    plain-text placeholder token (spliced to a media node afterward), so no
+    filename ever appears in the wiki and any filename is safe."""
+    blocks = [str(value) if kind == "text" else tokens[index]
+              for index, (kind, value) in enumerate(parts)]
+    return "\n\n".join(blocks)
+
+
+def _paragraph_text(node: dict) -> str | None:
+    if node.get("type") != "paragraph":
+        return None
+    return "".join(c.get("text", "") for c in node.get("content", [])
+                   if c.get("type") == "text").strip()
+
+
+def _splice_nodes(content: list[dict], node_for: dict[str, dict]) -> list[dict]:
+    """Replace each standalone-placeholder paragraph with its media node. Aborts
+    if any placeholder is missing, rather than leaving a broken/partial embed."""
+    remaining = set(node_for)
+    out: list[dict] = []
+    for node in content:
+        text = _paragraph_text(node)
+        if text is not None and text in node_for:
+            out.append(node_for[text])
+            remaining.discard(text)
+        else:
+            out.append(node)
+    if remaining:
+        sys.exit("Media placeholder(s) not found after wiki conversion — aborting to "
+                 "avoid a broken embed. Missing: " + ", ".join(sorted(remaining)))
+    return out
+
+
+def splice_media(base3: str, credentials: Credentials, issue: str,
+                 target: tuple[str, str | None], node_for: dict[str, dict]) -> None:
+    kind, cid = target
+    if kind == "comment":
+        url = f"{base3}/issue/{issue}/comment/{cid}"
+        doc = _require_json(api("GET", url, credentials), "the comment")["body"]
+        doc["content"] = _splice_nodes(doc.get("content", []), node_for)
+        api("PUT", url, credentials, json_body={"body": doc})
+    else:
+        data = _require_json(api("GET", f"{base3}/issue/{issue}?fields=description", credentials),
+                             "the description")
+        doc = data["fields"]["description"]
+        doc["content"] = _splice_nodes(doc.get("content", []), node_for)
+        api("PUT", f"{base3}/issue/{issue}", credentials, json_body={"fields": {"description": doc}})
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+
+class OrderedPart(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        parts = getattr(namespace, "parts", None)
+        if parts is None:
+            parts = []
+            setattr(namespace, "parts", parts)
+        kind = {"--text": "text", "--image": "image", "--file": "file"}[option_string]
+        parts.append((kind, values if kind == "text" else Path(values)))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Attach files and build/extend Jira comments or the description.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="See the module docstring for full examples.",
+    )
+    parser.add_argument("issue", nargs="?", help="Issue key, e.g. MHMAPPS-1")
+    parser.add_argument("files", nargs="*", type=Path,
+                        help="Files to attach (trailing images/files in build/append modes)")
+    parser.add_argument("--text", metavar="T", action=OrderedPart, dest="parts",
+                        help="Text block (wiki in rich modes, plain in append modes)")
+    parser.add_argument("--image", metavar="F", action=OrderedPart, dest="parts",
+                        help="Image file, embedded inline")
+    parser.add_argument("--file", metavar="F", action=OrderedPart, dest="parts",
+                        help="Any file, embedded as a file card")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--comment", action="store_true", help="Create a new comment")
+    mode.add_argument("--replace-comment", metavar="ID", dest="replace_comment",
+                      help="Replace an existing comment (full overwrite)")
+    mode.add_argument("--append-comment", metavar="ID", dest="append_comment",
+                      help="Append to an existing comment (byte-safe; plain text + media)")
+    mode.add_argument("--replace-description", action="store_true", dest="replace_description",
+                      help="Replace the description (full overwrite)")
+    mode.add_argument("--append-description", action="store_true", dest="append_description",
+                      help="Append to the description (byte-safe; plain text + media)")
+    parser.add_argument("--site", metavar="URL",
+                        help="Jira site for this run, e.g. https://your-team.atlassian.net")
+    parser.add_argument("--email", metavar="ADDRESS",
+                        help="Atlassian account email for this run")
+    parser.add_argument("--configure", action="store_true",
+                        help=f"Prompt for site and email, save them to {CONFIG_PATH}, "
+                             "and store an API token if none is held")
+    parser.add_argument("--reset-token", action="store_true",
+                        help="Prompt for a new API token and replace the stored one")
+    args = parser.parse_args()
+
+    setup_only = args.configure or args.reset_token
+    if setup_only:
+        if (args.issue or args.files or getattr(args, "parts", None)
+                or args.comment or args.replace_comment or args.append_comment
+                or args.replace_description or args.append_description):
+            parser.error("--configure and --reset-token only change stored settings, "
+                         "so they must be run without an issue or content")
+        settings = resolve_settings(args.site, args.email, reconfigure=args.configure)
+        if args.reset_token or read_token_from_keychain(settings) is None:
+            obtain_credentials(settings, force_new=args.reset_token)
+        else:
+            print(f"An API token is already stored for {settings.email} "
+                  f"(keychain service '{settings.keychain_service}'). "
+                  "Use --reset-token to replace it.")
+        return
+
+    if not args.issue:
+        parser.error("an issue key is required")
+    issue = args.issue.upper()
+    if not ISSUE_KEY_PATTERN.match(issue):
+        parser.error(f"'{args.issue}' does not look like an issue key (e.g. MHMAPPS-1)")
+    for cid in (args.replace_comment, args.append_comment):
+        if cid is not None and not COMMENT_ID_PATTERN.match(cid):
+            parser.error(f"comment id must be numeric (Jira comment ids are digits), got '{cid}'")
+
+    rich = bool(args.comment or args.replace_comment or args.replace_description)
+    appending = bool(args.append_comment or args.append_description)
+    embedding = rich or appending
+
+    ordered = list(getattr(args, "parts", None) or [])
+    trailing = [("image" if is_image(p) else "file", p) for p in args.files]
+    parts = ordered + trailing
+
+    file_parts = [value for kind, value in parts if kind in ("image", "file")]
+    _require_files(parser, file_parts)
+
+    # All usage errors are raised before anything can prompt or hit the network.
+    if not embedding:
+        if any(kind == "text" for kind, _ in parts):
+            parser.error("--text requires a build/append mode")
+        if not file_parts:
+            parser.error("at least one file is required")
+    else:
+        if not parts:
+            parser.error("a build/append mode needs at least one --text/--image/--file (or a file)")
+        if appending:
+            offenders = [str(v)[:50] for k, v in parts
+                         if k == "text" and WIKI_FORMATTING.search(str(v))]
+            if offenders:
+                parser.error(
+                    "append supports PLAIN TEXT + images/files only, but a --text part contains "
+                    "wiki/markdown formatting:\n    " + "\n    ".join(offenders) +
+                    "\nAppend is byte-safe precisely because it does not reconvert content, so it "
+                    "cannot render formatting. Post a NEW comment (--comment) or replace the "
+                    "description (--replace-description) for formatted content.")
+
+    settings = resolve_settings(args.site, args.email, reconfigure=False)
+    credentials = obtain_credentials(settings)
+    cloud_id = get_cloud_id(settings)
+    base3 = f"{GATEWAY}/{cloud_id}/rest/api/3"
+    base2 = f"{GATEWAY}/{cloud_id}/rest/api/2"
+
+    if not embedding:
+        _print_attached(issue, [attach_one(base3, credentials, issue, path) for path in file_parts])
+        print(f"  {settings.site}/browse/{issue}")
+        return
+
+    # All post-attach work runs under a rollback, constructed BEFORE any upload so a
+    # failure can never escape before cleanup exists. A definitive failure undoes
+    # partial work; an ambiguous one (a mutating request with no response) is left in
+    # place and reported, since the write may have committed. Output is deferred past
+    # the transactional region so a broken pipe on success can't trigger a rollback.
+    rollback = Rollback(base3, credentials, issue)
+    try:
+        attachments: list[dict] = []
+        for path in file_parts:
+            attachment = attach_one(base3, credentials, issue, path)
+            rollback.attachment_ids.append(attachment["id"])
+            attachments.append(attachment)
+
+        if rich:
+            # Each image/file part gets a unique plain-text placeholder token; post
+            # the wiki (Jira converts text server-side), then splice real media nodes
+            # in place of the tokens via v3 — so embedding is filename-independent.
+            nonce = uuid.uuid4().hex[:8]
+            tokens: dict[int, str] = {}
+            node_for: dict[str, dict] = {}
+            media_index = 0
+            for index, (kind, value) in enumerate(parts):
+                if kind == "text":
+                    continue
+                media_uuid = resolve_media_id(base3, credentials, attachments[media_index]["id"])
+                media_index += 1
+                tok = f"JATTACHx{nonce}x{index}xEND"
+                tokens[index] = tok
+                node_for[tok] = (media_single_node(media_uuid, image_size(value) if is_image(value) else None)
+                                 if kind == "image" else media_group_node(media_uuid))
+            wiki = assemble_wiki(parts, tokens)
+
+            if args.comment:
+                created = _require_json(
+                    api("POST", f"{base2}/issue/{issue}/comment", credentials,
+                        json_body={"body": wiki}),
+                    "the created comment")
+                rollback.delete_comment_id = created["id"]
+                target, outcome = ("comment", created["id"]), f"Created comment {created['id']}."
+            elif args.replace_comment:
+                cid = args.replace_comment
+                url3 = f"{base3}/issue/{issue}/comment/{cid}"
+                old = _require_json(api("GET", url3, credentials), "the comment")["body"]
+                rollback.restore = (url3, {"body": old})
+                api("PUT", f"{base2}/issue/{issue}/comment/{cid}", credentials,
+                    json_body={"body": wiki})
+                target, outcome = ("comment", cid), f"Replaced comment {cid}."
+            else:
+                old = _require_json(api("GET", f"{base3}/issue/{issue}?fields=description", credentials),
+                                    "the description")["fields"].get("description")
+                rollback.restore = (f"{base3}/issue/{issue}", {"fields": {"description": old}})
+                api("PUT", f"{base2}/issue/{issue}", credentials,
+                    json_body={"fields": {"description": wiki}})
+                target, outcome = ("description", None), "Replaced the description."
+
+            if node_for:
+                splice_media(base3, credentials, issue, target, node_for)
+        else:
+            # Append: resolve media in part order, build ADF nodes, concatenate onto
+            # the existing ADF, PUT via v3 (byte-safe).
+            resolved = [
+                (resolve_media_id(base3, credentials, attachment["id"]),
+                 image_size(path) if is_image(path) else None)
+                for path, attachment in zip(file_parts, attachments)
+            ]
+            media_iter = iter(resolved)
+            new_nodes: list[dict] = []
+            for kind, value in parts:
+                if kind == "text":
+                    new_nodes.extend(plain_paragraphs(str(value)))
+                elif kind == "image":
+                    media_uuid, size = next(media_iter)
+                    new_nodes.append(media_single_node(media_uuid, size))
+                else:
+                    media_uuid, _ = next(media_iter)
+                    new_nodes.append(media_group_node(media_uuid))
+            if not new_nodes:
+                sys.exit("Nothing to append — the content was empty.")
+
+            if args.append_comment:
+                cid = args.append_comment
+                url3 = f"{base3}/issue/{issue}/comment/{cid}"
+                existing = _require_json(api("GET", url3, credentials), "the comment")["body"]
+                existing["content"] = existing.get("content", []) + new_nodes
+                api("PUT", url3, credentials, json_body={"body": existing})
+                outcome = f"Appended {len(new_nodes)} node(s) to comment {cid}."
+            else:
+                data = _require_json(api("GET", f"{base3}/issue/{issue}?fields=description", credentials),
+                                     "the description")
+                existing = data["fields"].get("description")
+                if isinstance(existing, dict) and isinstance(existing.get("content"), list):
+                    existing["content"] = existing["content"] + new_nodes
+                else:
+                    existing = {"type": "doc", "version": 1, "content": new_nodes}
+                api("PUT", f"{base3}/issue/{issue}", credentials,
+                    json_body={"fields": {"description": existing}})
+                outcome = f"Appended {len(new_nodes)} node(s) to the description."
+    except _Ambiguous as error:
+        rollback.run(destructive=False)
+        sys.exit(str(error))
+    except BaseException:
+        rollback.run(destructive=True)
+        raise
+
+    if attachments:
+        _print_attached(issue, attachments)
+    print(outcome)
+    print(f"  {settings.site}/browse/{issue}")
+
+
+def _require_files(parser: argparse.ArgumentParser, paths: list[Path]) -> None:
+    missing = [str(p) for p in paths if not p.is_file()]
+    if missing:
+        parser.error("file not found: " + ", ".join(missing))
+
+
+def _print_attached(issue: str, attachments: list[dict]) -> None:
+    print(f"Attached {len(attachments)} file(s) to {issue}:")
+    for attachment in attachments:
+        print(f"  {attachment['filename']}  ({attachment.get('size', 0) / 1024:.0f} KB)")
+
+
+if __name__ == "__main__":
+    main()
