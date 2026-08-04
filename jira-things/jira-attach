@@ -199,10 +199,13 @@ def validate_email(raw: str) -> str:
     return email
 
 
-def _ask(label: str, current: str | None, validate) -> str:
+def _ask(label: str, current: str | None, validate, example: str) -> str:
+    # A current value demonstrates the format on its own, so the example is only shown
+    # when there is nothing to default to.
+    prompt = f"{label} [{current}]: " if current else f"{label} (e.g. {example}): "
     while True:
         try:
-            answer = input(f"{label}{f' [{current}]' if current else ''}: ").strip() or (current or "")
+            answer = input(prompt).strip() or (current or "")
         except (EOFError, OSError):
             sys.exit("Setup needs an interactive terminal. Run `jira-attach --configure` from a "
                      "terminal, or pass --site/--email (or set JIRA_SITE/JIRA_EMAIL).")
@@ -213,6 +216,16 @@ def _ask(label: str, current: str | None, validate) -> str:
             return validate(answer)
         except ValueError as error:
             print(f"  {error}")
+
+
+def describe_setup() -> str:
+    """One line on whether this machine is set up, for the no-arguments help."""
+    stored = load_config()
+    site = os.environ.get("JIRA_SITE") or stored.get("site")
+    email = os.environ.get("JIRA_EMAIL") or stored.get("email")
+    if site and email:
+        return f"Set up for {email} at {site} — run `jira-attach --configure` to change it."
+    return "Not set up yet — run `jira-attach --configure` to get started."
 
 
 def _first_provided(*candidates: tuple[str | None, str]) -> tuple[str | None, str | None]:
@@ -256,8 +269,8 @@ def resolve_settings(site_option: str | None, email_option: str | None,
                             keychain_service=service)
         print("First run — jira-attach needs to know which Jira site and account to use.")
     settings = Settings(
-        site=_ask("Jira site URL", site, normalize_site),
-        email=_ask("Atlassian account email", email, validate_email),
+        site=_ask("Jira site URL", site, normalize_site, "https://your-team.atlassian.net"),
+        email=_ask("Atlassian account email", email, validate_email, "you@your-team.com"),
         keychain_service=service,
     )
     save_config(settings)
@@ -681,7 +694,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Attach files and build/extend Jira comments or the description.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="See the module docstring for full examples.",
+        epilog="Setup: `jira-attach --configure` (Jira site, account email, API token).\n"
+               "See the module docstring for full examples.",
     )
     parser.add_argument("issue", nargs="?", help="Issue key, e.g. MHMAPPS-1")
     parser.add_argument("files", nargs="*", type=Path,
@@ -711,6 +725,13 @@ def main() -> None:
                              "and store an API token if none is held")
     parser.add_argument("--reset-token", action="store_true",
                         help="Prompt for a new API token and replace the stored one")
+    # A bare run is someone asking what this is, not a usage error: show the full help
+    # and where setup stands, rather than a one-line "issue key is required".
+    if len(sys.argv) == 1:
+        parser.print_help()
+        print(f"\n{describe_setup()}")
+        return
+
     args = parser.parse_args()
 
     setup_only = args.configure or args.reset_token
@@ -730,7 +751,7 @@ def main() -> None:
         return
 
     if not args.issue:
-        parser.error("an issue key is required")
+        parser.error("an issue key is required (first time here? run `jira-attach --configure`)")
     issue = args.issue.upper()
     if not ISSUE_KEY_PATTERN.match(issue):
         parser.error(f"'{args.issue}' does not look like an issue key (e.g. MHMAPPS-1)")
