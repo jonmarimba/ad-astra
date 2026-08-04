@@ -34,6 +34,103 @@ the macOS keychain.
    jira-attach ABC-123 some-screenshot.png
    ```
 
+## Atlassian MCP server
+
+`jira-attach` handles attachments; the Atlassian MCP server handles everything else
+(issues, comments, JQL, Confluence). It is a remote HTTP server at
+`https://mcp.atlassian.com/v1/mcp/authv2` and authenticates over OAuth in the browser
+— no token needed.
+
+Install it at user scope (available in every project):
+
+**Claude Code**
+
+```sh
+claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp/authv2
+```
+
+The server is added unauthenticated — `claude mcp list` reports
+`! Needs authentication` until you log in. Complete OAuth by running `/mcp` inside an
+interactive Claude Code session and selecting `atlassian`. There is also a
+`claude mcp login atlassian` subcommand, but it needs a real TTY and fails with
+`stdin isn't a terminal` when run from a script or from a tool-driven shell.
+
+**Codex**
+
+```sh
+codex mcp add atlassian --url https://mcp.atlassian.com/v1/mcp/authv2
+```
+
+That single command is enough: Codex probes the URL, detects OAuth support, opens the
+browser, and blocks until the callback lands — no separate login step. Use
+`codex mcp login atlassian` only to re-authenticate later. Confirm with
+`codex mcp list`, which should show `atlassian … enabled  OAuth`.
+
+Codex MCP servers live in `~/.codex/config.toml` and are always global; there is no
+per-project scope.
+
+**Antigravity (`agy`)**
+
+Antigravity has no `mcp` subcommand — edit the global config at
+`~/.gemini/config/mcp_config.json` and merge the `atlassian` entry into whatever
+`mcpServers` map is already there:
+
+```json
+{
+  "mcpServers": {
+    "atlassian": {
+      "serverUrl": "https://mcp.atlassian.com/v1/mcp/authv2"
+    }
+  }
+}
+```
+
+The config key is right (`serverUrl` is Antigravity's field for a remote server), but
+**this does not currently work** — treat the block above as a record of what was tried,
+not a working recipe.
+
+Two blockers, in order:
+
+1. The endpoint answers `401` with `WWW-Authenticate: Bearer` until authorized, and the
+   `agy` CLI exposes no MCP OAuth flow — there is no `agy mcp` subcommand at all.
+   Authorization has to happen in the Antigravity IDE under
+   **Additional Options (…) > MCP Servers**.
+2. That IDE authorization was attempted and refused, reporting that an administrator
+   has restricted the domain. Antigravity enforces admin-controlled URL allowlisting,
+   so `mcp.atlassian.com` appears to be blocked upstream of any local config.
+
+With config in place but no authorization, `agy` silently loads zero Atlassian tools
+and logs nothing about the failure — no error, no warning. Confirmed three ways: the
+tool list contains only other servers' tools; a prompted Atlassian call reports no such
+tools while the same prompt against an authorized server reaches the permission gate;
+and `~/.gemini/antigravity-cli/mcp/` has no `atlassian` tool-cache directory.
+
+Local stdio servers need no authorization and do work from the config file alone.
+
+## Rules for coding agents
+
+[`jira-rules-for-agents.md`](jira-rules-for-agents.md) holds the Jira working rules for
+coding agents: what must never be deleted, which MCP lookups to skip and the answers to
+use instead, status terminology, and the writing style for issues and comments. Paste it
+into the agent's instructions — global `CLAUDE.md`, `AGENTS.md`, or equivalent — or
+reference it from there.
+
+It is written for one specific Atlassian site, project, and workflow. Customize these
+before using it anywhere else:
+
+| In the file | Why it is specific to one setup |
+| --- | --- |
+| `account_id` | Your Atlassian account id (`atlassianUserInfo` returns it once) |
+| `cloudId`, `url`, `name`, `scopes` | Your site. `cloudId` is at `https://<your-site>/_edge/tenant_info`; scopes must match what your token or OAuth grant actually allows |
+| Project key `MHMAPPS`, and the `self` URL | Your project. That URL embeds both the cloudId and the numeric project id, so it changes with either |
+| Terminology (Backlog, ENH/MHM To-Do, Test) | Workflow status names are per-project, and these map local jargon onto them |
+| "Create new issues with status Open" | The right starting status depends on your workflow |
+| `jira-attach` reference under Images / media | Assumes the script is on `PATH` under that name |
+| Writing style and attribution | Team convention |
+
+The rest — never deleting content, `maxResults: 25` on JQL searches, not trusting the
+status Jira reports — are working habits rather than site facts. Keep or drop them.
+
 ## Where settings are kept
 
 | What | Where |
