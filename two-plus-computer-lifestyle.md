@@ -57,3 +57,13 @@ The through-line JS confirmed: **OmniRoute (local router @ :20128, web UI /dashb
 - **128GB Strix Linux box (incoming, Micro Center)** — becomes the always-on host. Serve with **vllm** (ROCm; OpenAI + Anthropic-API compatible) or ollama → register as an OmniRoute node like the rest.
 - **hot-models feeder** (building): watch HF/ollama trending filtered to the frontier watchlist → auto-pull the best-fitting tag onto the headroom host (M5 now, Linux box later) → OmniRoute discovers + ranks + config-gens → botline-ping JS "come play." Reachability-gated (does nothing while a host is asleep/in-the-bag).
 - **omniroute sync** handles M4↔M5 config sync between OmniRoute instances.
+
+## Missed on first pass — added from JS's note edits (2026-08-12)
+- **FRAMING (load-bearing):** JS has *always hated* the multi-computer lifestyle and collapsed back to one laptop quickly every time he's tried. So this whole effort lives or dies on friction: it must be near-zero-touch or he abandons it. Design accordingly — automate ruthlessly, no per-machine babysitting. (Matches his standing "collapses to one laptop" pattern.)
+- **New task — contacts sync:** standardize on jonathansaggau.com, remove duplicates.
+- **New task — calendar cleanup:** archive + delete the old time-tracking calendars on the Google accounts (~150 dormant ones).
+- **Documents-sync technique (his own):** symlink Desktop + Downloads into Dropbox (Documents already syncs). Works fine AS LONG AS iCloud "Desktop & Documents" sync is turned OFF — then the OS doesn't care that they're symlinks. Do this again.
+- **Tailscale:** "can't believe it's free and this good" — happy with it; just needs the gap machines added.
+- **Host purposes (refined):** the home local-LLM host "can't become critical infrastructure at home"; wants a "more persistent home LLM host" (the Strix box) AND a **prototype/test env for document-ingestion + TTS/STT ideas**.
+- **iMac (drums):** stable Logic appliance + video rig with his favorite EQ/compression ready whenever; AKG room mic added to the Tascam/Earthworks/Shure/3-Zoom setup.
+- **DEFER:** JS wants to *discuss* the two-computer plan later in the week / over the weekend — don't over-build it before that conversation.
