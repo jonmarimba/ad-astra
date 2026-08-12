@@ -1,5 +1,3 @@
-# Jira / Atlassian instructions extracted from global CLAUDE.md
-
 # JIRA / Atlassian MCP Server (Atlassian Rovo MCP)
 
 ## Never delete Jira issues
@@ -48,6 +46,8 @@ When using `atlassian` MCP server, ALWYAS use these directives and information t
 
 ## Creating new Jira issues
 - ALWAYS create new issues wth status 'Open', which places them in the Backlog
+- Assign newly-created issues to ME
+- If we work on an issue, I probably want you to move it into In Progress and assign to ME - ask me.
 
 ## Writing style
 - Professional, TERSE when possible, clear as crystal, concise, but complete
@@ -55,3 +55,4 @@ When using `atlassian` MCP server, ALWYAS use these directives and information t
 - Keep tone professional. No derogatory tone or language. No finger-pointing.
 - DO consider including references to employees, sales people, and client details when provided -- many times these are included as references, such as examples of where to find a specific test case or how to exercise a specific issue, or possibly a user and data combination that experienced the issue being described.
 - DO INCLUDE attribution. Knowing that a specific person reported or said something is generally much more useful than just knowing "a salesperson said..".
+- NEVER add any references to Claude or any other LLM in Jira issues or comments

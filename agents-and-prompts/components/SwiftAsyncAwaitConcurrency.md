@@ -1,0 +1,2 @@
+# Swift Async-Await Concurrency
+- async functions in a Swift Actor are re-entrant and can have multiple suspension points (anywhere 'await' is used). Other data in the Actor (outside the current function) can be mutated at these suspend points. async functions, and indeed all async code, MUST account for this, using local variables to hold immutable copies of data that we don't want to have change across suspend points, or re-checking values, etc..
