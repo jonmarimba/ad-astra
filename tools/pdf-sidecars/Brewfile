@@ -2,3 +2,5 @@
 brew "ocrmypdf"   # --force-ocr for image-only/scanned pages
 brew "tesseract"  # OCR engine ocrmypdf drives
 brew "poppler"    # provides pdftotext (-layout)
+brew "pandoc"      # md2pdf: markdown -> HTML
+brew "weasyprint"  # md2pdf: HTML+CSS -> PDF (headless, replaces the Marked GUI mouse-grab)

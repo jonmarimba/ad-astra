@@ -57,3 +57,11 @@ git config jsutils.metadataPattern '<grep -E pattern>' # default: minute|meeting
 ## One local-only file
 
 Exclude `cost.json` if any tool writes it; sidecars themselves are meant to be committed.
+
+## md2pdf — headless Markdown → PDF (replaces the Marked mouse-grab)
+`marked_to_pdf.sh` drives Marked 2's Print dialog via UI scripting — it grabs the machine. `md2pdf` does it headless (pandoc → HTML+CSS → weasyprint), no GUI, no Marked, no browser:
+```sh
+md2pdf input.md output.pdf                       # default template
+md2pdf input.md output.pdf --template legal.css  # your CSS (file, or templates/legal.css)
+```
+Templates are **CSS** (same styling model as Marked). Drop your legal template's CSS in `templates/` or point `--template` at it. Because md2pdf never touches Marked's own template store, the "don't clobber / version-conflict" worry disappears. `@page` in the CSS controls page size + margins. Footer parity via `pdf_add_footer.py` when pymupdf is present.

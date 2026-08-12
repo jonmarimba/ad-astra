@@ -1,0 +1,10 @@
+/* md2pdf default template — clean legal-doc look (letter, Times, 1in margins). Override with --template. */
+@page { size: letter; margin: 1in; }
+html { -webkit-print-color-adjust: exact; }
+body { font-family: "Times New Roman", Times, serif; font-size: 12pt; line-height: 1.4; color: #000; }
+h1,h2,h3 { font-family: "Times New Roman", Times, serif; font-weight: bold; }
+h1 { font-size: 16pt; } h2 { font-size: 14pt; } h3 { font-size: 12pt; }
+code,pre { font-family: Menlo, monospace; font-size: 10.5pt; }
+pre { background:#f4f4f4; padding:8px; white-space:pre-wrap; }
+table { border-collapse: collapse; } td,th { border:1px solid #999; padding:4px 8px; }
+a { color:#000; text-decoration: underline; }

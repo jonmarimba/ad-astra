@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# md2pdf — headless Markdown -> PDF (pandoc -> HTML+CSS -> weasyprint). The no-GUI,
+# no-mouse-grab replacement for marked_to_pdf.sh. Template selection is a CSS file via --template.
+#   md2pdf input.md output.pdf [--template /path/style.css | --template NAME]
+# A --template NAME that isn't a readable file is resolved to ./templates/NAME.css.
+set -euo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+[ $# -ge 2 ] || { echo "usage: md2pdf input.md output.pdf [--template style.css]"; exit 2; }
+IN="$1"; OUT="$2"; shift 2
+TPL="$HERE/templates/default.css"
+if [ "${1:-}" = "--template" ] && [ -n "${2:-}" ]; then
+  if [ -f "$2" ]; then TPL="$2"; elif [ -f "$HERE/templates/$2.css" ]; then TPL="$HERE/templates/$2.css"; else echo "template not found: $2" >&2; exit 1; fi
+fi
+[ -f "$IN" ] || { echo "input not found: $IN" >&2; exit 1; }
+command -v pandoc >/dev/null || { echo "need pandoc" >&2; exit 1; }
+command -v weasyprint >/dev/null || { echo "need weasyprint (brew install weasyprint)" >&2; exit 1; }
+HTML="$(mktemp -t md2pdf).html"
+pandoc "$IN" --standalone --embed-resources --css "$TPL" -o "$HTML"
+weasyprint "$HTML" "$OUT"
+rm -f "$HTML"
+[ -f "$OUT" ] || { echo "PDF not produced" >&2; exit 1; }
+if python3 -c "import fitz" 2>/dev/null && [ -x "$HERE/pdf_add_footer.py" ]; then
+  "$HERE/pdf_add_footer.py" "$OUT" 2>/dev/null || true
+fi
+echo "wrote $OUT (template: $(basename "$TPL"))"
