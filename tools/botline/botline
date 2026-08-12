@@ -53,7 +53,8 @@ cmd_dispatch(){
   fi
   # --start (no arbitrary limit → no silent drop); id>watermark dedups the boundary overlap
   local last_bot; last_bot="$(cat "$BOTLINE_HOME/last_bot" 2>/dev/null || echo unrouted)"
-  imsg history --chat-id "$JS_CHAT_ID" --start "$wm_iso" --json 2>/dev/null | \
+  local hist; hist="$(imsg history --chat-id "$JS_CHAT_ID" --start "$wm_iso" --json 2>/dev/null || true)"
+  printf '%s\n' "$hist" | \
   BOTLINE_HOME="$BOTLINE_HOME" LAST_BOT="$last_bot" WM_ID="$wm_id" python3 -c '
 import sys, os, json, re
 home=os.environ["BOTLINE_HOME"]; last=os.environ["LAST_BOT"]; wm_id=int(os.environ["WM_ID"])
@@ -80,7 +81,8 @@ if max_iso:
     open(os.path.join(home,"watermark_iso"),"w").write(max_iso)
 if routed:  # stay SILENT on stdout when nothing routed (a schd command-job pokes on ANY stdout)
     sys.stderr.write(f"dispatch: routed {routed} reply(ies)\n")
-'
+' || true
+  return 0
 }
 
 cmd_recv(){
