@@ -23,7 +23,7 @@ for a in $(echo "$AGENTS" | tr ',' ' '); do
   o="$OUT/${TAG}_${a}.md"
   case "$a" in
     claude) [ -x "$CLAUDE_BIN" ] && ( "$CLAUDE_BIN" -p "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
-    codex)  [ -x "$CODEX_BIN" ]  && ( "$CODEX_BIN" exec "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    codex)  [ -x "$CODEX_BIN" ]  && ( "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
     qwen)   [ -x "$QWEN_BIN" ]   && ( "$QWEN_BIN" -p "$PROMPT"  > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
     *) echo "unknown agent '$a' (claude|codex|qwen)" ;;
   esac
