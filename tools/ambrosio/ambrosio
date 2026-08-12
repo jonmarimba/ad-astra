@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# ambrosio — food of the gods, delivered. So JS never weekly-searches "what's hot": watches HF
+# trending (filtered to his frontier watchlist), auto-pulls the best-fitting new model onto the
+# headroom host's LM Studio, lets OmniRoute discover it (it already watches that host as a
+# provider_node), and botline-pings JS "come play." REACHABILITY-GATED: inert while the host sleeps.
+#
+#   ambrosio check [--dry-run]   # the whole loop (silent if host down or nothing new)
+#   ambrosio status              # host reachability + currently-loaded models + seen count
+# Config: $AMBROSIO_HOME/config. Notifies via botline.
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+AMBROSIO_HOME="${AMBROSIO_HOME:-$HOME/.ambrosio}"
+mkdir -p "$AMBROSIO_HOME"
+CONF="$AMBROSIO_HOME/config"
+BOTLINE="${BOTLINE_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/botline/botline}"
+SEEN="$AMBROSIO_HOME/seen.txt"; touch "$SEEN"
+if [ ! -f "$CONF" ]; then
+cat > "$CONF" <<'CFG'
+# Headroom host running LM Studio (the play host). M5 now; repoint to the Strix Linux box later.
+HOST="jonathans-macbook-pro-m5-max.tail2abcb6.ts.net"
+LMS_PORT="1234"
+SSH_TARGET="jonathans-macbook-pro-m5-max.tail2abcb6.ts.net"   # ssh over Tailscale; lms must be on PATH there
+WATCHLIST="glm kimi deepseek qwen3 qwen4 minimax gpt-oss nemotron llama4 llama5 mistral-large command-a"
+SIZE_CAP_GB="80"
+OMNIROUTE_NODE="LM Studio M5"
+CFG
+fi
+# shellcheck disable=SC1090
+. "$CONF"
+export WATCHLIST HOST LMS_PORT SSH_TARGET SIZE_CAP_GB OMNIROUTE_NODE
+
+log(){ echo "ambrosio: $*" >&2; }   # stderr only — schd command-job stays silent on no-op
+host_up(){ curl -s --max-time 6 "http://$HOST:$LMS_PORT/v1/models" >/dev/null 2>&1; }
+loaded_models(){ curl -s --max-time 8 "http://$HOST:$LMS_PORT/v1/models" 2>/dev/null | python3 -c "import sys,json;[print(m.get('id','')) for m in json.load(sys.stdin).get('data',[])]" 2>/dev/null; }
+hot_candidates(){
+  curl -s --max-time 20 "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=80&pipeline_tag=text-generation" 2>/dev/null \
+   | python3 -c "
+import sys,json,os
+wl=os.environ['WATCHLIST'].lower().split()
+# official frontier labs only — skips random community quants/forks
+REPUTABLE={'deepseek-ai','nvidia','zai-org','qwen','moonshotai','meta-llama','mistralai',
+           'minimaxai','microsoft','google','ai21labs','allenai','lmstudio-community'}
+JUNK=('abliterated','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp')
+try: ms=json.load(sys.stdin)
+except Exception: ms=[]
+if isinstance(ms,list):
+    for m in ms:
+        mid=(m.get('id') or m.get('modelId') or '') if isinstance(m,dict) else ''
+        if not mid: continue
+        org=mid.split('/')[0].lower()
+        low=mid.lower()
+        if org not in REPUTABLE: continue
+        if not any(w in low for w in wl): continue
+        if any(j in low for j in JUNK): continue
+        print(mid)
+" 2>/dev/null
+}
+
+case "${1:-check}" in
+  status)
+    if host_up; then echo "host $HOST: UP"; echo "loaded:"; loaded_models | sed 's/^/  /'; else echo "host $HOST: DOWN (asleep/unreachable) — ambrosio is inert"; fi
+    echo "seen: $(wc -l <"$SEEN" | tr -d ' ')"
+    echo "trending-frontier candidates right now:"; hot_candidates | sed 's/^/  /' | head -10 ;;
+  check)
+    dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
+    if ! host_up; then log "host $HOST down — inert (gated)"; exit 0; fi
+    have="$(loaded_models)"; pulled=""
+    while IFS= read -r mid; do
+      [ -z "$mid" ] && continue
+      grep -qxF "$mid" "$SEEN" && continue
+      printf '%s\n' "$have" | grep -qiF "$mid" && { echo "$mid" >>"$SEEN"; continue; }
+      if [ "$dry" -eq 1 ]; then log "[dry-run] would pull $mid onto $HOST"; echo "$mid" >>"$SEEN"; pulled="$pulled $mid"; continue; fi
+      # pull leg — UNVERIFIED until first live run on an awake host
+      if ssh -o ConnectTimeout=8 -o BatchMode=yes "$SSH_TARGET" "command -v lms >/dev/null && lms get '$mid' --yes" >/dev/null 2>&1; then
+        echo "$mid" >>"$SEEN"; pulled="$pulled $mid"; log "pulled $mid on $HOST"
+      else log "pull FAILED for $mid (ssh/lms not ready) — retry next run"; fi
+    done < <(hot_candidates)
+    pulled="$(echo "$pulled" | xargs 2>/dev/null || true)"
+    [ -z "$pulled" ] && { log "no new hot models"; exit 0; }
+    command -v omniroute >/dev/null && omniroute models "$OMNIROUTE_NODE" >/dev/null 2>&1 || true
+    msg="Ambrosio served: hot model(s) pulled onto $HOST LM Studio, live in OmniRoute — come play: $pulled"
+    if [ "$dry" -eq 1 ]; then log "[dry-run] would notify: $msg"; elif [ -x "$BOTLINE" ]; then "$BOTLINE" send --from ambrosio "$msg" >/dev/null 2>&1; log "notified JS: $pulled"; fi ;;
+  *) echo "usage: ambrosio check [--dry-run] | status"; exit 1 ;;
+esac

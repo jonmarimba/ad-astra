@@ -1,0 +1,3 @@
+brew "curl"    # HF trending fetch (system curl fine too)
+brew "python@3.12"
+# lms (LM Studio CLI) lives on the HOST machine, not here; ssh reaches it.
