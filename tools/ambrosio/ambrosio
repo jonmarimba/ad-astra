@@ -128,10 +128,17 @@ case "${1:-check}" in
       url="$(resolve_mlx_url "$term")"
       [ -z "$url" ] && { log "no MLX repo found yet for '$term' — will retry next run (quant may not exist yet)"; continue; }
       if [ "$dry" -eq 1 ]; then log "[dry-run] would: ssh $SSH_TARGET '$LMS_BIN get \"$url\" --yes'"; echo "$term" >>"$SEEN"; pulled="$pulled $term"; n=$((n+1)); continue; fi
-      # errors go to the log, not /dev/null — silent failure is how this stuff rots
-      if ssh -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" >>"$AMBROSIO_HOME/pull.log" 2>&1; then
+      # errors go to the log, not /dev/null — silent failure is how this stuff rots.
+      # big pulls can time out mid-download (seen live: 67% then "Timed-out. Please try to
+      # resume."); lms resumes in place, so retry once immediately before deferring to next run.
+      ok=0
+      for attempt in 1 2; do
+        if ssh -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" >>"$AMBROSIO_HOME/pull.log" 2>&1; then ok=1; break; fi
+        log "pull attempt $attempt failed for '$term' — resuming"
+      done
+      if [ "$ok" -eq 1 ]; then
         echo "$term" >>"$SEEN"; pulled="$pulled $term"; n=$((n+1)); log "pulled $term ($url) on $HOST"
-      else log "pull FAILED for '$term' ($url) — see $AMBROSIO_HOME/pull.log; retry next run"; fi
+      else log "pull FAILED for '$term' ($url) after resume retry — see $AMBROSIO_HOME/pull.log; will resume next run"; fi
     done < <(hot_candidates)
     pulled="$(echo "$pulled" | xargs 2>/dev/null || true)"
     [ -z "$pulled" ] && { log "no new hot models"; exit 0; }
