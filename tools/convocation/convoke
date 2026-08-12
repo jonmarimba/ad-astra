@@ -18,14 +18,25 @@ PROMPT="$(cat "$TASK")"
 CLAUDE_BIN="${CLAUDE_BIN:-/opt/homebrew/bin/claude}"
 CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
 QWEN_BIN="${QWEN_BIN:-/opt/homebrew/bin/qwen}"
+# validate EVERY requested agent before launching ANY — a convocation missing a voice is not
+# a convocation, and a silent skip would let a two-voice round masquerade as a three-voice one
+bad=0
+for a in $(echo "$AGENTS" | tr ',' ' '); do
+  case "$a" in
+    claude) [ -x "$CLAUDE_BIN" ] || { echo "convoke: agent 'claude' requested but $CLAUDE_BIN is not executable" >&2; bad=1; } ;;
+    codex)  [ -x "$CODEX_BIN" ]  || { echo "convoke: agent 'codex' requested but $CODEX_BIN is not executable" >&2; bad=1; } ;;
+    qwen)   [ -x "$QWEN_BIN" ]   || { echo "convoke: agent 'qwen' requested but $QWEN_BIN is not executable" >&2; bad=1; } ;;
+    *) echo "convoke: unknown agent '$a' (claude|codex|qwen)" >&2; bad=1 ;;
+  esac
+done
+[ "$bad" -eq 0 ] || { echo "convoke: aborting — every requested voice must be able to run" >&2; exit 1; }
 pids=()
 for a in $(echo "$AGENTS" | tr ',' ' '); do
   o="$OUT/${TAG}_${a}.md"
   case "$a" in
-    claude) [ -x "$CLAUDE_BIN" ] && ( "$CLAUDE_BIN" -p "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
-    codex)  [ -x "$CODEX_BIN" ]  && ( "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
-    qwen)   [ -x "$QWEN_BIN" ]   && ( "$QWEN_BIN" -p "$PROMPT"  > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
-    *) echo "unknown agent '$a' (claude|codex|qwen)" ;;
+    claude) ( "$CLAUDE_BIN" -p "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    codex)  ( "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    qwen)   ( "$QWEN_BIN" -p "$PROMPT"  > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
   esac
 done
 for p in "${pids[@]}"; do wait "$p"; done

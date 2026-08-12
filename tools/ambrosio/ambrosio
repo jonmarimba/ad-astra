@@ -35,10 +35,13 @@ LMS_BIN="${LMS_BIN:-~/.lmstudio/bin/lms}"; LMS_FORMAT="${LMS_FORMAT:---mlx}"; MA
 export WATCHLIST HOST LMS_PORT SSH_TARGET SIZE_CAP_GB OMNIROUTE_NODE LMS_BIN LMS_FORMAT MAX_PER_RUN MIN_PARAMS_B
 
 log(){ echo "ambrosio: $*" >&2; }   # stderr only — schd command-job stays silent on no-op
-host_up(){ curl -s --max-time 6 "http://$HOST:$LMS_PORT/v1/models" >/dev/null 2>&1; }
-loaded_models(){ curl -s --max-time 8 "http://$HOST:$LMS_PORT/v1/models" 2>/dev/null | python3 -c "import sys,json;[print(m.get('id','')) for m in json.load(sys.stdin).get('data',[])]" 2>/dev/null; }
+# transport binaries are injectable so tests can run the real script against recorded API
+# payloads and a recording ssh — same seam pattern as BOTLINE_BIN/LMS_BIN above
+CURL="${CURL_BIN:-curl}"; SSH="${SSH_BIN:-ssh}"; OMNIROUTE="${OMNIROUTE_BIN:-omniroute}"
+host_up(){ "$CURL" -s --max-time 6 "http://$HOST:$LMS_PORT/v1/models" >/dev/null 2>&1; }
+loaded_models(){ "$CURL" -s --max-time 8 "http://$HOST:$LMS_PORT/v1/models" 2>/dev/null | python3 -c "import sys,json;[print(m.get('id','')) for m in json.load(sys.stdin).get('data',[])]" 2>/dev/null; }
 hot_candidates(){
-  curl -s --max-time 20 "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=80&pipeline_tag=text-generation" 2>/dev/null \
+  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=80&pipeline_tag=text-generation" 2>/dev/null \
    | python3 -c "
 import sys,json,os,re
 wl=os.environ['WATCHLIST'].lower().split()
@@ -81,7 +84,7 @@ if isinstance(ms,list):
 # orgs and a sane quant (4bit first, then 8bit), skips bf16 (huge) unless nothing else.
 resolve_mlx_url(){
   local term="$1"
-  curl -s --max-time 20 "https://huggingface.co/api/models?search=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]+' mlx'))" "$term")&limit=30" 2>/dev/null \
+  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?search=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]+' mlx'))" "$term")&limit=30" 2>/dev/null \
   | TERM_Q="$term" SIZE_CAP_GB="$SIZE_CAP_GB" python3 -c "
 import sys,json,os,re,urllib.request
 term=os.environ['TERM_Q'].lower()
@@ -181,7 +184,7 @@ case "${1:-check}" in
       # resume."); lms resumes in place, so retry once immediately before deferring to next run.
       ok=0
       for attempt in 1 2; do
-        if ssh -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" 2>&1 | tail -c 4000 >>"$AMBROSIO_HOME/pull.log"; then ok=1; break; fi
+        if "$SSH" -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" 2>&1 | tail -c 4000 >>"$AMBROSIO_HOME/pull.log"; then ok=1; break; fi
         log "pull attempt $attempt failed for '$term' — resuming"
       done
       if [ "$ok" -eq 1 ]; then
@@ -190,7 +193,7 @@ case "${1:-check}" in
     done < <(hot_candidates)
     pulled="$(echo "$pulled" | xargs 2>/dev/null || true)"
     [ -z "$pulled" ] && { log "no new hot models"; exit 0; }
-    command -v omniroute >/dev/null && omniroute models "$OMNIROUTE_NODE" >/dev/null 2>&1 || true
+    command -v "$OMNIROUTE" >/dev/null && "$OMNIROUTE" models "$OMNIROUTE_NODE" >/dev/null 2>&1 || true
     # surface each delivered model in OpenCode + qwen (find its lms id from the host)
     for t in $pulled; do
       lid="$(loaded_models | grep -i "$(echo "$t" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9.]/-/g')" | head -1)"
