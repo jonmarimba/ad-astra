@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
-# install.sh — convocation agents, matching how this environment actually installs them:
-#   claude  = npm -g @anthropic-ai/claude-code   (npm prefix /opt/homebrew → /opt/homebrew/bin/claude)
-#   codex   = npm -g @openai/codex
-#   qwen    = brew qwen-code
+# install.sh — convocation agents. RULE: check for an existing install FIRST (any method),
+# and only ever install via the SAME method this environment already uses — never a second
+# copy through a different package manager.
+#   claude = npm -g @anthropic-ai/claude-code   codex = npm -g @openai/codex   qwen = brew qwen-code
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
-HERE="$(cd "$(dirname "$0")" && pwd)"
-command -v brew >/dev/null && brew bundle --file="$HERE/Brewfile"
-command -v claude >/dev/null || npm install -g @anthropic-ai/claude-code
-command -v codex  >/dev/null || npm install -g @openai/codex
-for b in /opt/homebrew/bin/claude /opt/homebrew/bin/codex /opt/homebrew/bin/qwen; do
-  [ -x "$b" ] && echo "ok: $b" || echo "MISSING: $b"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+
+have() {  # present anywhere on PATH? report where + how it resolves, and skip install
+  local p; p="$(command -v "$1" 2>/dev/null)" || return 1
+  echo "already installed: $1 -> $p $( [ -L "$p" ] && echo "-> $(readlink "$p")" )"
+}
+
+have claude || { echo "installing claude via npm (the method used here)"; npm install -g @anthropic-ai/claude-code; }
+have codex  || { echo "installing codex via npm (the method used here)";  npm install -g @openai/codex; }
+have qwen   || { echo "installing qwen via brew (the method used here)";  brew install qwen-code; }
+
+echo "--- final state (one copy each, no shadowing) ---"
+for b in claude codex qwen; do
+  hits=0
+  for d in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/bin" "$HOME/.bun/bin" "$HOME/.cargo/bin"; do
+    [ -e "$d/$b" ] && { echo "  $d/$b"; hits=$((hits+1)); }
+  done
+  [ "$hits" -gt 1 ] && echo "  WARNING: $b has $hits copies — resolve before scheduling anything that calls it"
 done
