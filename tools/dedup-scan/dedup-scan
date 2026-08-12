@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# dedup-scan — the decided dedup strategy as one command, COARSE by design:
+#   1. periphery        -> dead Swift code (skipped without .periphery.yml)
+#   2. graph mining     -> FILE-level candidate pairs: same call-surface, no edges between them
+#   3. LLM judgment     -> claude reads each candidate pair: "same purpose? merge-worthy?"
+# Granularity guard: candidates need >=MIN_SHARED shared callees and land at file level —
+# no per-call noise, no fopen warnings. Top-K pairs go to the LLM, never everything.
+#   dedup-scan <repo> [--top 8] [--min-shared 3] [--no-llm]
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+CLAUDE_BIN="${CLAUDE_BIN:-/opt/homebrew/bin/claude}"
+REPO="${1:?usage: dedup-scan <repo> [--top 8] [--min-shared 3] [--no-llm]}"; shift || true
+TOP=8; MINSHARED=3; LLM=1
+while [ $# -gt 0 ]; do case "$1" in
+  --top) TOP="$2"; shift 2;; --min-shared) MINSHARED="$2"; shift 2;; --no-llm) LLM=0; shift;; *) shift;;
+esac; done
+cd "$REPO"
+OUT="graphify-out/DEDUP_REPORT.md"
+echo "# Dedup scan — $(basename "$REPO")" > "$OUT"
+
+echo "## 1. Dead code (periphery)" >> "$OUT"
+if [ -f .periphery.yml ] && command -v periphery >/dev/null; then
+  periphery scan --quiet 2>/dev/null | head -100 >> "$OUT" || echo "(periphery scan failed — run interactively to debug)" >> "$OUT"
+else
+  echo "(skipped — no .periphery.yml; run 'periphery scan --setup' once in this repo)" >> "$OUT"
+fi
+
+echo "## 2. Same-purpose candidates (file-level, coarse)" >> "$OUT"
+[ -f graphify-out/graph.json ] || { echo "no graphify-out/graph.json — run graphify-repo first"; exit 1; }
+python3 - "$MINSHARED" "$TOP" <<'PY' >> "$OUT"
+import json, sys, itertools
+from collections import defaultdict
+min_shared, top = int(sys.argv[1]), int(sys.argv[2])
+d = json.load(open('graphify-out/graph.json'))
+nodes = {n['id']: n for n in d['nodes']}
+edges = d.get('edges') or d.get('links')
+# call-surface per SOURCE FILE: the set of callee labels its code touches
+surface = defaultdict(set); linked = defaultdict(set)
+for e in edges:
+    s, t = nodes.get(e['source']), nodes.get(e['target'])
+    if not s or not t: continue
+    sf, tf = s.get('source_file'), t.get('source_file')
+    if sf and t.get('label'): surface[sf].add(t['label'])
+    if sf and tf and sf != tf:
+        linked[sf].add(tf); linked[tf].add(sf)
+CODE_EXT = ('.swift','.py','.m','.mm','.c','.cpp','.h','.js','.ts','.rb','.go','.rs','.sh','.zsh')
+def is_real_code(f):
+    lf = f.lower()
+    if not lf.endswith(CODE_EXT): return False                    # no markdown/config noise
+    if '/tests/' in lf or lf.startswith('tests/') or '/test_' in lf or lf.endswith(('__init__.py',)): return False
+    return True                                                    # tests importing the package is not duplication
+files = [f for f in surface if len(surface[f]) >= min_shared and is_real_code(f)]
+cands = []
+for a, b in itertools.combinations(sorted(files), 2):
+    if b in linked[a]: continue                      # already know about each other
+    shared = surface[a] & surface[b]
+    if len(shared) < min_shared: continue
+    # coarse-ness: score by overlap fraction, not raw count, and skip trivial overlaps
+    score = len(shared) / min(len(surface[a]), len(surface[b]))
+    if score < 0.5: continue                          # must share the MAJORITY of a surface
+    cands.append((score, len(shared), a, b, sorted(shared)[:6]))
+cands.sort(reverse=True)
+if not cands: print("(no coarse candidates above thresholds — good sign)")
+for score, n, a, b, sample in cands[:top]:
+    print(f"- **{a}** vs **{b}** — {n} shared callees ({score:.0%} of the smaller surface): {', '.join(sample)}")
+PY
+
+if [ "$LLM" -eq 1 ] && [ -x "$CLAUDE_BIN" ]; then
+  echo "## 3. LLM judgment (top candidates)" >> "$OUT"
+  grep -E '^\- \*\*' "$OUT" | head -"$TOP" | while IFS= read -r line; do
+    fa=$(echo "$line" | sed 's/- \*\*\([^*]*\)\*\* vs.*/\1/'); fb=$(echo "$line" | sed 's/.*vs \*\*\([^*]*\)\*\*.*/\1/')
+    [ -f "$fa" ] && [ -f "$fb" ] || continue
+    "$CLAUDE_BIN" -p "Two files from one codebase. Do they implement the SAME PURPOSE independently (merge-worthy duplication), or is the API overlap coincidental? Answer in <=4 sentences: verdict first (DUPLICATE-INTENT / DISTINCT / PARTIAL), then why, then the merge shape if any. Be coarse — subsystem-level judgment, not line nits.
+
+=== FILE A: $fa ===
+$(head -c 12000 "$fa")
+
+=== FILE B: $fb ===
+$(head -c 12000 "$fb")" 2>/dev/null | sed "s|^|  |" | { echo "### $fa vs $fb"; cat; echo; } >> "$OUT"
+  done
+fi
+echo "report: $REPO/$OUT"
