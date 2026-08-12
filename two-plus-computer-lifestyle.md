@@ -49,3 +49,11 @@ Companion tracker to `tech-to-try.md`, tracked in @astra and symlinked into the 
 
 ## Cross-refs
 `tech-to-try.md` (Tart, Exo, model tooling) · `PROJECTS.md` (model-sync, generic-messaging, per-tool Brewfile/install standard) · Thursday 8/13 reminder (sync CLI agent setup across both laptops + commit-hooks into legal repos).
+
+## Model fleet architecture (OmniRoute hub) — added 2026-08-12
+The through-line JS confirmed: **OmniRoute (local router @ :20128, web UI /dashboard) is the hub.** Every model host is just a `provider_node` OmniRoute auto-discovers models from; it ranks them (model_intelligence) into `auto/best-*` routing and GENERATES client configs (`omniroute setup-codex` → ~/.codex profiles; OpenCode provider block; etc.). Add a host = add one node, nothing else.
+- **M4** — GhOST + always-on portal (this machine).
+- **M5 (LM Studio, Tailscale :1234)** — PRIMARY play host (most RAM headroom); also "Dwarf Star" ds4 runner (:8008). Both already OmniRoute nodes.
+- **128GB Strix Linux box (incoming, Micro Center)** — becomes the always-on host. Serve with **vllm** (ROCm; OpenAI + Anthropic-API compatible) or ollama → register as an OmniRoute node like the rest.
+- **hot-models feeder** (building): watch HF/ollama trending filtered to the frontier watchlist → auto-pull the best-fitting tag onto the headroom host (M5 now, Linux box later) → OmniRoute discovers + ranks + config-gens → botline-ping JS "come play." Reachability-gated (does nothing while a host is asleep/in-the-bag).
+- **omniroute sync** handles M4↔M5 config sync between OmniRoute instances.
