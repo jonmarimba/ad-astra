@@ -6,8 +6,11 @@
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 REPO="${1:?usage: install-into-repo.sh <repo-path>}"
-DEST="$REPO/.claude/skills/ponytail"
-[ -f "$DEST/SKILL.md" ] && { echo "already installed: $DEST"; exit 0; }
-mkdir -p "$DEST"
-curl -fsSL "https://raw.githubusercontent.com/DietrichGebert/ponytail/main/SKILL.md" -o "$DEST/SKILL.md"
-grep -q "name:" "$DEST/SKILL.md" && echo "installed: $DEST/SKILL.md" || { echo "download looks wrong — inspect $DEST/SKILL.md"; exit 1; }
+BASE="https://raw.githubusercontent.com/DietrichGebert/ponytail/main/skills"
+for skill in ponytail ponytail-audit; do
+  DEST="$REPO/.claude/skills/$skill"
+  if [ -f "$DEST/SKILL.md" ]; then echo "already installed: $DEST"; continue; fi
+  mkdir -p "$DEST"
+  curl -fsSL "$BASE/$skill/SKILL.md" -o "$DEST/SKILL.md"
+  grep -q "name:" "$DEST/SKILL.md" && echo "installed: $DEST/SKILL.md" || { echo "download looks wrong — inspect $DEST/SKILL.md"; exit 1; }
+done
