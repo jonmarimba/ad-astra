@@ -13,11 +13,13 @@ Write ONE task file all agents will receive identically. It contains: the questi
 ## Round 1 — ISOLATED
 Each agent gets the identical task file, a separate working directory, and NO sight of any other agent's output. Diversity of engines beats diversity of prompts: different vendors (claude / codex / qwen) fail differently, which is the point. Headless one-shots:
 
-    claude -p "$(cat TASK.md)" > out/claude.md
-    codex exec "$(cat TASK.md)" > out/codex.md
-    qwen -p "$(cat TASK.md)" > out/qwen.md
+    /opt/homebrew/bin/claude -p "$(cat TASK.md)" > out/claude.md
+    /opt/homebrew/bin/codex exec "$(cat TASK.md)" > out/codex.md
+    /opt/homebrew/bin/qwen -p "$(cat TASK.md)" > out/qwen.md
 
-(The `convoke` tool in ../tools/convocation runs this round for you.) Resist the urge to peek and steer mid-round — a steered agent is a copy of you.
+(Full binary paths on purpose — bare names break from launchd/cron/ssh contexts. The runner: /Users/jonathan/svnCheckouts/js-db-ad-astra/tools/convocation/convoke, binaries overridable via CLAUDE_BIN/CODEX_BIN/QWEN_BIN.)
+
+(The runner at /Users/jonathan/svnCheckouts/js-db-ad-astra/tools/convocation/convoke does this round for you.) Resist the urge to peek and steer mid-round — a steered agent is a copy of you.
 
 ## Round 2 — ADVERSARIAL
 Each agent receives the OTHER agents' round-1 outputs with instructions to attack, not review: "Find what is WRONG. Fact-check every checkable claim with a live probe. Being polite about an error is a failure. Produce corrections with receipts." Feed A's output to B and C, B's to A and C, etc. Same headless mechanics, new task file per agent.

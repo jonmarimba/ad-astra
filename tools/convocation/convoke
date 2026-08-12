@@ -15,13 +15,16 @@ esac; done
 [ -f "$TASK" ] || { echo "no task file: $TASK"; exit 1; }
 mkdir -p "$OUT"
 PROMPT="$(cat "$TASK")"
+CLAUDE_BIN="${CLAUDE_BIN:-/opt/homebrew/bin/claude}"
+CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
+QWEN_BIN="${QWEN_BIN:-/opt/homebrew/bin/qwen}"
 pids=()
 for a in $(echo "$AGENTS" | tr ',' ' '); do
   o="$OUT/${TAG}_${a}.md"
   case "$a" in
-    claude) command -v claude >/dev/null && ( claude -p "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
-    codex)  command -v codex  >/dev/null && ( codex exec "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
-    qwen)   command -v qwen   >/dev/null && ( qwen -p "$PROMPT"  > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    claude) [ -x "$CLAUDE_BIN" ] && ( "$CLAUDE_BIN" -p "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    codex)  [ -x "$CODEX_BIN" ]  && ( "$CODEX_BIN" exec "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    qwen)   [ -x "$QWEN_BIN" ]   && ( "$QWEN_BIN" -p "$PROMPT"  > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
     *) echo "unknown agent '$a' (claude|codex|qwen)" ;;
   esac
 done
