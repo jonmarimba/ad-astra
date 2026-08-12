@@ -82,11 +82,12 @@ if isinstance(ms,list):
 resolve_mlx_url(){
   local term="$1"
   curl -s --max-time 20 "https://huggingface.co/api/models?search=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]+' mlx'))" "$term")&limit=30" 2>/dev/null \
-  | TERM_Q="$term" python3 -c "
-import sys,json,os,re
+  | TERM_Q="$term" SIZE_CAP_GB="$SIZE_CAP_GB" python3 -c "
+import sys,json,os,re,urllib.request
 term=os.environ['TERM_Q'].lower()
+cap=float(os.environ.get('SIZE_CAP_GB','80'))
 GOOD_ORGS=['mlx-community','lmstudio-community']
-JUNK=('dspark','abliterated','uncensored','crack','jang','keys-','oq4e','oq8e')
+JUNK=('dspark','abliterated','uncensored','crack','jang','keys-','oq4e','oq8e','-mtp','draft','distill')
 def quant_rank(name):
     n=name.lower()
     if '4bit' in n or 'mxfp4' in n or 'q4' in n: return 0
@@ -94,6 +95,13 @@ def quant_rank(name):
     if '8bit' in n or 'mxfp8' in n or 'q8' in n: return 2
     if 'bf16' in n or 'fp16' in n: return 9
     return 3
+def repo_gb(mid):
+    try:
+        with urllib.request.urlopen(f'https://huggingface.co/api/models/{mid}?blobs=true', timeout=15) as r:
+            d=json.load(r)
+        return sum(f.get('size',0) for f in d.get('siblings',[]) if f.get('size'))/1e9
+    except Exception:
+        return None   # unknown size: treat as over-cap (don't gamble the disk)
 try: ms=json.load(sys.stdin)
 except Exception: ms=[]
 cands=[]
@@ -107,8 +115,48 @@ for m in ms:
     org_rank = GOOD_ORGS.index(org.lower()) if org.lower() in GOOD_ORGS else 5
     cands.append((org_rank, quant_rank(tail), mid))
 cands.sort()
-if cands: print('https://huggingface.co/'+cands[0][2])
-" 2>/dev/null
+# walk candidates best-first; first one whose ACTUAL repo size fits the cap wins
+for _,_,mid in cands[:6]:
+    gb=repo_gb(mid)
+    if gb is not None and 3<=gb<=cap:   # floor: <3GB = draft head / toy distill, not a frontier model
+        print(f'https://huggingface.co/{mid}'); break
+    print(f'skip {mid} ({\"?\" if gb is None else f\"{gb:.0f}GB\"} outside 3..{cap:.0f}GB)', file=sys.stderr)
+" 2>>"$AMBROSIO_HOME/pull.log"
+}
+
+# surface a delivered model in the CLIs so JS SEES it without hunting: top of OpenCode's
+# omniroute provider picker + qwen's default model. Idempotent. (omniroute setup-opencode is
+# broken in v16.2.10 — '@/shared' import bug — and setup-qwen writes a legacy schema, so we
+# edit the configs directly, matching the schemas the files already use.)
+expose_model(){
+  local lms_id="$1" label="$2"
+  OC="$HOME/.config/opencode/opencode.jsonc" QW="$HOME/.qwen/settings.json" \
+  LMS_ID="$lms_id" LABEL="$label" python3 - <<'PYEOF'
+import os,re,json
+lms_id=os.environ['LMS_ID']; label=os.environ['LABEL']
+oc=os.environ['OC']; qw=os.environ['QW']
+# OpenCode: insert at TOP of the omniroute provider's models map (jsonc-safe textual insert)
+try:
+    s=open(oc).read()
+    if lms_id not in s:
+        m=re.search(r'("omniroute"\s*:\s*\{.*?"models"\s*:\s*\{)', s, re.S)
+        if m:
+            e='\n        "%s": {\n          "name": "%s",\n          "limit": { "context": 131072, "output": 32768 }\n        },' % (lms_id, label)
+            open(oc,'w').write(s[:m.end()]+e+s[m.end():])
+            print(f'opencode: {lms_id} at top of picker')
+    else: print('opencode: already present')
+except Exception as ex: print('opencode edit failed:', ex)
+# qwen: set as the default model (current schema: model.name + model.baseUrl)
+try:
+    d=json.load(open(qw))
+    mdl=d.get('model')
+    if not (isinstance(mdl,dict) and mdl.get('name')==lms_id):
+        d['model']={'name':lms_id,'baseUrl':'http://localhost:20128/v1'}
+        json.dump(d,open(qw,'w'),indent=2)
+        print(f'qwen: default model -> {lms_id}')
+    else: print('qwen: already default')
+except Exception as ex: print('qwen edit failed:', ex)
+PYEOF
 }
 
 case "${1:-check}" in
@@ -133,7 +181,7 @@ case "${1:-check}" in
       # resume."); lms resumes in place, so retry once immediately before deferring to next run.
       ok=0
       for attempt in 1 2; do
-        if ssh -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" >>"$AMBROSIO_HOME/pull.log" 2>&1; then ok=1; break; fi
+        if ssh -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" 2>&1 | tail -c 4000 >>"$AMBROSIO_HOME/pull.log"; then ok=1; break; fi
         log "pull attempt $attempt failed for '$term' — resuming"
       done
       if [ "$ok" -eq 1 ]; then
@@ -143,6 +191,12 @@ case "${1:-check}" in
     pulled="$(echo "$pulled" | xargs 2>/dev/null || true)"
     [ -z "$pulled" ] && { log "no new hot models"; exit 0; }
     command -v omniroute >/dev/null && omniroute models "$OMNIROUTE_NODE" >/dev/null 2>&1 || true
+    # surface each delivered model in OpenCode + qwen (find its lms id from the host)
+    for t in $pulled; do
+      lid="$(loaded_models | grep -i "$(echo "$t" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9.]/-/g')" | head -1)"
+      [ -z "$lid" ] && lid="$(loaded_models | grep -i "$(echo "$t" | cut -d- -f1-3 | tr 'A-Z' 'a-z')" | head -1)"
+      [ -n "$lid" ] && expose_model "lms/$lid" "🔥 $t (fresh via ambrosio)" >&2
+    done
     msg="Ambrosio served: hot model(s) pulled onto $HOST LM Studio, live in OmniRoute — come play: $pulled"
     if [ "$dry" -eq 1 ]; then log "[dry-run] would notify: $msg"; elif [ -x "$BOTLINE" ]; then "$BOTLINE" send --from ambrosio "$msg" >/dev/null 2>&1; log "notified JS: $pulled"; fi ;;
   *) echo "usage: ambrosio check [--dry-run] | status"; exit 1 ;;
