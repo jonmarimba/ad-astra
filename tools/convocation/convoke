@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# convoke — run one round of a convocation: the same task file to N agents, isolated,
+# each writing to its own output file. Rounds 1 and 2 are both "a task file fanned out";
+# only the task file's CONTENT differs (round 2's includes the others' round-1 outputs).
+# See ../../skills/convocation/SKILL.md for the full process.
+#
+#   convoke TASK.md --out outdir [--agents claude,codex,qwen] [--tag round1]
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+TASK="${1:?usage: convoke TASK.md --out DIR [--agents claude,codex,qwen] [--tag round1]}"; shift
+OUT="convocation-out"; AGENTS="claude,codex,qwen"; TAG="round1"
+while [ $# -gt 0 ]; do case "$1" in
+  --out) OUT="$2"; shift 2;; --agents) AGENTS="$2"; shift 2;; --tag) TAG="$2"; shift 2;; *) shift;;
+esac; done
+[ -f "$TASK" ] || { echo "no task file: $TASK"; exit 1; }
+mkdir -p "$OUT"
+PROMPT="$(cat "$TASK")"
+pids=()
+for a in $(echo "$AGENTS" | tr ',' ' '); do
+  o="$OUT/${TAG}_${a}.md"
+  case "$a" in
+    claude) command -v claude >/dev/null && ( claude -p "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    codex)  command -v codex  >/dev/null && ( codex exec "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    qwen)   command -v qwen   >/dev/null && ( qwen -p "$PROMPT"  > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    *) echo "unknown agent '$a' (claude|codex|qwen)" ;;
+  esac
+done
+for p in "${pids[@]}"; do wait "$p"; done
+echo "--- $TAG outputs in $OUT/:"
+ls -la "$OUT/${TAG}_"*.md 2>/dev/null
