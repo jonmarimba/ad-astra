@@ -7,3 +7,13 @@ graphify-repo ~/svnCheckouts/pot-mhm                      # extract + cluster, u
 graphify-repo ~/repo --label-backend ollama --label-model ornith   # opt-in local labeling
 ```
 First run on pot-mhm (2026-08-12): 2,592 nodes, 3,318 edges, 166 communities; GRAPH_REPORT.md + interactive graph.html. Andrew can run this too — nothing GhOST-specific.
+
+## Install
+```sh
+./install.sh   # brew uv + `uv tool install graphifyy` (the graphify CLI)
+```
+Optional local labeling needs ollama + a local model (`--label-backend ollama --label-model ornith:latest`).
+
+## Repos mapped so far
+- pot-mhm (8/12): 2,592 nodes / 166 communities, ornith-labeled
+- js-llmKicker (8/12): see vault graphify/js-llmKicker
