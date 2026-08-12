@@ -65,3 +65,6 @@ md2pdf input.md output.pdf                       # default template
 md2pdf input.md output.pdf --template legal.css  # your CSS (file, or templates/legal.css)
 ```
 Templates are **CSS** (same styling model as Marked). Drop your legal template's CSS in `templates/` or point `--template` at it. Because md2pdf never touches Marked's own template store, the "don't clobber / version-conflict" worry disappears. `@page` in the CSS controls page size + margins. Footer parity via `pdf_add_footer.py` when pymupdf is present.
+
+## Marked 3 scripted export — attempted 8/12, blocked by a Marked bug
+Marked 3 (3.1.21, Setapp) ships an AppleScript dictionary with `convert_to` / `fetch_profile_names` / export profiles — on paper the native headless export. In practice the sdef's command codes are malformed (4–6 chars where AppleEvents require 8: `conv`, `gpls`, `mkopst`), so terminology never loads: AppleScript throws -2753, JXA -1708, by bundle id or path, app running or not. Until Brett fixes the dictionary, **md2pdf (pandoc→weasyprint + the attorney templates) is the headless legal-export path**, and `marked_to_pdf.sh` (UI-scripting Marked 2's print dialog) remains a deprecated fallback. Worth reporting upstream — support@marked2app.com / @ttscoff.
