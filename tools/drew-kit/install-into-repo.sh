@@ -3,7 +3,7 @@
 # config, REPO-LEVEL and non-clobbering: appends a marked managed block of @-imports to the
 # repo's CLAUDE.md and AGENTS.md (creating them if absent). Never touches global configs
 # (that's what Drew's own update.sh does, on HIS machine — see WARNING-drews-update-sh.md).
-#   install-into-repo.sh <repo-path> [--set swift|jira|all]     (default: swift)
+#   install-into-repo.sh <repo-path> [--set swift|jira|all — comma-combinable, e.g. swift,jira]  (default: swift)
 #   uninstall-from-repo.sh <repo-path>   removes the block, touches nothing else
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
@@ -12,12 +12,15 @@ REPO="${1:?usage: install-into-repo.sh <repo-path> [--set swift|jira|all]}"; shi
 SET="swift"; [ "${1:-}" = "--set" ] && SET="$2"
 BEGIN="# >>> drew-kit imports (managed by drew-kit/install-into-repo.sh) >>>"
 END="# <<< drew-kit imports <<<"
-case "$SET" in
-  swift) FILES=(SwiftCodeStyle.md SwiftAsyncAwaitConcurrency.md SwiftCodeCorrectnessAndSafety.md SwiftUIRules.md SwiftMisc.md BuildingAppleProjects.md) ;;
-  jira)  FILES=(AtlassianJira.md) ;;
-  all)   FILES=($(cd "$KIT/components" && ls *.md | grep -vE 'UserPersona|END_OF_RESPONSE')) ;;
-  *) echo "unknown set: $SET (swift|jira|all)"; exit 1 ;;
-esac
+FILES=()
+for part in $(echo "$SET" | tr ',' ' '); do
+  case "$part" in
+    swift) FILES+=(SwiftCodeStyle.md SwiftAsyncAwaitConcurrency.md SwiftCodeCorrectnessAndSafety.md SwiftUIRules.md SwiftMisc.md BuildingAppleProjects.md) ;;
+    jira)  FILES+=(AtlassianJira.md) ;;
+    all)   FILES+=($(cd "$KIT/components" && ls *.md | grep -vE 'UserPersona|END_OF_RESPONSE')) ;;
+    *) echo "unknown set: $part (swift|jira|all, comma-combinable)"; exit 1 ;;
+  esac
+done
 for target in "$REPO/CLAUDE.md" "$REPO/AGENTS.md"; do
   touch "$target"
   if grep -qF "$BEGIN" "$target"; then
