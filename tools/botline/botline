@@ -56,7 +56,13 @@ cmd_dispatch(){
   fi
   # --start (no arbitrary limit → no silent drop); id>watermark dedups the boundary overlap
   local last_bot; last_bot="$(cat "$BOTLINE_HOME/last_bot" 2>/dev/null || echo unrouted)"
-  local hist; hist="$("$IMSG" history --chat-id "$JS_CHAT_ID" --start "$wm_iso" --json 2>/dev/null || true)"
+  # a broken transport must be LOUD, not read as "no new replies": stdout here pokes the
+  # channel via schd's poke-on-stdout convention, which is exactly what a stalled bridge needs
+  local hist
+  if ! hist="$("$IMSG" history --chat-id "$JS_CHAT_ID" --start "$wm_iso" --json 2>&1)"; then
+    echo "botline dispatch: imsg history FAILED — reply routing is STALLED: $(printf '%s' "$hist" | head -3)"
+    return 1
+  fi
   printf '%s\n' "$hist" | \
   BOTLINE_HOME="$BOTLINE_HOME" LAST_BOT="$last_bot" WM_ID="$wm_id" python3 -c '
 import sys, os, json, re
@@ -75,6 +81,10 @@ for line in sys.stdin:
     mo=re.match(r"^@(\S+)\s+(.*)$", text, re.S)
     if mo: target, body = mo.group(1), mo.group(2)
     else:  target, body = last, text
+    # a target is a bare inbox name, never a path: "@../../x" or "@/tmp/x" must not
+    # write outside the spool — fall back to reply-to-last for anything path-shaped
+    if "/" in target or target.startswith(".") or not target:
+        target, body = last, text
     d=os.path.join(home,"inbox",target); os.makedirs(d, exist_ok=True)
     open(os.path.join(d, f"{mid}.msg"),"w").write(body+"\n")
     routed+=1
@@ -92,16 +102,23 @@ cmd_recv(){
   local as="" peek=0
   while [ $# -gt 0 ]; do case "$1" in --as) as="$2"; shift 2;; --peek) peek=1; shift;; *) shift;; esac; done
   [ -n "$as" ] || die "usage: botline recv --as <bot> [--peek]"
+  case "$as" in */*|.*) die "invalid bot name '$as' (bare name, not a path)";; esac
   local d="$BOTLINE_HOME/inbox/$as"
   [ -d "$d" ] || { exit 0; }
-  local any=0
   # numeric sort on the bare filename (message id): "9.msg" before "10.msg" — a path-wise
   # byte sort flips those once ids cross a digit-length boundary (caught by test-botline.sh)
   for name in $(ls "$d" 2>/dev/null | sort -n); do
     local f="$d/$name"
-    cat "$f"; any=1; [ "$peek" -eq 0 ] && rm -f "$f"
+    # delete ONLY after the message actually reached the reader — if cat fails (reader went
+    # away mid-stream, disk full), keep the file for the next recv instead of destroying it
+    if cat "$f"; then
+      [ "$peek" -eq 0 ] && rm -f "$f"
+    else
+      echo "botline: recv delivery interrupted — '$name' and later messages kept" >&2
+      exit 1
+    fi
   done
-  [ "$any" -eq 0 ] && exit 0
+  exit 0
 }
 
 cmd_list(){
@@ -117,7 +134,10 @@ case "${1:-}" in
   send) shift; cmd_send "$@" ;;
   dispatch) cmd_dispatch ;;
   recv) shift; cmd_recv "$@" ;;
-  register) [ "${2:-}" = "--name" ] && mkdir -p "$BOTLINE_HOME/inbox/$3" && echo "registered $3" || die "usage: botline register --name <bot>" ;;
+  register)
+    [ "${2:-}" = "--name" ] && [ -n "${3:-}" ] || die "usage: botline register --name <bot>"
+    case "$3" in */*|.*) die "invalid bot name '$3' (bare name, not a path)";; esac
+    mkdir -p "$BOTLINE_HOME/inbox/$3" && echo "registered $3" ;;
   list) cmd_list ;;
   *) echo "usage: botline send|dispatch|recv|register|list (see header)"; exit 1 ;;
 esac

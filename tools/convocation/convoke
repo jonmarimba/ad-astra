@@ -10,7 +10,9 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$P
 TASK="${1:?usage: convoke TASK.md --out DIR [--agents claude,codex,qwen] [--tag round1]}"; shift
 OUT="convocation-out"; AGENTS="claude,codex,qwen"; TAG="round1"
 while [ $# -gt 0 ]; do case "$1" in
-  --out) OUT="$2"; shift 2;; --agents) AGENTS="$2"; shift 2;; --tag) TAG="$2"; shift 2;; *) shift;;
+  --out) OUT="$2"; shift 2;; --agents) AGENTS="$2"; shift 2;; --tag) TAG="$2"; shift 2;;
+  # a typo'd flag silently running with defaults overwrites the PREVIOUS round's outputs
+  *) echo "convoke: unknown argument '$1'" >&2; exit 64;;
 esac; done
 [ -f "$TASK" ] || { echo "no task file: $TASK"; exit 1; }
 mkdir -p "$OUT"
@@ -30,15 +32,24 @@ for a in $(echo "$AGENTS" | tr ',' ' '); do
   esac
 done
 [ "$bad" -eq 0 ] || { echo "convoke: aborting — every requested voice must be able to run" >&2; exit 1; }
+# each subshell exits with ITS AGENT'S status — an agent that crashes must fail the round,
+# not leave a 0-byte answer file behind a cheery "done" (a round missing a voice is invalid)
+run_agent(){ # run_agent <name> <outfile> <cmd...>
+  local a="$1" o="$2"; shift 2
+  if "$@" > "$o" 2>"$o.err"; then echo "done: $a"
+  else local rc=$?; echo "convoke: agent '$a' FAILED rc=$rc (stderr in $o.err)" >&2; return "$rc"; fi
+}
 pids=()
 for a in $(echo "$AGENTS" | tr ',' ' '); do
   o="$OUT/${TAG}_${a}.md"
   case "$a" in
-    claude) ( "$CLAUDE_BIN" -p "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
-    codex)  ( "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
-    qwen)   ( "$QWEN_BIN" -p "$PROMPT"  > "$o" 2>"$o.err"; echo "done: $a" ) & pids+=($!) ;;
+    claude) run_agent claude "$o" "$CLAUDE_BIN" -p "$PROMPT" & pids+=($!) ;;
+    codex)  run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" & pids+=($!) ;;
+    qwen)   run_agent qwen   "$o" "$QWEN_BIN" -p "$PROMPT" & pids+=($!) ;;
   esac
 done
-for p in "${pids[@]}"; do wait "$p"; done
+failed=0
+for p in "${pids[@]}"; do wait "$p" || failed=1; done
 echo "--- $TAG outputs in $OUT/:"
 ls -la "$OUT/${TAG}_"*.md 2>/dev/null
+[ "$failed" -eq 0 ] || { echo "convoke: round INCOMPLETE — at least one voice failed" >&2; exit 1; }

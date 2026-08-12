@@ -57,19 +57,61 @@ assert_file "$BOTLINE_HOME/inbox/testbot/102.msg" "un-@'d reply routed to last b
 assert_no_file "$BOTLINE_HOME/inbox/testbot/103.msg" "outbound (is_from_me) not routed"
 assert_eq "102" "$(cat "$BOTLINE_HOME/watermark_id")" "watermark advanced to highest routed id"
 
-# ---- RED control: replaying the same fixture must route NOTHING (watermark dedup) ----
+# ---- RED control: replaying the same fixture must route NOTHING (watermark dedup).
+# Sentinel content, not file count — a replay would OVERWRITE 102.msg with the original
+# body and the count would still read 1, so counting can't go red. ----
+echo "SENTINEL-UNTOUCHED" > "$BOTLINE_HOME/inbox/testbot/102.msg"
 "$BOTLINE" dispatch >/dev/null 2>&1
-n="$(ls "$BOTLINE_HOME/inbox/testbot/"*.msg 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "1" "$n" "replayed fixture routed zero new messages (watermark held)"
+assert_contains "$BOTLINE_HOME/inbox/testbot/102.msg" "SENTINEL-UNTOUCHED" "replay did not re-route/overwrite an already-routed message"
+
+# ---- @-target is a name, not a path: path-shaped targets fall back to reply-to-last ----
+cat > "$SB/traversal.jsonl" <<'EOF'
+{"id":201,"text":"@../../escaped hello there","is_from_me":false,"created_at":"2026-08-12T21:10:01+00:00"}
+EOF
+export IMSG_FIXTURE="$SB/traversal.jsonl"
+"$BOTLINE" dispatch >/dev/null 2>&1
+assert_no_file "$SB/escaped" "path-shaped @-target did not escape the inbox tree (inbox/../../ = \$SB)"
+assert_file "$BOTLINE_HOME/inbox/testbot/201.msg" "path-shaped @-target fell back to reply-to-last"
+
+# ---- a broken transport must be LOUD (stdout pokes the channel), never 'no new replies' ----
+cat > "$SB/bin/imsg-broken" <<'SHIM'
+#!/usr/bin/env bash
+[ "$1" = "history" ] && { echo "imsg: cannot open chat.db" >&2; exit 1; }
+exit 0
+SHIM
+chmod +x "$SB/bin/imsg-broken"
+out="$(IMSG_BIN="$SB/bin/imsg-broken" "$BOTLINE" dispatch 2>/dev/null)"; rc=$?
+assert_eq "1" "$rc" "dispatch exits nonzero when the transport is broken"
+assert_nonempty "$out" "broken transport announces itself on stdout (schd poke fires)"
 
 # ---- recv ordering across a digit-length boundary (ids 9 vs 10 — byte order would flip them) ----
 rm -f "$BOTLINE_HOME/inbox/testbot/"*.msg
 echo "ninth" > "$BOTLINE_HOME/inbox/testbot/9.msg"
 echo "tenth" > "$BOTLINE_HOME/inbox/testbot/10.msg"
-got="$("$BOTLINE" recv --as testbot | tr '\n' ' ' | xargs)"
-assert_eq "ninth tenth" "$got" "recv delivers in message-id order (9 before 10)"
+got="$("$BOTLINE" recv --as testbot)"; rc=$?
+assert_eq "0" "$rc" "recv exits 0 on successful delivery (rc was inverted once)"
+assert_eq "ninth tenth" "$(printf '%s' "$got" | tr '\n' ' ' | xargs)" "recv delivers in message-id order (9 before 10)"
 n="$(ls "$BOTLINE_HOME/inbox/testbot/"*.msg 2>/dev/null | wc -l | tr -d ' ')"
 assert_eq "0" "$n" "recv cleared the inbox"
+
+# ---- delivery failure must PRESERVE messages (undelivered + rm'd = unrecoverable loss).
+# Deterministic EPIPE on macOS (no /dev/full here): the reader takes ONE line of a >64KB
+# message and closes, so recv's cat blocks on the fifo, then dies mid-message — guaranteed
+# to fail while both messages are still on disk. ----
+# 300 lines × 1KB: head -n 1 takes only line 1 then closes, and the remaining ~299KB
+# overflows the 64KB fifo buffer, so cat reliably dies mid-message
+python3 -c "print(('x'*1000+'\n')*300, end='')" > "$BOTLINE_HOME/inbox/testbot/20.msg"
+echo "precious" > "$BOTLINE_HOME/inbox/testbot/21.msg"
+mkfifo "$SB/fifo"
+( head -n 1 < "$SB/fifo" > /dev/null ) &
+"$BOTLINE" recv --as testbot > "$SB/fifo" 2>/dev/null; rc=$?
+wait
+[ "$rc" -ne 0 ] && pass "recv exits nonzero when delivery fails (rc=$rc)" || fail "recv exited 0 despite failed delivery"
+assert_file "$BOTLINE_HOME/inbox/testbot/20.msg" "interrupted message KEPT after failed delivery"
+assert_file "$BOTLINE_HOME/inbox/testbot/21.msg" "queued message behind it KEPT too"
+rm -f "$BOTLINE_HOME/inbox/testbot/"*.msg
+red "recv with a path-shaped bot name must fail" "$BOTLINE" recv --as ../escaped
+red "register with a path-shaped bot name must fail" "$BOTLINE" register --name ../evil
 
 # ---- recv --peek keeps messages ----
 echo "keepme" > "$BOTLINE_HOME/inbox/testbot/11.msg"

@@ -47,5 +47,13 @@ red "unknown agent name must fail" "$CONVOKE" "$SB/task.md" --out "$SB/out4" --a
 red "good agent + unknown agent must fail (no short-handed round)" env CLAUDE_BIN="$SB/bin/fake-claude" "$CONVOKE" "$SB/task.md" --out "$SB/out6" --agents claude,gemini --tag r1
 assert_no_file "$SB/out6/r1_claude.md" "no partial output written when the round was refused"
 red "missing task file must fail" "$CONVOKE" "$SB/no-such-task.md" --out "$SB/out5"
+# an agent binary that RUNS but crashes: 'done' + empty answer file + rc 0 was the mask
+cat > "$SB/bin/crasher" <<'SHIM'
+#!/usr/bin/env bash
+echo "boom" >&2; exit 3
+SHIM
+chmod +x "$SB/bin/crasher"
+red "agent that runs and crashes must fail the round" env CLAUDE_BIN="$SB/bin/crasher" "$CONVOKE" "$SB/task.md" --out "$SB/out7" --agents claude --tag r1
+red "typo'd flag must error, not run with defaults (would overwrite the previous round)" env CLAUDE_BIN="$SB/bin/fake-claude" "$CONVOKE" "$SB/task.md" --out "$SB/out8" --agents claude --tga r2
 
 finish

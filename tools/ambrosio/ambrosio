@@ -41,7 +41,10 @@ CURL="${CURL_BIN:-curl}"; SSH="${SSH_BIN:-ssh}"; OMNIROUTE="${OMNIROUTE_BIN:-omn
 host_up(){ "$CURL" -s --max-time 6 "http://$HOST:$LMS_PORT/v1/models" >/dev/null 2>&1; }
 loaded_models(){ "$CURL" -s --max-time 8 "http://$HOST:$LMS_PORT/v1/models" 2>/dev/null | python3 -c "import sys,json;[print(m.get('id','')) for m in json.load(sys.stdin).get('data',[])]" 2>/dev/null; }
 hot_candidates(){
-  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=80&pipeline_tag=text-generation" 2>/dev/null \
+  # limit=80: frontier drops chart inside the top ~30 trending; 80 is 2.5x margin, and the
+  # filters below discard most rows anyway. Errors go to pull.log, never /dev/null — an HF
+  # outage must be distinguishable from "genuinely nothing new" when this runs on a timer.
+  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=80&pipeline_tag=text-generation" 2>>"$AMBROSIO_HOME/pull.log" \
    | python3 -c "
 import sys,json,os,re
 wl=os.environ['WATCHLIST'].lower().split()
@@ -76,7 +79,7 @@ if isinstance(ms,list):
         if not term or term.lower() in seen: continue     # dedup by family
         seen.add(term.lower())
         print(term)
-" 2>/dev/null
+" 2>>"$AMBROSIO_HOME/pull.log"
 }
 
 # resolve a family term -> full HF URL of the best MLX repo (staff-picks search misses most
@@ -84,7 +87,9 @@ if isinstance(ms,list):
 # orgs and a sane quant (4bit first, then 8bit), skips bf16 (huge) unless nothing else.
 resolve_mlx_url(){
   local term="$1"
-  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?search=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]+' mlx'))" "$term")&limit=30" 2>/dev/null \
+  # limit=30: the query is already scoped to '<family> mlx', where the relevant quant repos
+  # land in the first dozen results; 30 is margin, not a completeness cap
+  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?search=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]+' mlx'))" "$term")&limit=30" 2>>"$AMBROSIO_HOME/pull.log" \
   | TERM_Q="$term" SIZE_CAP_GB="$SIZE_CAP_GB" python3 -c "
 import sys,json,os,re,urllib.request
 term=os.environ['TERM_Q'].lower()
@@ -118,8 +123,10 @@ for m in ms:
     org_rank = GOOD_ORGS.index(org.lower()) if org.lower() in GOOD_ORGS else 5
     cands.append((org_rank, quant_rank(tail), mid))
 cands.sort()
-# walk candidates best-first; first one whose ACTUAL repo size fits the cap wins
-for _,_,mid in cands[:6]:
+# walk ALL candidates best-first; first one whose ACTUAL repo size fits the cap wins.
+# No [:N] slice — each probe is one cheap API call, and a fitting repo ranked 7th must
+# not be invisible (the no-silent-caps rule).
+for _,_,mid in cands:
     gb=repo_gb(mid)
     if gb is not None and 3<=gb<=cap:   # floor: <3GB = draft head / toy distill, not a frontier model
         print(f'https://huggingface.co/{mid}'); break
@@ -184,7 +191,10 @@ case "${1:-check}" in
       # resume."); lms resumes in place, so retry once immediately before deferring to next run.
       ok=0
       for attempt in 1 2; do
-        if "$SSH" -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" 2>&1 | tail -c 4000 >>"$AMBROSIO_HOME/pull.log"; then ok=1; break; fi
+        # -n is load-bearing: this runs inside `while read term`, and ssh without it drains
+        # the remaining candidate lines from the loop's stdin (second hot model of the day
+        # would silently never pull)
+        if "$SSH" -n -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" 2>&1 | tail -c 4000 >>"$AMBROSIO_HOME/pull.log"; then ok=1; break; fi
         log "pull attempt $attempt failed for '$term' — resuming"
       done
       if [ "$ok" -eq 1 ]; then
@@ -201,6 +211,10 @@ case "${1:-check}" in
       [ -n "$lid" ] && expose_model "lms/$lid" "🔥 $t (fresh via ambrosio)" >&2
     done
     msg="Ambrosio served: hot model(s) pulled onto $HOST LM Studio, live in OmniRoute — come play: $pulled"
-    if [ "$dry" -eq 1 ]; then log "[dry-run] would notify: $msg"; elif [ -x "$BOTLINE" ]; then "$BOTLINE" send --from ambrosio "$msg" >/dev/null 2>&1; log "notified JS: $pulled"; fi ;;
+    if [ "$dry" -eq 1 ]; then log "[dry-run] would notify: $msg"
+    elif [ -x "$BOTLINE" ]; then
+      if "$BOTLINE" send --from ambrosio "$msg" >/dev/null 2>>"$AMBROSIO_HOME/pull.log"; then log "notified JS: $pulled"
+      else log "notify FAILED (botline send) — models pulled but JS was NOT told: $pulled"; fi
+    fi ;;
   *) echo "usage: ambrosio check [--dry-run] | status"; exit 1 ;;
 esac

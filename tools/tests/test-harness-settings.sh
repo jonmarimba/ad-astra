@@ -70,5 +70,13 @@ cmp -s "$SB/qwen.orig"   "$HOME/.qwen/settings.json"   && pass "apply+undo round
 export HOME="$SB/home3"; mkdir -p "$HOME"
 red "undo with no backups must fail" "$HS" undo
 red "unknown subcommand must fail" "$HS" frobnicate
+# a config jq can't parse must FAIL the apply — not print per-config success + 'DONE.' (the
+# false-success shape: believing the safety deny-rules are live when nothing changed)
+mkdir -p "$HOME/.claude"
+printf '{"model":"sonnet",}\n' > "$HOME/.claude/settings.json"   # trailing comma = invalid JSON
+out="$("$HS" apply 2>/dev/null)"; rc=$?
+assert_eq "1" "$rc" "apply exits nonzero on an unparseable config"
+printf '%s' "$out" | grep -qF "DONE." && fail "apply printed DONE. despite a failed edit" || pass "no false DONE. on failure"
+assert_contains "$HOME/.claude/settings.json" '{"model":"sonnet",}' "broken config left byte-identical (no partial write)"
 
 finish

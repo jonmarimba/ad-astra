@@ -30,6 +30,9 @@ assert_file "$SB/doc2.pdf" "templated PDF exists"
 # RED controls — the one-letter-off class: a near-miss template name must FAIL, not fall back
 red "one-letter-off template name (attorney-doc) must fail" "$MD2PDF" "$SB/doc.md" "$SB/doc3.pdf" --template attorney-doc
 assert_no_file "$SB/doc3.pdf" "no PDF produced from the failed template run"
+red "--template with no value must fail, not fall back to default.css" "$MD2PDF" "$SB/doc.md" "$SB/doc5.pdf" --template
+assert_no_file "$SB/doc5.pdf" "no PDF from the missing-value run"
+red "misspelled flag (--tempalte) must fail, not be silently ignored" "$MD2PDF" "$SB/doc.md" "$SB/doc6.pdf" --tempalte attorney-docs
 red "missing input file must fail" "$MD2PDF" "$SB/no-such.md" "$SB/doc4.pdf"
 red "no arguments must fail with usage" "$MD2PDF"
 

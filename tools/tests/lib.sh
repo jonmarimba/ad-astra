@@ -31,7 +31,10 @@ assert_file(){      [ -f "$1" ]            && pass "$2" || fail "$2 (missing $1)
 assert_no_file(){   [ ! -e "$1" ]          && pass "$2" || fail "$2 (unexpected $1)"; }
 assert_dir(){       [ -d "$1" ]            && pass "$2" || fail "$2 (missing dir $1)"; }
 assert_contains(){     grep -qF -- "$2" "$1" 2>/dev/null && pass "$3" || fail "$3 ('$2' not in $1)"; }
-assert_not_contains(){ grep -qF -- "$2" "$1" 2>/dev/null && fail "$3 ('$2' unexpectedly in $1)" || pass "$3"; }
+assert_not_contains(){ # fails on a MISSING file too — "not present" must mean "checked and absent"
+  [ -f "$1" ] || { fail "$3 (file $1 missing — vacuous pass refused)"; return; }
+  grep -qF -- "$2" "$1" && fail "$3 ('$2' unexpectedly in $1)" || pass "$3"
+}
 assert_empty(){     [ -z "$1" ]            && pass "$2" || fail "$2 (expected empty, got '$1')"; }
 assert_nonempty(){  [ -n "$1" ]            && pass "$2" || fail "$2 (expected output, got none)"; }
 

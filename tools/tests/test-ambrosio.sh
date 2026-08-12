@@ -40,16 +40,20 @@ MIN_PARAMS_B="7"
 EOF
 
 # ---- recorded HF payloads. Trending is poisoned with one entry per filter class. ----
-# GOOD:               qwen/Qwen3-30B-A3B            -> family term "qwen3", must survive
+# GOOD #1:            qwen/Qwen3-30B-A3B            -> family term "Qwen3", must survive+pull
+# GOOD #2:            zai-org/GLM-4.5-Air           -> term "GLM-4.5-Air", must pull too
+#                     (two pulls in one run proves MAX_PER_RUN=2 really delivers 2 — the
+#                      ssh-drains-stdin bug degraded it to 1 silently)
 # junk (distill):     deepseek-ai/...-Distill-...   -> JUNK token, must be rejected
 # unknown org:        randomdude/kimi-k3-awesome    -> not in REPUTABLE, must be rejected
 # toy (<7B):          nvidia/Nemotron-Toy-3B        -> size floor, must be rejected
 # off-watchlist:      microsoft/phi-5-mini          -> no watchlist word, must be rejected
-# family dup:         qwen/Qwen3-32B                -> same family as the good one, deduped
+# family dup:         qwen/Qwen3-32B                -> same family as good #1, deduped
 # no-quant-yet:       moonshotai/Kimi-K3            -> survives filters; search returns nothing
 cat > "$SB/trending.json" <<'EOF'
 [
  {"id":"qwen/Qwen3-30B-A3B"},
+ {"id":"zai-org/GLM-4.5-Air"},
  {"id":"deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"},
  {"id":"randomdude/kimi-k3-awesome"},
  {"id":"nvidia/Nemotron-Toy-3B"},
@@ -58,7 +62,7 @@ cat > "$SB/trending.json" <<'EOF'
  {"id":"moonshotai/Kimi-K3"}
 ]
 EOF
-# search results for "qwen3 mlx": junk + huge bf16 + the real 4bit repo (ranked best, fits cap)
+# search results for "Qwen3 mlx": junk + huge bf16 + the real 4bit repo (ranked best, fits cap)
 cat > "$SB/search_qwen3.json" <<'EOF'
 [
  {"id":"someguy/Qwen3-30B-A3B-distill-4bit"},
@@ -66,8 +70,14 @@ cat > "$SB/search_qwen3.json" <<'EOF'
  {"id":"mlx-community/Qwen3-30B-A3B-4bit"}
 ]
 EOF
+# search results for "GLM-4.5-Air mlx": one real repo (60.2GB live on 2026-08-12, under the cap)
+cat > "$SB/search_glm.json" <<'EOF'
+[
+ {"id":"mlx-community/GLM-4.5-Air-4bit"}
+]
+EOF
 echo '{"data":[{"id":"existing-model"}]}' > "$SB/loaded.json"
-echo '{"data":[{"id":"existing-model"},{"id":"qwen3-30b-a3b-4bit"}]}' > "$SB/loaded_after_pull.json"
+echo '{"data":[{"id":"existing-model"},{"id":"qwen3-30b-a3b-4bit"},{"id":"glm-4.5-air-4bit"}]}' > "$SB/loaded_after_pull.json"
 echo '[]' > "$SB/search_empty.json"
 
 # ---- transport shims, injected via the *_BIN seams ----
@@ -78,6 +88,7 @@ cat > "$SB/bin/curl" <<SHIM
 for a in "\$@"; do case "\$a" in
   *sort=trendingScore*) cat "$SB/trending.json"; exit 0 ;;
   *api/models?search=Qwen3*) cat "$SB/search_qwen3.json"; exit 0 ;;
+  *api/models?search=GLM-4.5-Air*) cat "$SB/search_glm.json"; exit 0 ;;
   *api/models?search=*) cat "$SB/search_empty.json"; exit 0 ;;
   *fakehost.test*) [ -f "$SB/host_down" ] && exit 7; cat "$SB/loaded.json"; exit 0 ;;
 esac; done
@@ -85,8 +96,14 @@ exit 1
 SHIM
 cat > "$SB/bin/ssh" <<SHIM
 #!/usr/bin/env bash
+# mirrors real ssh's stdin semantics: WITHOUT -n it consumes the caller's stdin (which is
+# what catches a dropped \`ssh -n\` in ambrosio's read-loop — the remaining candidate lines
+# get eaten and the 2nd pull vanishes); WITH -n it leaves stdin alone, like the real thing
+wantstdin=1
+for a in "\$@"; do [ "\$a" = "-n" ] && wantstdin=0; done
+[ "\$wantstdin" -eq 1 ] && cat > /dev/null
 printf '%s\n' "\$*" >> "$SB/ssh.log"
-cp "$SB/loaded_after_pull.json" "$SB/loaded.json"   # the pull makes the model appear on the host
+cp "$SB/loaded_after_pull.json" "$SB/loaded.json"   # the pull makes the models appear on the host
 exit 0
 SHIM
 cat > "$SB/bin/botline" <<SHIM
@@ -105,9 +122,12 @@ export CURL_BIN="$SB/bin/curl" SSH_BIN="$SB/bin/ssh" OMNIROUTE_BIN="$SB/bin/omni
 # family terms keep the HF repo's case: "Qwen3", "Kimi-K3"
 st="$("$AMBROSIO" status 2>/dev/null)"
 case "$st" in *Qwen3*) pass "good candidate (Qwen3 family) survived the filters";; *) fail "good candidate missing from status";; esac
+case "$st" in *GLM-4.5-Air*) pass "second good candidate (GLM-4.5-Air) survived";; *) fail "GLM-4.5-Air missing from status";; esac
 case "$st" in *Kimi-K3*) pass "Kimi-K3 (no size in name) survived the size floor";; *) fail "Kimi-K3 wrongly filtered";; esac
-for bad in distill randomdude Toy phi; do
-  case "$st" in *$bad*) fail "poisoned entry '$bad' leaked through the filters";; *) pass "poisoned entry '$bad' rejected";; esac
+# probes are case-insensitive and use tokens that would actually SURFACE in a leaked family
+# term (an org name like 'randomdude' is stripped from terms, so probing it proved nothing)
+for bad in distill awesome toy mini; do
+  printf '%s\n' "$st" | grep -qi -- "$bad" && fail "poisoned entry '$bad' leaked through the filters" || pass "poisoned entry '$bad' rejected"
 done
 n="$(printf '%s\n' "$st" | grep -ci "qwen3")"
 assert_eq "1" "$n" "qwen3 family deduped to one candidate (Qwen3-32B folded in)"
@@ -117,11 +137,13 @@ out="$("$AMBROSIO" check 2>"$SB/check.err")"; rc=$?
 assert_eq "0" "$rc" "check exits 0"
 assert_empty "$out" "check stdout is empty (schd silence contract)"
 assert_contains "$SB/ssh.log" 'https://huggingface.co/mlx-community/Qwen3-30B-A3B-4bit' "pull targeted the real 4bit repo (bf16 and distill outranked/rejected)"
+assert_contains "$SB/ssh.log" 'https://huggingface.co/mlx-community/GLM-4.5-Air-4bit' "SECOND pull happened (MAX_PER_RUN=2 delivered 2 — ssh left the candidate stream alone)"
 assert_contains "$SB/ssh.log" '--yes' "lms get ran non-interactive"
 grep -qxF "Qwen3" "$AMBROSIO_HOME/seen.txt" && pass "delivered family recorded in seen.txt" || fail "Qwen3 not recorded in seen.txt"
 grep -qi "kimi" "$AMBROSIO_HOME/seen.txt" && fail "Kimi-K3 wrongly marked seen (no repo exists yet — must retry next run)" || pass "Kimi-K3 left unseen for retry (no MLX repo yet)"
-assert_contains "$HOME/.config/opencode/opencode.jsonc" 'lms/qwen3-30b-a3b-4bit' "delivered model exposed in OpenCode picker"
-assert_eq "lms/qwen3-30b-a3b-4bit" "$(python3 -c "import json;print(json.load(open('$HOME/.qwen/settings.json'))['model']['name'])")" "delivered model set as qwen default"
+assert_contains "$HOME/.config/opencode/opencode.jsonc" 'lms/qwen3-30b-a3b-4bit' "first delivered model exposed in OpenCode picker"
+assert_contains "$HOME/.config/opencode/opencode.jsonc" 'lms/glm-4.5-air-4bit' "second delivered model exposed in OpenCode picker"
+assert_eq "lms/glm-4.5-air-4bit" "$(python3 -c "import json;print(json.load(open('$HOME/.qwen/settings.json'))['model']['name'])")" "qwen default = last exposed model"
 assert_contains "$SB/botline.log" "Ambrosio served" "JS notified via botline"
 
 # ---- RED control: second run must pull NOTHING (seen dedup) ----

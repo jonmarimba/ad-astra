@@ -32,9 +32,12 @@ apply() {
   echo "$ts" > "$BACKUP_ROOT/latest"
   echo "backed up -> $bdir"
 
+  # success lines are printed ONLY after the edit is proven landed — a failed jq/toml edit
+  # claiming success would leave the safety deny-rules unapplied while reporting them live
+  local failed=0
   if [ -f "$CLAUDE" ]; then
     local tmp; tmp="$(mktemp)"
-    jq --argjson deny "$CLAUDE_DENY" --argjson allow "$CLAUDE_ALLOW" '
+    if jq --argjson deny "$CLAUDE_DENY" --argjson allow "$CLAUDE_ALLOW" '
       .model = "opus"
       | .effortLevel = "xhigh"
       | .outputStyle = "Default"
@@ -42,19 +45,25 @@ apply() {
       | .permissions = (.permissions // {})
       | .permissions.deny  = (((.permissions.deny  // []) + $deny)  | unique)
       | .permissions.allow = (((.permissions.allow // []) + $allow) | unique)
-    ' "$CLAUDE" > "$tmp" && mv "$tmp" "$CLAUDE"
-    echo "claude: model=opus effort=xhigh outputStyle=Default autoMemory=off; deny/allow merged"
+    ' "$CLAUDE" > "$tmp" && mv "$tmp" "$CLAUDE"; then
+      echo "claude: model=opus effort=xhigh outputStyle=Default autoMemory=off; deny/allow merged"
+    else
+      echo "claude: EDIT FAILED — config NOT changed (bad JSON?)" >&2; rm -f "$tmp"; failed=1
+    fi
   fi
 
   if [ -f "$QWEN" ]; then
     local tmp; tmp="$(mktemp)"
-    jq '.thinking = "high" | (if has("telemetry") then .telemetry.enabled = false else . end)' \
-      "$QWEN" > "$tmp" && mv "$tmp" "$QWEN"
-    echo "qwen: thinking=high, telemetry off. (Trim QWEN.md — it was ~103k tokens; do that by hand.)"
+    if jq '.thinking = "high" | (if has("telemetry") then .telemetry.enabled = false else . end)' \
+      "$QWEN" > "$tmp" && mv "$tmp" "$QWEN"; then
+      echo "qwen: thinking=high, telemetry off. (Trim QWEN.md — it was ~103k tokens; do that by hand.)"
+    else
+      echo "qwen: EDIT FAILED — config NOT changed (bad JSON?)" >&2; rm -f "$tmp"; failed=1
+    fi
   fi
 
   if [ -f "$CODEX" ]; then
-    python3 "$HERE/toml_set.py" "$CODEX" \
+    if python3 "$HERE/toml_set.py" "$CODEX" \
       model_reasoning_effort=xhigh \
       plan_mode_reasoning_effort=xhigh \
       model_verbosity=low \
@@ -63,10 +72,18 @@ apply() {
       sandbox_mode=workspace-write \
       sandbox_workspace_write.network_access=false \
       features.hooks=true \
-      features.memories=false
-    echo "codex: effort=xhigh verbosity=low personality=none approval=on-request sandbox=workspace-write net=off hooks=on memories=off"
+      features.memories=false; then
+      echo "codex: effort=xhigh verbosity=low personality=none approval=on-request sandbox=workspace-write net=off hooks=on memories=off"
+    else
+      echo "codex: EDIT FAILED — config NOT changed" >&2; failed=1
+    fi
   fi
-  echo "DONE. Review; 'harness-settings.sh undo' restores the backup above."
+  if [ "$failed" -eq 0 ]; then
+    echo "DONE. Review; 'harness-settings.sh undo' restores the backup above."
+  else
+    echo "INCOMPLETE — one or more configs were NOT changed (see errors above); backup at $bdir" >&2
+    exit 1
+  fi
 }
 
 undo() {
