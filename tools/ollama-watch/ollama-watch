@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# ollama-watch — watch ollama.com/library and text Jonathan when a NEW frontier-tier model
+# family appears, so he knows to try it. One slice of the model-sync ask ("notify me when
+# ollama adds such a model"). Notifies through botline (so it's just another bot on the line).
+#
+#   ollama-watch check            # fetch, diff, notify on new frontier models (seeds silently on first run)
+#   ollama-watch check --dry-run  # print what it WOULD notify, send nothing
+#   ollama-watch list             # show the current library set it's tracking
+# Config: $OLLAMA_WATCH_HOME/config  (WATCHLIST = space-separated name substrings that count as "frontier")
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+HOME_DIR="${OLLAMA_WATCH_HOME:-$HOME/.ollama-watch}"
+mkdir -p "$HOME_DIR"
+CONF="$HOME_DIR/config"
+BOTLINE="${BOTLINE_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/botline/botline}"
+if [ ! -f "$CONF" ]; then
+  cat > "$CONF" <<'CFG'
+# name substrings that count as frontier/interesting (case-insensitive). Edit freely.
+WATCHLIST="glm kimi deepseek qwen3 qwen4 minimax gpt-oss llama4 llama5 mistral-large command-r phi5 gemma4 yi- mixtral"
+CFG
+fi
+# shellcheck disable=SC1090
+. "$CONF"
+
+SEEN="$HOME_DIR/seen.txt"
+
+fetch_library() {
+  curl -s --max-time 20 -A "Mozilla/5.0" "https://ollama.com/library" 2>/dev/null \
+    | grep -oE 'href="/library/[a-z0-9._-]+"' \
+    | sed 's|href="/library/||; s|"||' | sort -u
+}
+
+is_frontier() {
+  local name="$1" w
+  for w in $WATCHLIST; do
+    case "$name" in *"$w"*) return 0;; esac
+  done
+  return 1
+}
+
+case "${1:-check}" in
+  list) fetch_library ;;
+  check)
+    dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
+    cur="$(fetch_library)"
+    [ -z "$cur" ] && { echo "ollama-watch: fetch failed (empty) — leaving state untouched"; exit 1; }
+    if [ ! -f "$SEEN" ]; then
+      printf '%s\n' "$cur" > "$SEEN"
+      echo "ollama-watch: seeded $(printf '%s\n' "$cur" | wc -l | tr -d ' ') models (first run, no notify)"
+      exit 0
+    fi
+    # new = in cur, not in seen
+    new="$(comm -13 "$SEEN" <(printf '%s\n' "$cur"))"
+    hits=""
+    while IFS= read -r m; do
+      [ -z "$m" ] && continue
+      if is_frontier "$m"; then hits="$hits $m"; fi
+    done <<< "$new"
+    # update snapshot regardless (so we don't re-alert)
+    printf '%s\n' "$cur" > "$SEEN"
+    hits="$(echo "$hits" | xargs 2>/dev/null || true)"
+    [ -z "$hits" ] && { echo "ollama-watch: no new frontier models"; exit 0; }
+    local_msg="New frontier model(s) on ollama: $hits — https://ollama.com/library"
+    if [ "$dry" -eq 1 ]; then
+      echo "[dry-run] would notify JS: $local_msg"
+    elif [ -x "$BOTLINE" ]; then
+      "$BOTLINE" send --from ollama-watch "$local_msg" && echo "notified JS via botline: $hits"
+    else
+      imsg send --to "${JS_NUMBER:-+17049185655}" --text "[ollama-watch] $local_msg" && echo "notified JS via imsg: $hits"
+    fi ;;
+  *) echo "usage: ollama-watch check [--dry-run] | list"; exit 1 ;;
+esac

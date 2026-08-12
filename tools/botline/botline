@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# botline — a generic two-way text bridge: ANY local bot can text Jonathan, and his replies
+# route back to the bot that messaged him. Minimal setup for a bot: call `botline send` and
+# `botline recv`. Built entirely on `imsg` (steipete/openclaw) — no GhOST dependency, portable.
+#
+#   botline send --from <bot> "text"     # texts JS's phone as "[bot] text"; marks <bot> as last-to-message
+#   botline dispatch                      # route JS's new replies into each bot's inbox (run on a timer)
+#   botline recv --as <bot> [--peek]      # print (and clear) messages waiting for <bot>
+#   botline register --name <bot>         # create a bot's inbox
+#   botline list                          # registered bots + pending counts + who JS is replying to
+#
+# Reply routing: JS's reply beginning "@<bot> ..." goes to that bot; otherwise it goes to the
+# LAST bot that messaged him (reply-to-last). Config (chat id / number) lives in $BOTLINE_HOME/config,
+# NOT hardcoded here — point it at any recipient/thread.
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+
+BOTLINE_HOME="${BOTLINE_HOME:-$HOME/.botline}"
+mkdir -p "$BOTLINE_HOME/inbox"
+CONF="$BOTLINE_HOME/config"
+if [ ! -f "$CONF" ]; then
+  cat > "$CONF" <<CFG
+# botline config — the recipient (Jonathan's phone via the Google Voice thread)
+JS_NUMBER="+17049185655"
+JS_CHAT_ID="1903"
+CFG
+fi
+# shellcheck disable=SC1090
+. "$CONF"
+
+die(){ echo "botline: $*" >&2; exit 1; }
+command -v imsg >/dev/null || die "imsg not found (brew install steipete/tap/imsg)"
+
+cmd_send(){
+  local from="" ; [ "${1:-}" = "--from" ] && { from="$2"; shift 2; }
+  [ -n "$from" ] || die "usage: botline send --from <bot> \"text\""
+  local text="$*"; [ -n "$text" ] || die "empty message"
+  imsg send --to "$JS_NUMBER" --text "[$from] $text" || die "imsg send failed"
+  echo "$from" > "$BOTLINE_HOME/last_bot"
+  mkdir -p "$BOTLINE_HOME/inbox/$from"
+  echo "sent to JS as [$from]"
+}
+
+cmd_dispatch(){
+  local wm_iso wm_id
+  wm_iso="$(cat "$BOTLINE_HOME/watermark_iso" 2>/dev/null || true)"
+  wm_id="$(cat "$BOTLINE_HOME/watermark_id" 2>/dev/null || echo 0)"
+  if [ -z "$wm_iso" ]; then
+    # first run: seed to now so the whole existing thread isn't replayed as "new bot replies"
+    wm_iso="$(python3 -c 'import datetime;print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
+    echo "$wm_iso" > "$BOTLINE_HOME/watermark_iso"; echo 0 > "$BOTLINE_HOME/watermark_id"
+    echo "dispatch: seeded watermark to now (first run) — future replies will route"; return 0
+  fi
+  # --start (no arbitrary limit → no silent drop); id>watermark dedups the boundary overlap
+  local last_bot; last_bot="$(cat "$BOTLINE_HOME/last_bot" 2>/dev/null || echo unrouted)"
+  imsg history --chat-id "$JS_CHAT_ID" --start "$wm_iso" --json 2>/dev/null | \
+  BOTLINE_HOME="$BOTLINE_HOME" LAST_BOT="$last_bot" WM_ID="$wm_id" python3 -c '
+import sys, os, json, re
+home=os.environ["BOTLINE_HOME"]; last=os.environ["LAST_BOT"]; wm_id=int(os.environ["WM_ID"])
+routed=0; max_id=wm_id; max_iso=None
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    try: m=json.loads(line)
+    except Exception: continue
+    if m.get("is_from_me"): continue          # JS inbound only
+    mid=int(m.get("id",0))
+    if mid<=wm_id: continue                     # already processed
+    text=(m.get("text") or "").strip()
+    if not text: continue
+    mo=re.match(r"^@(\S+)\s+(.*)$", text, re.S)
+    if mo: target, body = mo.group(1), mo.group(2)
+    else:  target, body = last, text
+    d=os.path.join(home,"inbox",target); os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, f"{mid}.msg"),"w").write(body+"\n")
+    routed+=1
+    if mid>max_id: max_id=mid; max_iso=m.get("created_at")
+if max_iso:
+    open(os.path.join(home,"watermark_id"),"w").write(str(max_id))
+    open(os.path.join(home,"watermark_iso"),"w").write(max_iso)
+print(f"dispatch: routed {routed} reply(ies)")
+'
+}
+
+cmd_recv(){
+  local as="" peek=0
+  while [ $# -gt 0 ]; do case "$1" in --as) as="$2"; shift 2;; --peek) peek=1; shift;; *) shift;; esac; done
+  [ -n "$as" ] || die "usage: botline recv --as <bot> [--peek]"
+  local d="$BOTLINE_HOME/inbox/$as"
+  [ -d "$d" ] || { exit 0; }
+  local any=0
+  for f in $(ls "$d"/*.msg 2>/dev/null | sort -t/ -k99 -n); do
+    cat "$f"; any=1; [ "$peek" -eq 0 ] && rm -f "$f"
+  done
+  [ "$any" -eq 0 ] && exit 0
+}
+
+cmd_list(){
+  echo "recipient: ${JS_NUMBER} (chat ${JS_CHAT_ID})"
+  echo "last bot to message JS: $(cat "$BOTLINE_HOME/last_bot" 2>/dev/null || echo none)"
+  for d in "$BOTLINE_HOME"/inbox/*/; do
+    [ -d "$d" ] || continue
+    echo "  $(basename "$d"): $(ls "$d"/*.msg 2>/dev/null | wc -l | tr -d ' ') pending"
+  done
+}
+
+case "${1:-}" in
+  send) shift; cmd_send "$@" ;;
+  dispatch) cmd_dispatch ;;
+  recv) shift; cmd_recv "$@" ;;
+  register) [ "${2:-}" = "--name" ] && mkdir -p "$BOTLINE_HOME/inbox/$3" && echo "registered $3" || die "usage: botline register --name <bot>" ;;
+  list) cmd_list ;;
+  *) echo "usage: botline send|dispatch|recv|register|list (see header)"; exit 1 ;;
+esac

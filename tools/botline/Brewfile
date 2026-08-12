@@ -1,0 +1,2 @@
+tap "steipete/tap"
+brew "steipete/tap/imsg"  # send + read iMessage/SMS from the terminal (the whole transport)

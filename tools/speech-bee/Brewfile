@@ -1,0 +1,3 @@
+brew "whisper-cpp"  # whisper-cli STT backend
+brew "ffmpeg"       # audio → 16kHz wav for whisper
+# TTS uses macOS built-in `say` (AVSpeechSynthesizer) — no install

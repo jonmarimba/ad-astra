@@ -1,0 +1,4 @@
+# pdf-sidecars dependencies (marker-pdf is a uv tool, installed by install.sh, not brew)
+brew "ocrmypdf"   # --force-ocr for image-only/scanned pages
+brew "tesseract"  # OCR engine ocrmypdf drives
+brew "poppler"    # provides pdftotext (-layout)

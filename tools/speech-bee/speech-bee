@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# speech-bee — a swappable STT/TTS "bee": audio in → text out, text in → audio out.
+# Same stdin/stdout contract regardless of engine, so the backend can be Apple, whisper, or
+# anything else later. For kicker2's voice side-channel and for transcribing recorded calls.
+#
+# Engines now: STT = whisper.cpp (whisper-cli); TTS = macOS `say` (AVSpeechSynthesizer).
+# Next: an Apple SpeechAnalyzer/SpeechTranscriber Swift backend (macOS 26+, on-device, beats
+# Whisper Large v3 Turbo) — drop it in behind the same `stt`/`tts` verbs.
+#
+# Usage:
+#   speech-bee stt <audiofile>            # transcription → stdout
+#   speech-bee tts "text"  [--out f.aiff] # or:  echo text | speech-bee tts -
+#   speech-bee bootstrap [model]          # fetch a whisper model (default base.en)
+#   SPEECH_BEE_MODEL=/path/ggml-x.bin  SPEECH_BEE_STT=whisper  SPEECH_BEE_TTS=say
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+
+MODEL="${SPEECH_BEE_MODEL:-$HOME/.cache/whisper/ggml-base.en.bin}"
+STT_ENGINE="${SPEECH_BEE_STT:-whisper}"
+TTS_ENGINE="${SPEECH_BEE_TTS:-say}"
+
+die(){ echo "speech-bee: $*" >&2; exit 1; }
+
+stt_whisper(){
+  local src="$1"
+  command -v whisper-cli >/dev/null || die "whisper-cli not found (brew install whisper-cpp)"
+  [ -f "$MODEL" ] || die "no model at $MODEL — run: speech-bee bootstrap"
+  local wav; wav="$(mktemp).wav"
+  ffmpeg -nostdin -loglevel error -y -i "$src" -ar 16000 -ac 1 -c:a pcm_s16le "$wav" || die "ffmpeg convert failed"
+  local base; base="$(mktemp)"
+  whisper-cli -m "$MODEL" -f "$wav" -nt -otxt -of "$base" >/dev/null 2>&1 || die "whisper-cli failed"
+  cat "$base.txt"; rm -f "$wav" "$base.txt"
+}
+
+tts_say(){
+  local text="$1" out="${2:-}"
+  [ "$text" = "-" ] && text="$(cat)"
+  if [ -n "$out" ]; then say -o "$out" "$text"; echo "wrote $out"; else say "$text"; fi
+}
+
+case "${1:-}" in
+  stt)
+    [ $# -ge 2 ] || die "usage: speech-bee stt <audiofile>"
+    case "$STT_ENGINE" in whisper) stt_whisper "$2" ;; apple) die "apple STT backend not built yet (Swift SpeechAnalyzer — planned)";; *) die "unknown STT engine $STT_ENGINE";; esac ;;
+  tts)
+    shift; text="${1:-}"; out=""
+    [ "${2:-}" = "--out" ] && out="${3:-}"
+    case "$TTS_ENGINE" in say) tts_say "$text" "$out" ;; apple) die "use say (already AVSpeechSynthesizer)";; *) die "unknown TTS engine";; esac ;;
+  bootstrap)
+    m="${2:-base.en}"; mkdir -p "$(dirname "$MODEL")"
+    url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${m}.bin"
+    echo "fetching ggml-${m}.bin → $HOME/.cache/whisper/"
+    curl -L --fail -o "$HOME/.cache/whisper/ggml-${m}.bin" "$url" && echo "done: $HOME/.cache/whisper/ggml-${m}.bin" ;;
+  *) echo "usage: speech-bee stt <audio> | tts <text>|- [--out f] | bootstrap [model]"; exit 1 ;;
+esac

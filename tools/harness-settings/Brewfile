@@ -1,0 +1,3 @@
+# harness-settings dependencies
+brew "jq"          # JSON edit (Claude + Qwen settings)
+brew "python@3.12"  # for tomlkit (Codex TOML edit)
