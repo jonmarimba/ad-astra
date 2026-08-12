@@ -49,7 +49,7 @@ cmd_dispatch(){
     # first run: seed to now so the whole existing thread isn't replayed as "new bot replies"
     wm_iso="$(python3 -c 'import datetime;print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
     echo "$wm_iso" > "$BOTLINE_HOME/watermark_iso"; echo 0 > "$BOTLINE_HOME/watermark_id"
-    echo "dispatch: seeded watermark to now (first run) — future replies will route"; return 0
+    echo "dispatch: seeded watermark to now (first run) — future replies will route" >&2; return 0
   fi
   # --start (no arbitrary limit → no silent drop); id>watermark dedups the boundary overlap
   local last_bot; last_bot="$(cat "$BOTLINE_HOME/last_bot" 2>/dev/null || echo unrouted)"
@@ -78,7 +78,8 @@ for line in sys.stdin:
 if max_iso:
     open(os.path.join(home,"watermark_id"),"w").write(str(max_id))
     open(os.path.join(home,"watermark_iso"),"w").write(max_iso)
-print(f"dispatch: routed {routed} reply(ies)")
+if routed:  # stay SILENT on stdout when nothing routed (a schd command-job pokes on ANY stdout)
+    sys.stderr.write(f"dispatch: routed {routed} reply(ies)\n")
 '
 }
 
