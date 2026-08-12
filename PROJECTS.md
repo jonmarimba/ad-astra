@@ -21,7 +21,7 @@ Each tool that lands in @astra gets: (1) a **Brewfile** + **install script** for
 ## P3 — larger / open-ended
 - [~] **Design toolchain** — STARTED: `design-toolchain/` folder + plan on branch `design-toolchain` (Figma Dev Mode MCP + token pipeline + print-vs-UI paths; postcard→code data-merge). Needs your scope call (Figma-first vs code-first; which app first).  ~~orig:~~ — Figma + code CLIs, for both print (HOA postcard) and UI (HOA / Maharam / kicker apps). Start a folder + branch in @astra. (Feeds off the Apple design skill.)
 - [ ] **Hooks technical spec** — write the agent-hooks research (Claude/Qwen/Codex shared shell-hook convention; OpenCode/Pi TS-plugin family) as a technical spec/proposal in the kicker planning repo.
-- [ ] **Humanizer on HOA site branch** — install the humanizer skill, run it on a **branch** of the HOA/POA site, report what it does + own opinion.
+- [~] **Humanizer** — INSTALLED (`~/.claude/skills/humanizer`, blader/humanizer, live via Skill tool). HOA repo = `js-hoa`; core content already voice-passed (tmp/core_N_AFTER). NOT auto-rewriting your Jake-reviewed legal files (your note said review-with-you). Ready to run on a branch you name.  ~~orig:~~ — install the humanizer skill, run it on a **branch** of the HOA/POA site, report what it does + own opinion.
 - [ ] **Consolidate STT/TTS notes** — re-synthesize all TTS/STT into one note, delete the rest (try-items already lifted into tech-to-try).
 
 ## Done tonight
