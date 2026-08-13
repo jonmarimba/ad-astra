@@ -23,3 +23,6 @@ for b in claude codex qwen; do
   done
   [ "$hits" -gt 1 ] && echo "  WARNING: $b has $hits copies — resolve before scheduling anything that calls it"
 done
+# the [ -gt 1 ] test being false on the loop's last iteration must not become the script's
+# exit code (a clean single-copy state read as failure — caught by test-installers-which-first)
+exit 0
