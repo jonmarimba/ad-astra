@@ -50,6 +50,11 @@ uc_brew(){ # usage: uc_brew <formula> "<why it's shared / what may break>"
   fi
 }
 
+uc_keep(){ # a dep we NEVER auto-remove even with --deps (foundational runtimes, or the user's own
+           # primary tools). usage: uc_keep <name> "<what it is / why kept>"
+  echo "  NOT removing '$1' — $2. Left in place; remove by hand only if you are certain."
+}
+
 uc_uv_tool(){ # usage: uc_uv_tool <tool> "<why it's shared>"
   if [ "$UNINSTALL_DEPS" = 1 ]; then
     uc_warn "removing shared uv tool '$1'" "$2" "Other tools on this machine may rely on it."
