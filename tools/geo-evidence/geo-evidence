@@ -26,16 +26,37 @@ EXIFTOOL="${EXIFTOOL_BIN:-exiftool}"
 
 if [ ! -f "$CONF" ]; then
 cat > "$CONF" <<'CFG'
-# properties: NAME<TAB>LATITUDE<TAB>LONGITUDE  (decimal degrees). Edit for your case.
-Speedway	35.409458	-80.646172
-Tyndall	35.40911	-80.64578
+# geo-evidence config. REPLACE the examples below with your own properties, then rerun.
+# properties: NAME<TAB>LATITUDE<TAB>LONGITUDE  (decimal degrees, real coordinates).
+# Add one line per site of interest; a shot is classified to the NEAREST one.
+ExampleSite	0.0	0.0
+ExampleNeighbor	0.0	0.0
 # a shot farther than MAX_M from EVERY property is classified "elsewhere" and skipped.
-# 402m ~= 1/4 mile: a generous net that catches drainage sites away from the house (outfall,
-# ROW, woods). Your house is still excluded because nearest-property sorts it to Tyndall, not
-# because it's outside the circle — so the wide net is safe.
+# 402m ~= 1/4 mile: a generous net that still excludes a nearby house, because nearest-property
+# (not a tight circle) does the separating — so the wide net is safe even for adjacent lots.
 MAX_M=402
 CFG
+  echo "geo-evidence: wrote a template config at $CONF — edit in your real properties (lat/long) and rerun." >&2
+  exit 3
 fi
+
+# refuse to run on the unedited template / placeholder (0,0) coordinates — a bio-shaped
+# no-silent-loss guard: silently classifying against 0,0 would send everything to "elsewhere"
+# and quietly find nothing, looking like "no media" when it's really "not configured".
+real_props="$(python3 -c "
+import sys
+n=0
+for line in open('$CONF'):
+    line=line.rstrip('\n')
+    if not line or line.startswith('#'): continue
+    p=line.split('\t')
+    if len(p)==3:
+        try: lat,lon=float(p[1]),float(p[2])
+        except: continue
+        if (lat,lon)!=(0.0,0.0) and not p[0].startswith('Example'): n+=1
+print(n)
+" 2>/dev/null)"
+[ "${real_props:-0}" -ge 1 ] || die "no real properties in $CONF — replace the Example placeholders with your own lat/long"
 
 die(){ echo "geo-evidence: $*" >&2; exit 1; }
 command -v "$OSXPHOTOS" >/dev/null || die "osxphotos not found (run install.sh)"

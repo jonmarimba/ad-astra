@@ -63,6 +63,14 @@ case "$(line NOGPS.jpeg)" in *NO-GPS*) pass "null-GPS shot flagged NO-GPS (integ
 first="$(printf '%s\n' "$out" | grep -E 'AT_SPEEDWAY|AT_TYNDALL|SPD_EDGE|TYN_DRIFT|FARAWAY|NOGPS' | head -1)"
 case "$first" in *FARAWAY*) pass "scan sorted chronologically (12:00 shot first)";; *) fail "scan not time-sorted (got: $first)";; esac
 
+# ---- config guard: the shipped template / placeholder coords must REFUSE to run ----
+# (proves the tool ships generic, not with someone's real house baked in)
+UNCONF="$SB/unconf-home"; mkdir -p "$UNCONF"
+red "unconfigured template config (Example/0,0) refuses to run" env GEO_EVIDENCE_HOME="$UNCONF" "$GE" scan --since 2026-08-08 --until 2026-08-09
+# and it auto-wrote a template the user can edit
+assert_file "$UNCONF/config" "template config written for the user to edit"
+assert_contains "$UNCONF/config" "ExampleSite" "shipped config is a placeholder, not real coordinates"
+
 # ---- RED controls ----
 red "missing --since must fail" "$GE" scan --until 2026-08-09
 red "pull without --property must fail" "$GE" pull --since 2026-08-08 --until 2026-08-09 --out "$SB/o"
