@@ -48,6 +48,24 @@ h2="$(codesign -dvvv "$APP" 2>&1 | grep '^CDHash=')"
 assert_eq "$h1" "$h2" "script edit left the app's CDHash untouched (FDA grant survives)"
 codesign -v "$APP" 2>/dev/null && pass "signature still verifies after script edit" || fail "script edit broke the app signature"
 
+# ---- deprecated-runtime warning: the one thing that ever forces re-touching an app ----
+cat > "$SB/py2job.sh" <<'EOF'
+#!/usr/bin/python
+print "old"
+EOF
+chmod +x "$SB/py2job.sh"
+warn="$("$WIA" "$SB/py2job.sh" --log "$SB/logs/p.log" --name Py2Wrapper --outdir "$SB/out" 2>&1 >/dev/null)"
+case "$warn" in *"deprecated"*|*"will remove"*) pass "warns when the wrapped script runs on a doomed system runtime";; *) fail "no deprecation warning for a /usr/bin/python shebang";; esac
+# but it still BUILDS (warning, not a block — the script is the user's call)
+assert_dir "$SB/out/Py2Wrapper.app" "still builds despite the warning (warn, don't block)"
+cat > "$SB/hbjob.sh" <<'EOF'
+#!/opt/homebrew/bin/python3
+print("fine")
+EOF
+chmod +x "$SB/hbjob.sh"
+warn="$("$WIA" "$SB/hbjob.sh" --log "$SB/logs/h.log" --name HbWrapper --outdir "$SB/out" 2>&1 >/dev/null)"
+case "$warn" in *deprecated*) fail "false deprecation warning for a Homebrew interpreter";; *) pass "no warning when the shebang is a Homebrew interpreter";; esac
+
 # ---- RED controls ----
 red "existing app must be refused, not clobbered (it may hold a grant)" "$WIA" "$SB/job.sh" --log "$SB/logs/job.log" --name TestJobWrapper --outdir "$SB/out"
 red "missing --log must fail (stdout has nowhere to go)" "$WIA" "$SB/job.sh" --outdir "$SB/out"

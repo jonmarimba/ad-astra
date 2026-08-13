@@ -35,6 +35,22 @@ esac; done
 [ -f "$SCRIPT" ] || { echo "wrap-in-app: no such script: $SCRIPT" >&2; exit 1; }
 [ -x "$SCRIPT" ] || { echo "wrap-in-app: $SCRIPT is not executable (chmod +x it)" >&2; exit 1; }
 
+# The ONE edit that ever forces re-touching a wrapper app (and re-granting FDA) is macOS
+# removing the runtime the wrapped script depends on: /usr/bin/{python,python2,perl,ruby}
+# have carried the "will be removed in a future version of macOS" deprecation since Catalina
+# (python2 is already gone as of macOS 26). Warn if the script's shebang leans on one — pin
+# a Homebrew interpreter (/opt/homebrew/bin/…) instead so Apple can't orphan the app.
+shebang="$(head -1 "$SCRIPT")"
+case "$shebang" in
+  "#!/usr/bin/python"*|"#!/usr/bin/perl"*|"#!/usr/bin/ruby"*)
+    echo "wrap-in-app: WARNING — $SCRIPT runs on a macOS-bundled runtime ($shebang) that Apple has" >&2
+    echo "  deprecated and will remove; the app will break on that macOS and need a re-grant. Point the" >&2
+    echo "  shebang at a Homebrew interpreter (e.g. #!/opt/homebrew/bin/python3) before it bites." >&2 ;;
+  "#!/usr/bin/env "*)
+    echo "wrap-in-app: note — $SCRIPT uses '#!/usr/bin/env' (first-on-PATH). launchd/Automator PATH is" >&2
+    echo "  minimal, so this may resolve to a deprecated /usr/bin runtime. Prefer an absolute Homebrew path." >&2 ;;
+esac
+
 SCRIPT="$(cd "$(dirname "$SCRIPT")" && pwd)/$(basename "$SCRIPT")"   # absolute — the app runs from /
 mkdir -p "$OUTDIR" "$(dirname "$LOG")"
 LOG="$(cd "$(dirname "$LOG")" && pwd)/$(basename "$LOG")"
