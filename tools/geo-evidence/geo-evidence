@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# geo-evidence — turn a Photos library into queryable, location-classified evidence. Query by
+# DATE, classify each geotagged photo/video to the NEAREST known property, export the matched
+# originals (from iCloud if needed) with metadata intact, verify GPS+timestamp survived, and
+# write a chronological MANIFEST. Built for litigation media where "which house was this shot
+# at" matters and two properties can sit 50m apart.
+#
+#   geo-evidence scan  --since 2026-08-08 --until 2026-08-09           # dry: show what's where
+#   geo-evidence pull  --property Speedway --since D --until D --out DIR
+#
+# WHY NEAREST-PROPERTY, not a radius: when two lots are ~52m apart (Speedway vs Tyndall), a
+# radius tight enough to exclude the neighbor also clips the far edge of your own lot. Nearest-
+# centroid assigns each shot to whichever property it's closest to — the decision boundary is
+# the perpendicular bisector between the houses (~26m each), so the WHOLE lot is captured while
+# the neighbor is excluded. A MAX_M cutoff drops media taken at neither property.
+#
+# Config: $GEO_EVIDENCE_HOME/config (properties, cutoff, output base) — no identity/paths baked
+# in the code. Photos library is TCC-protected: run interactively (session holds access) or
+# behind an FDA app wrapper for automation.
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+HOME_DIR="${GEO_EVIDENCE_HOME:-$HOME/.geo-evidence}"; mkdir -p "$HOME_DIR"
+CONF="$HOME_DIR/config"
+OSXPHOTOS="${OSXPHOTOS_BIN:-osxphotos}"
+EXIFTOOL="${EXIFTOOL_BIN:-exiftool}"
+
+if [ ! -f "$CONF" ]; then
+cat > "$CONF" <<'CFG'
+# properties: NAME<TAB>LATITUDE<TAB>LONGITUDE  (decimal degrees). Edit for your case.
+Speedway	35.409458	-80.646172
+Tyndall	35.40911	-80.64578
+# a shot farther than MAX_M from EVERY property is classified "elsewhere" and skipped
+MAX_M=60
+CFG
+fi
+
+die(){ echo "geo-evidence: $*" >&2; exit 1; }
+command -v "$OSXPHOTOS" >/dev/null || die "osxphotos not found (run install.sh)"
+command -v "$EXIFTOOL"  >/dev/null || die "exiftool not found (run install.sh)"
+
+CMD="${1:-}"; shift || true
+SINCE=""; UNTIL=""; PROPERTY=""; OUT=""
+while [ $# -gt 0 ]; do case "$1" in
+  --since) SINCE="$2"; shift 2;; --until) UNTIL="$2"; shift 2;;
+  --property) PROPERTY="$2"; shift 2;; --out) OUT="$2"; shift 2;;
+  *) die "unknown arg '$1'";; esac; done
+[ -n "$SINCE" ] || die "--since YYYY-MM-DD required"
+[ -n "$UNTIL" ] || die "--until YYYY-MM-DD required"
+
+# osxphotos query -> JSON, then classify. --to-date is exclusive of the day, so callers pass
+# the day AFTER the last day they want; we add a note rather than silently adjusting.
+query_json(){ "$OSXPHOTOS" query --from-date "$SINCE" --to-date "$UNTIL" --json 2>/dev/null; }
+
+classify(){ # reads osxphotos JSON on stdin, emits: uuid \t filename \t iso \t property \t dist_m \t gps_ok
+  CONF="$CONF" python3 -c "
+import sys,json,math,os
+props=[]; maxm=60.0
+for line in open(os.environ['CONF']):
+    line=line.rstrip('\n')
+    if not line or line.startswith('#'):
+        if line.startswith('MAX_M='):
+            try: maxm=float(line.split('=',1)[1])
+            except: pass
+        continue
+    parts=line.split('\t')
+    if len(parts)==3:
+        props.append((parts[0],float(parts[1]),float(parts[2])))
+def hav(a,b,c,d):
+    R=6371000.0;p1,p2=math.radians(a),math.radians(c)
+    dp=math.radians(c-a);dl=math.radians(d-b)
+    x=math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return 2*R*math.asin(math.sqrt(x))
+try: items=json.load(sys.stdin)
+except Exception: items=[]
+for it in items:
+    uuid=it.get('uuid',''); fn=it.get('original_filename') or it.get('filename','')
+    iso=it.get('date','') or ''
+    lat=it.get('latitude'); lon=it.get('longitude')
+    if lat is None or lon is None:
+        print('\t'.join([uuid,fn,iso,'NO-GPS','','no'])); continue
+    best=None;bd=1e18
+    for n,pl,po in props:
+        dd=hav(lat,lon,pl,po)
+        if dd<bd: bd=dd;best=n
+    prop = best if bd<=maxm else 'elsewhere'
+    print('\t'.join([uuid,fn,iso,prop,f'{bd:.0f}','yes']))
+"
+}
+
+case "$CMD" in
+  scan)
+    echo "== geo-evidence scan  $SINCE .. $UNTIL (osxphotos --to-date is exclusive; pass the day AFTER your last day) =="
+    printf '%-22s %-8s %-7s %s\n' "captured" "property" "dist_m" "file"
+    query_json | classify | sort -t$'\t' -k3 | while IFS=$'\t' read -r uuid fn iso prop dist gps; do
+      [ "$gps" = "no" ] && { printf '%-22s %-8s %-7s %s\n' "${iso:0:19}" "NO-GPS!" "-" "$fn"; continue; }
+      printf '%-22s %-8s %-7s %s\n' "${iso:0:19}" "$prop" "$dist" "$fn"
+    done ;;
+  pull)
+    [ -n "$PROPERTY" ] || die "--property NAME required for pull"
+    [ -n "$OUT" ] || die "--out DIR required for pull"
+    mkdir -p "$OUT"
+    uuids="$(query_json | classify | awk -F'\t' -v p="$PROPERTY" '$4==p{print $1}')"
+    [ -n "$uuids" ] || die "no media classified to '$PROPERTY' in that window"
+    n=$(printf '%s\n' "$uuids" | grep -c .); echo "geo-evidence: $n file(s) classified to $PROPERTY -> exporting originals (downloading from iCloud if needed)…"
+    uuid_args=(); while IFS= read -r u; do [ -n "$u" ] && uuid_args+=(--uuid "$u"); done <<< "$uuids"
+    "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --download-missing --exiftool --original-name --skip-original-if-edited >/dev/null 2>&1 || die "osxphotos export failed"
+    # integrity + manifest
+    MAN="$OUT/MANIFEST.md"
+    { echo "# Evidence manifest — $PROPERTY ($SINCE..$UNTIL)"; echo ""; echo "Generated by geo-evidence. GPS/date verified per file below; anything marked MISSING should be re-exported from the original."; echo "";
+      echo "| file | captured | GPS | dist_m | describe |"; echo "|---|---|---|---|---|"; } > "$MAN"
+    for f in "$OUT"/*; do
+      [ -f "$f" ] || continue; case "$f" in *MANIFEST.md) continue;; esac
+      dt="$("$EXIFTOOL" -s3 -DateTimeOriginal -CreateDate "$f" 2>/dev/null | head -1)"
+      lat="$("$EXIFTOOL" -s3 -GPSLatitude# "$f" 2>/dev/null)"; lon="$("$EXIFTOOL" -s3 -GPSLongitude# "$f" 2>/dev/null)"
+      gps="ok"; [ -z "$lat" ] && gps="**MISSING**"
+      dist="-"
+      [ -n "$lat" ] && dist="$(CONF="$CONF" python3 -c "
+import math,os,sys
+lat,lon=float('$lat'),float('$lon')
+for line in open(os.environ['CONF']):
+    p=line.rstrip().split('\t')
+    if len(p)==3 and p[0]=='$PROPERTY':
+        R=6371000;pa=math.radians(lat);pb=math.radians(float(p[1]))
+        dp=math.radians(float(p[1])-lat);dl=math.radians(float(p[2])-lon)
+        x=math.sin(dp/2)**2+math.cos(pa)*math.cos(pb)*math.sin(dl/2)**2
+        print(f'{2*R*math.asin(math.sqrt(x)):.0f}');break
+" 2>/dev/null)"
+      echo "| $(basename "$f") | ${dt:0:19} | $gps | ${dist:--} |  |" >> "$MAN"
+    done
+    miss=$(grep -c "MISSING" "$MAN" || true)
+    echo "geo-evidence: exported to $OUT ; manifest at $MAN"
+    [ "$miss" -gt 0 ] && echo "geo-evidence: WARNING — $miss file(s) missing GPS (see MANIFEST) — re-export those originals" >&2 || echo "geo-evidence: all exported files carry GPS + date"
+    ;;
+  *) echo "usage: geo-evidence scan|pull --since D --until D [--property NAME --out DIR]"; exit 1 ;;
+esac

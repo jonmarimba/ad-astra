@@ -1,0 +1,2 @@
+# geo-evidence deps (osxphotos installed via uv in install.sh — it's a Python tool)
+brew "exiftool"
