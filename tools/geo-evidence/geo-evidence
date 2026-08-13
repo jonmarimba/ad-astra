@@ -276,7 +276,9 @@ if os.path.exists(items_tsv):
             for cand in ondisk[stem]:
                 if (os.path.splitext(cand)[1].lower() in VID)==isvid: pv=cand; break
         note = ('' if gps=='yes' else ('time-inferred' if gps=='time' else 'no GPS'))
-        dt = exif_dt(os.path.join(src,pv)) if pv else norm(iso)
+        # trust the scan's capture time (items.tsv), NOT the preview file's exif — poster frames
+        # and converted derivatives lose the date, which was showing videos as 0000-00-00.
+        dt = norm(iso) or (exif_dt(os.path.join(src,pv)) if pv else '')
         files.append((dt or '0000:00:00 00:00:00', fn, isvid, note, uuid, pv))
 else:
     for f in sorted(os.listdir(src)):
