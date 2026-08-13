@@ -102,15 +102,16 @@ except Exception: items=[]
 for it in items:
     uuid=it.get('uuid',''); fn=it.get('original_filename') or it.get('filename','')
     iso=it.get('date','') or ''
+    kind='video' if it.get('ismovie') else 'photo'
     lat=it.get('latitude'); lon=it.get('longitude')
     if lat is None or lon is None:
-        print('\t'.join([uuid,fn,iso,'NO-GPS','','no'])); continue
+        print('\t'.join([uuid,fn,iso,'NO-GPS','','no',kind])); continue
     best=None;bd=1e18
     for n,pl,po in props:
         dd=hav(lat,lon,pl,po)
         if dd<bd: bd=dd;best=n
     prop = best if bd<=maxm else 'elsewhere'
-    print('\t'.join([uuid,fn,iso,prop,f'{bd:.0f}','yes']))
+    print('\t'.join([uuid,fn,iso,prop,f'{bd:.0f}','yes',kind]))
 "
 }
 
@@ -118,11 +119,18 @@ case "$CMD" in
   scan)
     need_query_setup
     echo "== geo-evidence scan  $SINCE .. $UNTIL (osxphotos --to-date is exclusive; pass the day AFTER your last day) =="
-    printf '%-22s %-8s %-7s %s\n' "captured" "property" "dist_m" "file"
-    query_json | classify | sort -t$'\t' -k3 | while IFS=$'\t' read -r uuid fn iso prop dist gps; do
-      [ "$gps" = "no" ] && { printf '%-22s %-8s %-7s %s\n' "${iso:0:19}" "NO-GPS!" "-" "$fn"; continue; }
-      printf '%-22s %-8s %-7s %s\n' "${iso:0:19}" "$prop" "$dist" "$fn"
-    done ;;
+    tmp="$(mktemp)"; query_json | classify > "$tmp"
+    printf '%-22s %-9s %-6s %-7s %s\n' "captured" "property" "kind" "dist_m" "file"
+    sort -t$'\t' -k3 "$tmp" | while IFS=$'\t' read -r uuid fn iso prop dist gps kind; do
+      [ "$gps" = "no" ] && { printf '%-22s %-9s %-6s %-7s %s\n' "${iso:0:19}" "NO-GPS!" "$kind" "-" "$fn"; continue; }
+      printf '%-22s %-9s %-6s %-7s %s\n' "${iso:0:19}" "$prop" "$kind" "$dist" "$fn"
+    done
+    echo ""
+    echo "-- counts by property --"
+    awk -F'\t' '{c[$4"\t"$7]++} END{for(k in c) print c[k]"\t"k}' "$tmp" | sort | while IFS=$'\t' read -r n prop kind; do
+      printf '  %-9s %-6s %s\n' "$prop" "$kind" "$n"
+    done
+    rm -f "$tmp" ;;
   pull)
     need_query_setup
     [ -n "$PROPERTY" ] || die "--property NAME required for pull"
@@ -136,10 +144,15 @@ case "$CMD" in
     # big iCloud original downloads — a fast look. Full mode: --download-missing pulls the
     # matched originals from iCloud (--use-photokit = faster PhotoKit path).
     if [ "$PREVIEW" -eq 1 ]; then
-      echo "geo-evidence: --preview (on-disk versions only, skipping iCloud downloads)…"
-      "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --exiftool --original-name --skip-original-if-edited >/dev/null 2>&1 || die "osxphotos export failed"
+      echo "geo-evidence: --preview (on-disk versions only, skipping iCloud downloads; images -> JPEG so a browser can show them)…"
+      # preview: convert HEIC->JPEG so a browser can render it. NOTE: --convert-to-jpeg and
+      # --exiftool together silently export nothing (osxphotos bug), so preview omits --exiftool —
+      # it's for looking, not evidence; the gallery reads what metadata survived the conversion.
+      "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --convert-to-jpeg --skip-original-if-edited 2>/dev/null || die "osxphotos preview export failed"
     else
-      "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --download-missing --use-photokit --exiftool --original-name --skip-original-if-edited >/dev/null 2>&1 || die "osxphotos export failed"
+      # full/evidence: untouched originals, --exiftool writes GPS+date, --download-missing pulls
+      # ONLY these from iCloud (--use-photokit = faster path). No --convert (keep originals).
+      "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --download-missing --use-photokit --exiftool --skip-original-if-edited 2>/dev/null || die "osxphotos export failed"
     fi
     # integrity + manifest
     MAN="$OUT/MANIFEST.md"
