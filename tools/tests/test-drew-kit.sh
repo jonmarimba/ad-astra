@@ -39,6 +39,36 @@ assert_not_contains "$REPO/CLAUDE.md" "drew-kit imports" "managed block removed"
 assert_contains "$REPO/CLAUDE.md" "Pre-existing prose that must survive." "pre-existing content still intact after uninstall"
 assert_no_file "$REPO/.drew-kit/components/AtlassianJira.md" "uninstall removed the copied-in components (.drew-kit gone)"
 
+# ---- method guards ----
+red "unknown --method must fail" "$INSTALL" "$REPO" --method carrier-pigeon
+red "submodule without --src must fail" "$INSTALL" "$REPO" --method submodule
+red "subtree without --src must fail" "$INSTALL" "$REPO" --method subtree
+
+# ---- subtree method against a REAL local source repo (proves the method, not just the guard) ----
+need git "install Xcode command-line tools: xcode-select --install"
+  SRC="$SB/src"; mkdir -p "$SRC/agents-and-prompts/components"
+  printf '# Swift style from source\n' > "$SRC/agents-and-prompts/components/SwiftCodeStyle.md"
+  git -C "$SRC" init -q -b main
+  git -C "$SRC" -c user.email=t@t -c user.name=t add -A
+  git -C "$SRC" -c user.email=t@t -c user.name=t commit -qm init
+
+  TREPO="$SB/trepo"; mkdir -p "$TREPO"; git -C "$TREPO" init -q -b main
+  printf '# host\nkeep me\n' > "$TREPO/CLAUDE.md"
+  git -C "$TREPO" -c user.email=t@t -c user.name=t add -A
+  git -C "$TREPO" -c user.email=t@t -c user.name=t commit -qm init
+
+  assert_rc 0 "subtree install succeeds against a local source repo" \
+    env GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t \
+    "$INSTALL" "$TREPO" --method subtree --src "$SRC" --branch main
+  assert_contains "$TREPO/CLAUDE.md" "@.drew-kit-src/agents-and-prompts/components/SwiftCodeStyle.md" "subtree import points into the subtree at the subpath"
+  assert_not_contains "$TREPO/CLAUDE.md" "/Users/" "subtree import has no absolute machine path"
+  assert_file "$TREPO/.drew-kit-src/agents-and-prompts/components/SwiftCodeStyle.md" "subtree pulled the source files into the repo"
+  assert_contains "$TREPO/CLAUDE.md" "keep me" "subtree install left pre-existing prose intact"
+
+  assert_rc 0 "uninstall (subtree) succeeds" "$UNINSTALL" "$TREPO"
+  assert_no_file "$TREPO/.drew-kit-src/agents-and-prompts/components/SwiftCodeStyle.md" "uninstall removed the subtree dir"
+  assert_not_contains "$TREPO/CLAUDE.md" "drew-kit imports" "uninstall removed the block (subtree)"
+
 # ---- RED controls ----
 red "unknown set must fail" "$INSTALL" "$REPO" --set cobol
 printf '%s\n' "# >>> drew-kit imports (managed by drew-kit/install-into-repo.sh) >>>" > "$REPO/CLAUDE.md"  # begin marker, no end marker
