@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# frame-review — turn video(s) into a timestamped HTML contact sheet for fast visual review
+# (e.g. storm-drainage footage cross-referenced against a punchlist). Frames extracted at a
+# chosen rate, each thumbnail captioned with its offset and linked to the full-size frame.
+#
+#   frame-review <video> [more videos...] [--fps 0.5] [--outdir DIR]
+#
+# Output: DIR/index.html + DIR/<video-stem>/frame_NNNN.jpg. Default 1 frame every 2 seconds
+# (--fps 0.5) — dense enough to catch water-flow changes, sparse enough to scan by eye.
+# Portable: no hardcoded paths/identity; ffmpeg is the only dependency (Brewfile).
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+FFMPEG="${FFMPEG_BIN:-ffmpeg}"
+
+FPS="0.5"; OUTDIR="frame-review-out"; VIDEOS=()
+while [ $# -gt 0 ]; do case "$1" in
+  --fps)    [ -n "${2:-}" ] || { echo "frame-review: --fps needs a value" >&2; exit 64; }; FPS="$2"; shift 2 ;;
+  --outdir) [ -n "${2:-}" ] || { echo "frame-review: --outdir needs a value" >&2; exit 64; }; OUTDIR="$2"; shift 2 ;;
+  --*) echo "frame-review: unknown flag '$1'" >&2; exit 64 ;;
+  *) VIDEOS+=("$1"); shift ;;
+esac; done
+[ "${#VIDEOS[@]}" -gt 0 ] || { echo "usage: frame-review <video> [more...] [--fps 0.5] [--outdir DIR]" >&2; exit 64; }
+command -v "$FFMPEG" >/dev/null || { echo "frame-review: need ffmpeg (brew install ffmpeg)" >&2; exit 1; }
+
+mkdir -p "$OUTDIR"
+HTML="$OUTDIR/index.html"
+{
+  echo '<!doctype html><meta charset="utf-8"><title>frame review</title>'
+  echo '<style>body{font-family:sans-serif;background:#111;color:#ddd} h2{margin:24px 0 8px}'
+  echo '.grid{display:flex;flex-wrap:wrap;gap:6px} figure{margin:0;text-align:center}'
+  echo 'img{width:240px;display:block} figcaption{font-size:12px;padding:2px}</style>'
+} > "$HTML"
+
+total=0
+for V in "${VIDEOS[@]}"; do
+  [ -f "$V" ] || { echo "frame-review: no such video: $V" >&2; exit 1; }
+  stem="$(basename "$V")"; stem="${stem%.*}"
+  fdir="$OUTDIR/$stem"; mkdir -p "$fdir"
+  if ! "$FFMPEG" -nostdin -loglevel error -y -i "$V" -vf "fps=$FPS" "$fdir/frame_%04d.jpg"; then
+    echo "frame-review: ffmpeg failed on $V" >&2; exit 1
+  fi
+  n=0
+  echo "<h2>$stem (1 frame / $(python3 -c "print(round(1/$FPS,1))")s)</h2><div class=grid>" >> "$HTML"
+  for f in "$fdir"/frame_*.jpg; do
+    [ -f "$f" ] || break
+    idx="${f##*frame_}"; idx="${idx%.jpg}"; idx=$((10#$idx))   # 10#: "0001" is not octal, not a python literal
+    ts="$(python3 -c "s=int(($idx-1)/$FPS); print(f'{s//60:02d}:{s%60:02d}')")"
+    rel="$stem/$(basename "$f")"
+    echo "<figure><a href='$rel'><img src='$rel' loading=lazy></a><figcaption>$ts</figcaption></figure>" >> "$HTML"
+    n=$((n+1))
+  done
+  echo "</div>" >> "$HTML"
+  [ "$n" -gt 0 ] || { echo "frame-review: extracted ZERO frames from $V — is it a video?" >&2; exit 1; }
+  echo "$stem: $n frames" >&2
+  total=$((total+n))
+done
+echo "wrote $HTML ($total frames from ${#VIDEOS[@]} video(s))"
