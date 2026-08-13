@@ -28,11 +28,12 @@ die(){ echo "geo-evidence: $*" >&2; exit 1; }
 command -v "$EXIFTOOL" >/dev/null || die "exiftool not found (run install.sh)"
 
 CMD="${1:-}"; shift || true
-SINCE=""; UNTIL=""; PROPERTY=""; OUT=""; PREVIEW=0; POS=""
+SINCE=""; UNTIL=""; PROPERTY=""; OUT=""; PREVIEW=0; POS=""; SELFILE=""
 while [ $# -gt 0 ]; do case "$1" in
   --since) SINCE="$2"; shift 2;; --until) UNTIL="$2"; shift 2;;
   --property) PROPERTY="$2"; shift 2;; --out) OUT="$2"; shift 2;;
   --preview) PREVIEW=1; shift;;   # export only what's already on disk (optimized versions); skip iCloud downloads
+  --select) SELFILE="$2"; shift 2;;   # pull: take UUIDs from this file (the gallery's download) instead of by property
   --*) die "unknown flag '$1'";;
   *) [ -z "$POS" ] && POS="$1" || die "one positional arg only (got '$1' too)"; shift;; esac; done
 
@@ -154,27 +155,49 @@ case "$CMD" in
     done
     rm -f "$tmp" ;;
   pull)
-    need_query_setup
-    [ -n "$PROPERTY" ] || die "--property NAME required for pull"
     [ -n "$OUT" ] || die "--out DIR required for pull"
     mkdir -p "$OUT"
-    uuids="$(query_json | classify | awk -F'\t' -v p="$PROPERTY" '$4==p{print $1}')"
-    [ -n "$uuids" ] || die "no media classified to '$PROPERTY' in that window"
-    n=$(printf '%s\n' "$uuids" | grep -c .); echo "geo-evidence: $n file(s) classified to $PROPERTY -> exporting originals (downloading from iCloud if needed)…"
+    if [ -n "$SELFILE" ]; then
+      # pull exactly the UUIDs the gallery selection wrote (one per line; blanks/# ignored).
+      # No dates or property needed — just osxphotos and the file.
+      [ -f "$SELFILE" ] || die "--select: no such file: $SELFILE"
+      command -v "$OSXPHOTOS" >/dev/null || die "osxphotos not found (run install.sh)"
+      uuids="$(grep -vE '^\s*(#|$)' "$SELFILE")"
+      [ -n "$uuids" ] || die "--select file is empty: $SELFILE"
+      n=$(printf '%s\n' "$uuids" | grep -c .); echo "geo-evidence: $n selected item(s) from $(basename "$SELFILE") -> exporting…"
+    else
+      need_query_setup
+      [ -n "$PROPERTY" ] || die "--property NAME required for pull (or --select FILE)"
+      # capture full rows for the property: uuid, filename, iso, kind, gps
+      SELTMP="$(mktemp)"; query_json | classify | awk -F'\t' -v p="$PROPERTY" '$4==p{print $1"\t"$2"\t"$3"\t"$7"\t"$6}' > "$SELTMP"
+      uuids="$(cut -f1 "$SELTMP")"
+      [ -n "$uuids" ] || die "no media classified to '$PROPERTY' in that window"
+      n=$(printf '%s\n' "$uuids" | grep -c .); echo "geo-evidence: $n file(s) classified to $PROPERTY -> exporting originals (downloading from iCloud if needed)…"
+    fi
     uuid_args=(); while IFS= read -r u; do [ -n "$u" ] && uuid_args+=(--uuid "$u"); done <<< "$uuids"
     # --preview: export ONLY what's already on disk (optimized local versions), skipping the
     # big iCloud original downloads — a fast look. Full mode: --download-missing pulls the
     # matched originals from iCloud (--use-photokit = faster PhotoKit path).
     if [ "$PREVIEW" -eq 1 ]; then
       echo "geo-evidence: --preview (on-disk versions only, skipping iCloud downloads; images -> JPEG so a browser can show them)…"
-      # preview: convert HEIC->JPEG so a browser can render it. NOTE: --convert-to-jpeg and
-      # --exiftool together silently export nothing (osxphotos bug), so preview omits --exiftool —
-      # it's for looking, not evidence; the gallery reads what metadata survived the conversion.
-      "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --convert-to-jpeg --skip-original-if-edited 2>/dev/null || die "osxphotos preview export failed"
+      # preview: convert HEIC->JPEG so a browser can render it, and --preview-if-missing pulls
+      # Photos' small LOCAL derivative for iCloud-only items (as NAME_preview.jpeg) so EVERY item
+      # gets a viewable thumbnail with zero originals downloaded — even videos (poster frame).
+      # NOTE: --convert-to-jpeg + --exiftool together silently export nothing (osxphotos bug), so
+      # preview omits --exiftool; it's for looking, not evidence.
+      "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --convert-to-jpeg --preview-if-missing --skip-original-if-edited 2>/dev/null || die "osxphotos preview export failed"
     else
       # full/evidence: untouched originals, --exiftool writes GPS+date, --download-missing pulls
       # ONLY these from iCloud (--use-photokit = faster path). No --convert (keep originals).
       "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --download-missing --use-photokit --exiftool --skip-original-if-edited 2>/dev/null || die "osxphotos export failed"
+    fi
+    # item index (all classified items, whether or not a preview came down) + stem->uuid map, so
+    # the gallery can render EVERY item — thumbnail where we have one, selectable placeholder where
+    # we don't (videos/iCloud-only) — and a checkbox selection maps back to originals.
+    if [ -n "${SELTMP:-}" ] && [ -f "$SELTMP" ]; then
+      cp "$SELTMP" "$OUT/.items.tsv"   # uuid, filename, iso, kind, gps
+      while IFS=$'\t' read -r u fn iso kind gps; do [ -n "$u" ] && printf '%s\t%s\n' "${fn%.*}" "$u"; done < "$SELTMP" > "$OUT/.uuidmap.tsv"
+      rm -f "$SELTMP"
     fi
     # integrity + manifest
     MAN="$OUT/MANIFEST.md"
@@ -211,40 +234,103 @@ for line in open(os.environ['CONF']):
     [ -d "$POS" ] || die "gallery: no such folder: $POS"
     [ -n "$OUT" ] || die "gallery: --out FILE required"
     EXIFTOOL="$EXIFTOOL" python3 - "$POS" "$OUT" <<'PYEOF'
-import os,sys,subprocess,html,collections
+import os,sys,subprocess,html,collections,json
 src,out=sys.argv[1],sys.argv[2]
 exif=os.environ.get('EXIFTOOL','exiftool')
 IMG=('.jpg','.jpeg','.png','.heic','.gif','.webp','.tif','.tiff')
 VID=('.mov','.mp4','.m4v')
-files=[]
+# optional stem->uuid map written by pull, so a checkbox selection maps back to originals
+umap={}
+mp=os.path.join(src,'.uuidmap.tsv')
+if os.path.exists(mp):
+    for line in open(mp):
+        parts=line.rstrip('\n').split('\t')
+        if len(parts)==2: umap[parts[0]]=parts[1]
+# index of preview files present on disk, by stem (strip a trailing _preview so Photos'
+# derivative NAME_preview.jpeg matches item NAME)
+ondisk={}
 for f in sorted(os.listdir(src)):
     p=os.path.join(src,f); ext=os.path.splitext(f)[1].lower()
-    if not os.path.isfile(p) or ext not in IMG+VID: continue
-    dt=subprocess.run([exif,'-s3','-DateTimeOriginal','-CreateDate',p],capture_output=True,text=True).stdout.strip().split('\n')[0]
-    lat=subprocess.run([exif,'-s3','-GPSLatitude#','-GPSLongitude#',p],capture_output=True,text=True).stdout.strip().replace('\n',', ')
-    files.append((dt or '0000:00:00 00:00:00', f, ext in VID, lat))
+    if os.path.isfile(p) and ext in IMG+VID:
+        st=os.path.splitext(f)[0]
+        if st.endswith('_preview'): st=st[:-8]
+        ondisk.setdefault(st,[]).append(f)
+# item list: authoritative from .items.tsv (EVERY classified item, downloaded or not) if present,
+# else just the files on disk. rec = (iso, display_name, is_video, gps_note, ident, preview_file_or_None)
+files=[]
+items_tsv=os.path.join(src,'.items.tsv')
+def exif_dt(p):
+    return (subprocess.run([exif,'-s3','-DateTimeOriginal','-CreateDate',p],capture_output=True,text=True).stdout.strip().split('\n')[0]) or ''
+def norm(iso):  # 2026-08-08T20:02:39-04:00 or 2026:08:08 20:02:39 -> 2026:08:08 20:02:39
+    if 'T' in iso: iso=iso.replace('-',':',2).replace('T',' '); return iso[:19]
+    return iso[:19]
+if os.path.exists(items_tsv):
+    for line in open(items_tsv):
+        c=line.rstrip('\n').split('\t')
+        if len(c)<5: continue
+        uuid,fn,iso,kind,gps=c[0],c[1],c[2],c[3],c[4]
+        stem=os.path.splitext(fn)[0]; isvid=(kind=='video')
+        pv=None
+        if stem in ondisk:
+            pv=ondisk[stem][0]
+            for cand in ondisk[stem]:
+                if (os.path.splitext(cand)[1].lower() in VID)==isvid: pv=cand; break
+        note = ('' if gps=='yes' else ('time-inferred' if gps=='time' else 'no GPS'))
+        dt = exif_dt(os.path.join(src,pv)) if pv else norm(iso)
+        files.append((dt or '0000:00:00 00:00:00', fn, isvid, note, uuid, pv))
+else:
+    for f in sorted(os.listdir(src)):
+        p=os.path.join(src,f); ext=os.path.splitext(f)[1].lower()
+        if not os.path.isfile(p) or ext not in IMG+VID: continue
+        lat=subprocess.run([exif,'-s3','-GPSLatitude#','-GPSLongitude#',p],capture_output=True,text=True).stdout.strip().replace('\n',', ')
+        files.append((exif_dt(p) or '0000:00:00 00:00:00', f, ext in VID, ('' if lat else 'no GPS'), umap.get(os.path.splitext(f)[0], f), f))
 files.sort(key=lambda x:x[0])
 bydate=collections.OrderedDict()
-for dt,f,isvid,lat in files:
-    day=dt[:10].replace(':','-') or 'undated'
-    bydate.setdefault(day,[]).append((dt,f,isvid,lat))
+for rec in files:
+    day=rec[0][:10].replace(':','-') or 'undated'
+    bydate.setdefault(day,[]).append(rec)
 def esc(s): return html.escape(s or '')
 parts=['<!doctype html><meta charset=utf-8><title>geo-evidence gallery</title>',
- '<style>body{font-family:-apple-system,sans-serif;background:#111;color:#ddd;margin:0;padding:16px}',
- 'h2{border-bottom:1px solid #333;padding-bottom:4px;margin:28px 0 10px}',
- '.grid{display:flex;flex-wrap:wrap;gap:10px}figure{margin:0;background:#1a1a1a;border-radius:6px;padding:6px;width:300px}',
- 'img,video{width:300px;height:auto;border-radius:4px;display:block}figcaption{font-size:12px;color:#aaa;padding:4px 2px}</style>',
+ '<style>body{font-family:-apple-system,sans-serif;background:#111;color:#ddd;margin:0;padding:16px 16px 90px}',
+ '.day{border-bottom:1px solid #333;padding-bottom:4px;margin:28px 0 10px;display:flex;align-items:center;gap:12px}',
+ '.day h2{margin:0;font-size:18px}.day button{font-size:12px;background:#333;color:#ddd;border:0;border-radius:4px;padding:3px 8px;cursor:pointer}',
+ '.grid{display:flex;flex-wrap:wrap;gap:10px}figure{margin:0;background:#1a1a1a;border-radius:6px;padding:6px;width:300px;position:relative}',
+ 'figure.on{outline:2px solid #4a9eff}img,video{width:300px;height:auto;border-radius:4px;display:block}',
+ 'figcaption{font-size:12px;color:#aaa;padding:4px 2px}.pk{position:absolute;top:10px;left:10px;width:22px;height:22px;cursor:pointer}',
+ '#bar{position:fixed;left:0;right:0;bottom:0;background:#000d;backdrop-filter:blur(6px);border-top:1px solid #333;padding:10px 16px;display:flex;gap:10px;align-items:center}',
+ '#bar button{background:#4a9eff;color:#001;border:0;border-radius:5px;padding:8px 12px;font-weight:600;cursor:pointer}#bar .sec{background:#333;color:#ddd}#cnt{margin-left:auto;color:#ccc}</style>',
  f'<h1>Evidence gallery — {esc(os.path.basename(os.path.abspath(src)))}</h1>',
- f'<p style=color:#888>{len(files)} items across {len(bydate)} day(s). Sorted by capture time.</p>']
+ f'<p style=color:#888>{len(files)} items across {len(bydate)} day(s). Tick the ones you want; download the selection; feed it to <code>geo-evidence pull --select</code>.</p>']
 for day,items in bydate.items():
-    parts.append(f'<h2>{esc(day)} · {len(items)} item(s)</h2><div class=grid>')
-    for dt,f,isvid,lat in items:
-        rel=esc(f); cap=esc((dt[11:19] if len(dt)>=19 else dt))+(' · '+esc(lat) if lat else ' · <b>no GPS</b>')
-        media=f'<video controls preload=metadata src="{rel}"></video>' if isvid else f'<a href="{rel}"><img loading=lazy src="{rel}"></a>'
-        parts.append(f'<figure>{media}<figcaption>{cap}<br>{rel}</figcaption></figure>')
+    parts.append(f'<div class=day data-day="{esc(day)}"><h2>{esc(day)}</h2><span style=color:#888>{len(items)} item(s)</span>'
+                 f'<button onclick="grp(\'{esc(day)}\',1)">select all</button><button onclick="grp(\'{esc(day)}\',0)">none</button></div><div class=grid>')
+    for dt,fn,isvid,note,ident,pv in items:
+        tm=esc(dt[11:19] if len(dt)>=19 else dt)
+        cap=tm+(' · '+esc(note) if note else '')
+        if pv:   # have a preview file
+            rel=esc(pv); pv_is_img=os.path.splitext(pv)[1].lower() in IMG
+            if isvid and not pv_is_img:
+                media=f'<video controls preload=metadata src="{rel}"></video>'
+            else:   # image, or a video's poster-frame derivative -> show as image
+                badge='<span style="position:absolute;top:10px;right:10px;background:#000a;padding:2px 6px;border-radius:4px;font-size:11px">🎬</span>' if isvid else ''
+                media=f'<a href="{rel}"><img loading=lazy src="{rel}"></a>{badge}'
+        else:    # not downloaded (video/iCloud-only) — still selectable
+            icon='🎬 video' if isvid else '📷 photo'
+            media=f'<div style="width:300px;height:180px;background:#222;display:flex;align-items:center;justify-content:center;color:#888;text-align:center;border-radius:4px">{icon}<br>not downloaded<br><small>pull will fetch it</small></div>'
+        parts.append(f'<figure data-day="{esc(day)}"><input type=checkbox class=pk data-id="{esc(ident)}" onchange="upd()">{media}<figcaption>{cap}<br>{esc(fn)}</figcaption></figure>')
     parts.append('</div>')
+parts.append('<div id=bar><button onclick="all(1)">Select all</button><button class=sec onclick="all(0)">Clear</button>'
+ '<button onclick="dl()">⬇ Download selection</button><span id=cnt>0 selected</span></div>')
+parts.append('''<script>
+function boxes(){return[...document.querySelectorAll('input.pk')]}
+function upd(){let n=0;boxes().forEach(b=>{b.closest('figure').classList.toggle('on',b.checked);if(b.checked)n++});document.getElementById('cnt').textContent=n+' selected'}
+function all(v){boxes().forEach(b=>b.checked=v);upd()}
+function grp(day,v){boxes().forEach(b=>{if(b.closest('figure').dataset.day===day)b.checked=v});upd()}
+function dl(){let ids=boxes().filter(b=>b.checked).map(b=>b.dataset.id);if(!ids.length){alert('nothing selected');return}
+ let blob=new Blob([ids.join('\\n')+'\\n'],{type:'text/plain'});let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='geo-evidence-selection.txt';a.click()}
+</script>''')
 open(out,'w').write('\n'.join(parts))
-print(f'geo-evidence: gallery -> {out} ({len(files)} items, {len(bydate)} day(s))')
+print(f'geo-evidence: gallery -> {out} ({len(files)} items, {len(bydate)} day(s); {"selectable, uuid-mapped" if umap else "selectable by filename (no uuid map found)"})')
 PYEOF
     ;;
   *) echo "usage: geo-evidence scan|pull --since D --until D [--property NAME --out DIR [--preview]] | gallery <DIR> --out FILE"; exit 1 ;;
