@@ -59,6 +59,19 @@ slug="$(printf '%s' "$NAME" | tr ' _' '--' | tr -cd 'A-Za-z0-9-')"
 APP="$OUTDIR/$NAME.app"
 [ -e "$APP" ] && { echo "wrap-in-app: $APP already exists — refusing to overwrite (an existing app may hold an FDA grant; delete it yourself first)" >&2; exit 1; }
 
+# The template's Automator stub is the one binary this tool clones and cannot rewrite. If it
+# were Intel-only, every app minted from it would die when macOS drops Rosetta (the real
+# reason an old applet needs a one-time re-save on Apple Silicon). Refuse to ship a stub that
+# can't run natively — a template refreshed from an old Intel app would otherwise reintroduce
+# exactly that bug.
+STUB="$HERE/template.app/Contents/MacOS/Automator Application Stub"
+if ! lipo -archs "$STUB" 2>/dev/null | grep -qw arm64; then
+  echo "wrap-in-app: template stub is not arm64-native ($(lipo -archs "$STUB" 2>/dev/null)) — it will break" >&2
+  echo "  when macOS removes Rosetta. Refresh template.app by re-saving any one-action Automator app on" >&2
+  echo "  Apple Silicon, then re-blank it. Refusing to mint doomed apps." >&2
+  exit 1
+fi
+
 cp -R "$HERE/template.app" "$APP"
 
 APP="$APP" SCRIPT="$SCRIPT" LOG="$LOG" NAME="$NAME" SLUG="$slug" /opt/homebrew/bin/python3 - <<'PY'

@@ -9,6 +9,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; . "$HERE/lib.sh"
 WIA="$HERE/../wrap-in-app/wrap-in-app"
 need codesign "xcode-select --install"
 need plutil "macOS"
+need lipo "xcode-select --install"
+
+# guard the template itself: the stub this tool clones must be arm64-native, or every app it
+# ever mints inherits the Rosetta-removal time bomb (the real one-time-resave cause)
+STUB="$HERE/../wrap-in-app/template.app/Contents/MacOS/Automator Application Stub"
+lipo -archs "$STUB" 2>/dev/null | grep -qw arm64 && pass "template stub is arm64-native (won't die when Rosetta goes)" || fail "template stub is Intel-only — refresh template.app on Apple Silicon"
 
 cat > "$SB/job.sh" <<'EOF'
 #!/bin/bash
@@ -26,6 +32,9 @@ assert_contains "$APP/Contents/document.wflow" "$SB/job.sh" "app references the 
 assert_contains "$APP/Contents/document.wflow" "$SB/logs/job.log" "app redirects output into the log"
 assert_eq "com.apple.automator.TestJobWrapper" "$(plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" "bundle identifier set"
 codesign -v "$APP" 2>/dev/null && pass "signature verifies" || fail "signature does not verify"
+# the stub must be arm64-native — an Intel-only stub is the real reason an old applet needs a
+# one-time re-save (macOS is dropping Rosetta); a minted app must not carry that time bomb
+lipo -archs "$APP/Contents/MacOS/Automator Application Stub" 2>/dev/null | grep -qw arm64 && pass "minted app's stub runs natively on Apple Silicon (survives Rosetta removal)" || fail "minted app's stub is not arm64-native — will die when macOS drops Rosetta"
 
 # ---- run it for real: noisy run -> log + shim output ----
 touch "$SB/be_noisy"
