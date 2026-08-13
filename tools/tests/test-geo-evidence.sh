@@ -77,4 +77,28 @@ red "pull without --property must fail" "$GE" pull --since 2026-08-08 --until 20
 red "unknown command must fail" "$GE" frobnicate --since 2026-08-08 --until 2026-08-09
 red "unknown flag must fail" "$GE" scan --since 2026-08-08 --until 2026-08-09 --wat x
 
+# ---- gallery: a media folder -> date-grouped HTML with images inline + videos as players ----
+GMED="$SB/media"; mkdir -p "$GMED"
+: > "$GMED/a_photo.jpeg"; : > "$GMED/b_clip.mov"; : > "$GMED/c_later.jpeg"
+# exiftool stub that returns per-file dates + a GPS so the gallery can group + caption
+cat > "$SB/bin/exiftool-gal" <<'STUB'
+#!/usr/bin/env bash
+for a in "$@"; do case "$a" in
+  *a_photo.jpeg) echo "2026:08:08 20:02:39"; echo "-80.6"; exit 0;;
+  *b_clip.mov)   echo "2026:08:08 20:05:00"; echo "-80.6"; exit 0;;
+  *c_later.jpeg) echo "2026:08:09 09:00:00"; echo "-80.6"; exit 0;;
+esac; done
+echo ""
+STUB
+chmod +x "$SB/bin/exiftool-gal"
+EXIFTOOL_BIN="$SB/bin/exiftool-gal" "$GE" gallery "$GMED" --out "$GMED/index.html" >/dev/null 2>&1
+assert_file "$GMED/index.html" "gallery HTML written"
+assert_contains "$GMED/index.html" "2026-08-08" "date group header present"
+assert_contains "$GMED/index.html" "2026-08-09" "second date group present"
+assert_contains "$GMED/index.html" "<img" "image rendered as <img>"
+assert_contains "$GMED/index.html" "<video" "video rendered as <video> player"
+assert_contains "$GMED/index.html" "b_clip.mov" "video file referenced"
+red "gallery with no folder must fail" "$GE" gallery --out "$SB/g.html"
+red "gallery without --out must fail" "$GE" gallery "$GMED"
+
 finish

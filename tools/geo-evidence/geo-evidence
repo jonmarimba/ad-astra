@@ -24,8 +24,24 @@ CONF="$HOME_DIR/config"
 OSXPHOTOS="${OSXPHOTOS_BIN:-osxphotos}"
 EXIFTOOL="${EXIFTOOL_BIN:-exiftool}"
 
-if [ ! -f "$CONF" ]; then
-cat > "$CONF" <<'CFG'
+die(){ echo "geo-evidence: $*" >&2; exit 1; }
+command -v "$EXIFTOOL" >/dev/null || die "exiftool not found (run install.sh)"
+
+CMD="${1:-}"; shift || true
+SINCE=""; UNTIL=""; PROPERTY=""; OUT=""; PREVIEW=0; POS=""
+while [ $# -gt 0 ]; do case "$1" in
+  --since) SINCE="$2"; shift 2;; --until) UNTIL="$2"; shift 2;;
+  --property) PROPERTY="$2"; shift 2;; --out) OUT="$2"; shift 2;;
+  --preview) PREVIEW=1; shift;;   # export only what's already on disk (optimized versions); skip iCloud downloads
+  --*) die "unknown flag '$1'";;
+  *) [ -z "$POS" ] && POS="$1" || die "one positional arg only (got '$1' too)"; shift;; esac; done
+
+# scan/pull need osxphotos, a configured properties file, and a date range. gallery needs none
+# of that (it just reads a media folder) — so this setup is per-command, not global.
+need_query_setup(){
+  command -v "$OSXPHOTOS" >/dev/null || die "osxphotos not found (run install.sh)"
+  if [ ! -f "$CONF" ]; then
+    cat > "$CONF" <<'CFG'
 # geo-evidence config. REPLACE the examples below with your own properties, then rerun.
 # properties: NAME<TAB>LATITUDE<TAB>LONGITUDE  (decimal degrees, real coordinates).
 # Add one line per site of interest; a shot is classified to the NEAREST one.
@@ -36,15 +52,12 @@ ExampleNeighbor	0.0	0.0
 # (not a tight circle) does the separating — so the wide net is safe even for adjacent lots.
 MAX_M=402
 CFG
-  echo "geo-evidence: wrote a template config at $CONF — edit in your real properties (lat/long) and rerun." >&2
-  exit 3
-fi
-
-# refuse to run on the unedited template / placeholder (0,0) coordinates — a bio-shaped
-# no-silent-loss guard: silently classifying against 0,0 would send everything to "elsewhere"
-# and quietly find nothing, looking like "no media" when it's really "not configured".
-real_props="$(python3 -c "
-import sys
+    echo "geo-evidence: wrote a template config at $CONF — edit in your real properties (lat/long) and rerun." >&2
+    exit 3
+  fi
+  # refuse the unedited template / placeholder (0,0): silently classifying against 0,0 would
+  # send everything to "elsewhere" and quietly find nothing — "no media" that's really "not configured".
+  local rp; rp="$(python3 -c "
 n=0
 for line in open('$CONF'):
     line=line.rstrip('\n')
@@ -56,20 +69,10 @@ for line in open('$CONF'):
         if (lat,lon)!=(0.0,0.0) and not p[0].startswith('Example'): n+=1
 print(n)
 " 2>/dev/null)"
-[ "${real_props:-0}" -ge 1 ] || die "no real properties in $CONF — replace the Example placeholders with your own lat/long"
-
-die(){ echo "geo-evidence: $*" >&2; exit 1; }
-command -v "$OSXPHOTOS" >/dev/null || die "osxphotos not found (run install.sh)"
-command -v "$EXIFTOOL"  >/dev/null || die "exiftool not found (run install.sh)"
-
-CMD="${1:-}"; shift || true
-SINCE=""; UNTIL=""; PROPERTY=""; OUT=""
-while [ $# -gt 0 ]; do case "$1" in
-  --since) SINCE="$2"; shift 2;; --until) UNTIL="$2"; shift 2;;
-  --property) PROPERTY="$2"; shift 2;; --out) OUT="$2"; shift 2;;
-  *) die "unknown arg '$1'";; esac; done
-[ -n "$SINCE" ] || die "--since YYYY-MM-DD required"
-[ -n "$UNTIL" ] || die "--until YYYY-MM-DD required"
+  [ "${rp:-0}" -ge 1 ] || die "no real properties in $CONF — replace the Example placeholders with your own lat/long"
+  [ -n "$SINCE" ] || die "--since YYYY-MM-DD required"
+  [ -n "$UNTIL" ] || die "--until YYYY-MM-DD required"
+}
 
 # osxphotos query -> JSON, then classify. --to-date is exclusive of the day, so callers pass
 # the day AFTER the last day they want; we add a note rather than silently adjusting.
@@ -113,6 +116,7 @@ for it in items:
 
 case "$CMD" in
   scan)
+    need_query_setup
     echo "== geo-evidence scan  $SINCE .. $UNTIL (osxphotos --to-date is exclusive; pass the day AFTER your last day) =="
     printf '%-22s %-8s %-7s %s\n' "captured" "property" "dist_m" "file"
     query_json | classify | sort -t$'\t' -k3 | while IFS=$'\t' read -r uuid fn iso prop dist gps; do
@@ -120,6 +124,7 @@ case "$CMD" in
       printf '%-22s %-8s %-7s %s\n' "${iso:0:19}" "$prop" "$dist" "$fn"
     done ;;
   pull)
+    need_query_setup
     [ -n "$PROPERTY" ] || die "--property NAME required for pull"
     [ -n "$OUT" ] || die "--out DIR required for pull"
     mkdir -p "$OUT"
@@ -127,9 +132,15 @@ case "$CMD" in
     [ -n "$uuids" ] || die "no media classified to '$PROPERTY' in that window"
     n=$(printf '%s\n' "$uuids" | grep -c .); echo "geo-evidence: $n file(s) classified to $PROPERTY -> exporting originals (downloading from iCloud if needed)…"
     uuid_args=(); while IFS= read -r u; do [ -n "$u" ] && uuid_args+=(--uuid "$u"); done <<< "$uuids"
-    # --download-missing pulls ONLY these matched originals from iCloud (not the whole library);
-    # --use-photokit is the faster/more-reliable download path (PhotoKit API, no Photos.app UI drive)
-    "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --download-missing --use-photokit --exiftool --original-name --skip-original-if-edited >/dev/null 2>&1 || die "osxphotos export failed"
+    # --preview: export ONLY what's already on disk (optimized local versions), skipping the
+    # big iCloud original downloads — a fast look. Full mode: --download-missing pulls the
+    # matched originals from iCloud (--use-photokit = faster PhotoKit path).
+    if [ "$PREVIEW" -eq 1 ]; then
+      echo "geo-evidence: --preview (on-disk versions only, skipping iCloud downloads)…"
+      "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --exiftool --original-name --skip-original-if-edited >/dev/null 2>&1 || die "osxphotos export failed"
+    else
+      "$OSXPHOTOS" export "$OUT" "${uuid_args[@]}" --download-missing --use-photokit --exiftool --original-name --skip-original-if-edited >/dev/null 2>&1 || die "osxphotos export failed"
+    fi
     # integrity + manifest
     MAN="$OUT/MANIFEST.md"
     { echo "# Evidence manifest — $PROPERTY ($SINCE..$UNTIL)"; echo ""; echo "Generated by geo-evidence. GPS/date verified per file below; anything marked MISSING should be re-exported from the original."; echo "";
@@ -157,5 +168,49 @@ for line in open(os.environ['CONF']):
     echo "geo-evidence: exported to $OUT ; manifest at $MAN"
     [ "$miss" -gt 0 ] && echo "geo-evidence: WARNING — $miss file(s) missing GPS (see MANIFEST) — re-export those originals" >&2 || echo "geo-evidence: all exported files carry GPS + date"
     ;;
-  *) echo "usage: geo-evidence scan|pull --since D --until D [--property NAME --out DIR]"; exit 1 ;;
+  gallery)
+    # build a self-contained HTML gallery of a folder of media, grouped by capture DATE, images
+    # inline and videos as players, each captioned with time + GPS. Point it at any exported
+    # folder (or an existing photos/videos folder).  geo-evidence gallery <DIR> --out index.html
+    [ -n "$POS" ] || die "gallery: need a media folder — geo-evidence gallery <DIR> --out FILE"
+    [ -d "$POS" ] || die "gallery: no such folder: $POS"
+    [ -n "$OUT" ] || die "gallery: --out FILE required"
+    EXIFTOOL="$EXIFTOOL" python3 - "$POS" "$OUT" <<'PYEOF'
+import os,sys,subprocess,html,collections
+src,out=sys.argv[1],sys.argv[2]
+exif=os.environ.get('EXIFTOOL','exiftool')
+IMG=('.jpg','.jpeg','.png','.heic','.gif','.webp','.tif','.tiff')
+VID=('.mov','.mp4','.m4v')
+files=[]
+for f in sorted(os.listdir(src)):
+    p=os.path.join(src,f); ext=os.path.splitext(f)[1].lower()
+    if not os.path.isfile(p) or ext not in IMG+VID: continue
+    dt=subprocess.run([exif,'-s3','-DateTimeOriginal','-CreateDate',p],capture_output=True,text=True).stdout.strip().split('\n')[0]
+    lat=subprocess.run([exif,'-s3','-GPSLatitude#','-GPSLongitude#',p],capture_output=True,text=True).stdout.strip().replace('\n',', ')
+    files.append((dt or '0000:00:00 00:00:00', f, ext in VID, lat))
+files.sort(key=lambda x:x[0])
+bydate=collections.OrderedDict()
+for dt,f,isvid,lat in files:
+    day=dt[:10].replace(':','-') or 'undated'
+    bydate.setdefault(day,[]).append((dt,f,isvid,lat))
+def esc(s): return html.escape(s or '')
+parts=['<!doctype html><meta charset=utf-8><title>geo-evidence gallery</title>',
+ '<style>body{font-family:-apple-system,sans-serif;background:#111;color:#ddd;margin:0;padding:16px}',
+ 'h2{border-bottom:1px solid #333;padding-bottom:4px;margin:28px 0 10px}',
+ '.grid{display:flex;flex-wrap:wrap;gap:10px}figure{margin:0;background:#1a1a1a;border-radius:6px;padding:6px;width:300px}',
+ 'img,video{width:300px;height:auto;border-radius:4px;display:block}figcaption{font-size:12px;color:#aaa;padding:4px 2px}</style>',
+ f'<h1>Evidence gallery — {esc(os.path.basename(os.path.abspath(src)))}</h1>',
+ f'<p style=color:#888>{len(files)} items across {len(bydate)} day(s). Sorted by capture time.</p>']
+for day,items in bydate.items():
+    parts.append(f'<h2>{esc(day)} · {len(items)} item(s)</h2><div class=grid>')
+    for dt,f,isvid,lat in items:
+        rel=esc(f); cap=esc((dt[11:19] if len(dt)>=19 else dt))+(' · '+esc(lat) if lat else ' · <b>no GPS</b>')
+        media=f'<video controls preload=metadata src="{rel}"></video>' if isvid else f'<a href="{rel}"><img loading=lazy src="{rel}"></a>'
+        parts.append(f'<figure>{media}<figcaption>{cap}<br>{rel}</figcaption></figure>')
+    parts.append('</div>')
+open(out,'w').write('\n'.join(parts))
+print(f'geo-evidence: gallery -> {out} ({len(files)} items, {len(bydate)} day(s))')
+PYEOF
+    ;;
+  *) echo "usage: geo-evidence scan|pull --since D --until D [--property NAME --out DIR [--preview]] | gallery <DIR> --out FILE"; exit 1 ;;
 esac
