@@ -12,7 +12,9 @@ CLAUDE_BIN="${CLAUDE_BIN:-/opt/homebrew/bin/claude}"
 REPO="${1:?usage: dedup-scan <repo> [--top 8] [--min-shared 3] [--no-llm]}"; shift || true
 TOP=8; MINSHARED=3; LLM=1
 while [ $# -gt 0 ]; do case "$1" in
-  --top) TOP="$2"; shift 2;; --min-shared) MINSHARED="$2"; shift 2;; --no-llm) LLM=0; shift;; *) shift;;
+  --top) TOP="$2"; shift 2;; --min-shared) MINSHARED="$2"; shift 2;; --no-llm) LLM=0; shift;;
+  # a typo'd flag must error, not silently run with defaults (same class as the convoke find)
+  *) echo "dedup-scan: unknown argument '$1'" >&2; exit 64;;
 esac; done
 cd "$REPO"
 OUT="graphify-out/DEDUP_REPORT.md"
