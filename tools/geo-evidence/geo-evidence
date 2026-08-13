@@ -78,15 +78,18 @@ print(n)
 # the day AFTER the last day they want; we add a note rather than silently adjusting.
 query_json(){ "$OSXPHOTOS" query --from-date "$SINCE" --to-date "$UNTIL" --json 2>/dev/null; }
 
-classify(){ # reads osxphotos JSON on stdin, emits: uuid \t filename \t iso \t property \t dist_m \t gps_ok
+classify(){ # reads osxphotos JSON on stdin, emits: uuid \t filename \t iso \t property \t dist_m \t gps \t kind
   CONF="$CONF" python3 -c "
-import sys,json,math,os
-props=[]; maxm=60.0
+import sys,json,math,os,datetime
+props=[]; maxm=60.0; gap_min=30.0
 for line in open(os.environ['CONF']):
     line=line.rstrip('\n')
     if not line or line.startswith('#'):
         if line.startswith('MAX_M='):
             try: maxm=float(line.split('=',1)[1])
+            except: pass
+        if line.startswith('MAX_TIME_GAP_MIN='):
+            try: gap_min=float(line.split('=',1)[1])
             except: pass
         continue
     parts=line.split('\t')
@@ -97,21 +100,40 @@ def hav(a,b,c,d):
     dp=math.radians(c-a);dl=math.radians(d-b)
     x=math.sin(dp/2)**2+math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
     return 2*R*math.asin(math.sqrt(x))
+def epoch(iso):
+    if not iso: return None
+    try: return datetime.datetime.fromisoformat(iso).timestamp()
+    except Exception:
+        try: return datetime.datetime.fromisoformat(iso[:19]).timestamp()
+        except Exception: return None
 try: items=json.load(sys.stdin)
 except Exception: items=[]
+# rows: [uuid, fn, iso, prop, dist_str, gps, kind, epoch]
+rows=[]
 for it in items:
     uuid=it.get('uuid',''); fn=it.get('original_filename') or it.get('filename','')
     iso=it.get('date','') or ''
     kind='video' if it.get('ismovie') else 'photo'
-    lat=it.get('latitude'); lon=it.get('longitude')
+    lat=it.get('latitude'); lon=it.get('longitude'); ts=epoch(iso)
     if lat is None or lon is None:
-        print('\t'.join([uuid,fn,iso,'NO-GPS','','no',kind])); continue
+        rows.append([uuid,fn,iso,'NO-GPS','','no',kind,ts]); continue
     best=None;bd=1e18
     for n,pl,po in props:
         dd=hav(lat,lon,pl,po)
         if dd<bd: bd=dd;best=n
     prop = best if bd<=maxm else 'elsewhere'
-    print('\t'.join([uuid,fn,iso,prop,f'{bd:.0f}','yes',kind]))
+    rows.append([uuid,fn,iso,prop,f'{bd:.0f}',('yes' if prop!='elsewhere' else 'yes'),kind,ts])
+# second pass: a GPS-less shot inherits the property of its nearest-in-TIME GPS'd shot, if that
+# neighbor is a real property (not elsewhere) and within gap_min minutes. Marked gps='time' so
+# it's clearly location-INFERRED, not GPS-confirmed. This recovers PNG re-exports that lost GPS.
+anchors=[(r[7],r[3]) for r in rows if r[5]=='yes' and r[3] not in ('elsewhere','NO-GPS') and r[7] is not None]
+for r in rows:
+    if r[3]=='NO-GPS' and r[7] is not None and anchors:
+        near=min(anchors,key=lambda a:abs(a[0]-r[7]))
+        if abs(near[0]-r[7])<=gap_min*60:
+            r[3]=near[1]; r[5]='time'; r[4]='~'
+for r in rows:
+    print('\t'.join([r[0],r[1],r[2],r[3],r[4],r[5],r[6]]))
 "
 }
 

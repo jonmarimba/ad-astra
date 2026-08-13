@@ -45,7 +45,8 @@ cat > "$SB/fixture.json" <<'EOF'
  {"uuid":"u3","original_filename":"SPD_EDGE.jpeg","date":"2026-08-08T20:05:00-04:00","latitude":35.409637,"longitude":-80.646172,"ismovie":false},
  {"uuid":"u4","original_filename":"TYN_DRIFT.jpeg","date":"2026-08-08T19:00:00-04:00","latitude":35.409164,"longitude":-80.645835,"ismovie":false},
  {"uuid":"u5","original_filename":"FARAWAY.jpeg","date":"2026-08-08T12:00:00-04:00","latitude":35.4085,"longitude":-80.5900,"ismovie":false},
- {"uuid":"u6","original_filename":"NOGPS.jpeg","date":"2026-08-08T21:00:00-04:00","latitude":null,"longitude":null,"ismovie":false}
+ {"uuid":"u6","original_filename":"NOGPS.jpeg","date":"2026-08-08T21:00:00-04:00","latitude":null,"longitude":null,"ismovie":false},
+ {"uuid":"u7","original_filename":"NOGPS_INSESSION.jpeg","date":"2026-08-08T20:06:00-04:00","latitude":null,"longitude":null,"ismovie":false}
 ]
 EOF
 export OSX_FIXTURE="$SB/fixture.json"
@@ -57,7 +58,10 @@ case "$(line AT_TYNDALL.heic)" in *Tyndall*) pass "Tyndall centroid -> Tyndall";
 case "$(line SPD_EDGE.jpeg)" in *Speedway*) pass "far edge of Speedway lot (20m out) still -> Speedway (radius would have clipped it)";; *) fail "SPD_EDGE misclassified: $(line SPD_EDGE.jpeg)";; esac
 case "$(line TYN_DRIFT.jpeg)" in *Tyndall*) pass "Tyndall shot drifted toward Speedway still -> Tyndall (nearest-centroid holds the 52m line)";; *) fail "TYN_DRIFT misclassified: $(line TYN_DRIFT.jpeg)";; esac
 case "$(line FARAWAY.jpeg)" in *elsewhere*) pass "4km-away shot -> elsewhere (past MAX_M cutoff)";; *) fail "FARAWAY not excluded: $(line FARAWAY.jpeg)";; esac
-case "$(line NOGPS.jpeg)" in *NO-GPS*) pass "null-GPS shot flagged NO-GPS (integrity catch)";; *) fail "NOGPS not flagged: $(line NOGPS.jpeg)";; esac
+case "$(line NOGPS.jpeg)" in *NO-GPS*) pass "GPS-less shot far in time from any anchor stays NO-GPS (55min gap > default 30)";; *) fail "NOGPS not flagged: $(line NOGPS.jpeg)";; esac
+# time-inference: a GPS-less shot 1 min after a Speedway shot inherits Speedway (marked '~')
+case "$(line NOGPS_INSESSION.jpeg)" in *Speedway*) pass "GPS-less shot in-session (1min after a Speedway shot) inferred Speedway by time";; *) fail "in-session NO-GPS not time-inferred: $(line NOGPS_INSESSION.jpeg)";; esac
+printf '%s\n' "$out" | grep -F NOGPS_INSESSION | grep -q '~' && pass "time-inferred shot marked ~ (location inferred, not GPS-confirmed)" || fail "time-inferred shot not marked as inferred"
 
 # ordering: output sorted by capture time (evidence sequence)
 first="$(printf '%s\n' "$out" | grep -E 'AT_SPEEDWAY|AT_TYNDALL|SPD_EDGE|TYN_DRIFT|FARAWAY|NOGPS' | head -1)"
