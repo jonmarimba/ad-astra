@@ -16,6 +16,12 @@ assert_contains "$REPO/CLAUDE.md" "SwiftCodeStyle.md" "swift component imported"
 assert_contains "$REPO/CLAUDE.md" "Pre-existing prose that must survive." "pre-existing content untouched"
 assert_file "$REPO/AGENTS.md" "AGENTS.md created"
 assert_contains "$REPO/AGENTS.md" ">>> drew-kit imports" "begin marker present in AGENTS.md"
+# ---- self-contained + portable: imports are REPO-RELATIVE and components are copied IN ----
+assert_contains "$REPO/CLAUDE.md" "@.drew-kit/components/SwiftCodeStyle.md" "import is repo-relative (@.drew-kit/…)"
+assert_not_contains "$REPO/CLAUDE.md" "/Users/" "NO absolute machine path leaked into the import"
+assert_not_contains "$REPO/CLAUDE.md" "js-db-ad-astra" "NO cross-repo absolute reference leaked in"
+assert_file "$REPO/.drew-kit/components/SwiftCodeStyle.md" "component file actually copied into the repo"
+[ -s "$REPO/.drew-kit/components/SwiftCodeStyle.md" ] && pass "copied component is non-empty" || fail "copied component is empty"
 
 # ---- refresh idempotence: reinstall must not duplicate the block ----
 "$INSTALL" "$REPO" >/dev/null
@@ -27,10 +33,11 @@ assert_eq "1" "$n" "reinstall left exactly one managed block (refresh, not appen
 assert_contains "$REPO/CLAUDE.md" "AtlassianJira.md" "jira set present after --set jira refresh"
 assert_not_contains "$REPO/CLAUDE.md" "SwiftCodeStyle.md" "swift set removed by the refresh"
 
-# ---- uninstall: block gone, everything else intact ----
+# ---- uninstall: block gone, copied components gone, everything else intact ----
 assert_rc 0 "uninstall succeeds" "$UNINSTALL" "$REPO"
 assert_not_contains "$REPO/CLAUDE.md" "drew-kit imports" "managed block removed"
 assert_contains "$REPO/CLAUDE.md" "Pre-existing prose that must survive." "pre-existing content still intact after uninstall"
+assert_no_file "$REPO/.drew-kit/components/AtlassianJira.md" "uninstall removed the copied-in components (.drew-kit gone)"
 
 # ---- RED controls ----
 red "unknown set must fail" "$INSTALL" "$REPO" --set cobol
