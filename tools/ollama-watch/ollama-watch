@@ -23,9 +23,11 @@ fi
 . "$CONF"
 
 SEEN="$HOME_DIR/seen.txt"
+# transport binary injectable for tests (same seam pattern as ambrosio's CURL_BIN)
+CURL="${CURL_BIN:-curl}"
 
 fetch_library() {
-  curl -s --max-time 20 -A "Mozilla/5.0" "https://ollama.com/library" 2>/dev/null \
+  "$CURL" -s --max-time 20 -A "Mozilla/5.0" "https://ollama.com/library" 2>/dev/null \
     | grep -oE 'href="/library/[a-z0-9._-]+"' \
     | sed 's|href="/library/||; s|"||' | sort -u
 }
