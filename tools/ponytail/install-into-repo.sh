@@ -6,6 +6,7 @@
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 REPO="${1:?usage: install-into-repo.sh <repo-path>}"
+[ -d "$REPO" ] || { echo "install-into-repo.sh: no such directory: $REPO" >&2; exit 1; }
 BASE="https://raw.githubusercontent.com/DietrichGebert/ponytail/main/skills"
 for skill in ponytail ponytail-audit; do
   DEST="$REPO/.claude/skills/$skill"

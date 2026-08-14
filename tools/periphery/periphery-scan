@@ -3,11 +3,11 @@
 # First run in a repo: `periphery scan --setup` (interactive) writes .periphery.yml there;
 # after that this wrapper runs headless off that file.
 #   periphery-scan <repo-path> [extra periphery args...]
-set -uo pipefail
+set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 REPO="${1:?usage: periphery-scan <repo-path> [args...]}"; shift || true
 command -v periphery >/dev/null || { echo "periphery not installed — run install.sh"; exit 1; }
-cd "$REPO"
+cd "$REPO" || { echo "periphery-scan: cannot cd to $REPO" >&2; exit 1; }
 if [ ! -f .periphery.yml ]; then
   echo "no .periphery.yml in $REPO — run 'periphery scan --setup' there once (interactive), then rerun me."
   exit 2
