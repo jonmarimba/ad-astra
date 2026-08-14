@@ -15,4 +15,13 @@ if [ "${UNINSTALL_DEPS:-0}" = 1 ]; then
   uc_warn "You passed --deps, but convocation refuses to remove agent CLIs." \
           "If you really mean it:  npm rm -g @anthropic-ai/claude-code @openai/codex ; brew uninstall qwen-code"
 fi
+# --into <repo>: remove convocation's doctrine block from that repo (mirror of install.sh --into)
+INTO=""; want_into=0
+for a in "$@"; do
+  if [ "$want_into" = 1 ]; then INTO="$a"; want_into=0; continue; fi
+  [ "$a" = "--into" ] && want_into=1
+done
+if [ -n "$INTO" ]; then
+  "$HERE/../lib/uninstall-doctrine.sh" "$INTO" --slug convocation
+fi
 echo "done."

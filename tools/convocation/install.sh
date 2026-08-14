@@ -25,4 +25,16 @@ for b in claude codex qwen; do
 done
 # the [ -gt 1 ] test being false on the loop's last iteration must not become the script's
 # exit code (a clean single-copy state read as failure — caught by test-installers-which-first)
+
+# --into <repo>: also install convocation's DOCTRINE (convoq-first + mix-brands) into that repo's
+# instruction files, so the capability travels with the rules for using it there.
+INTO=""; want_into=0
+for a in "$@"; do
+  if [ "$want_into" = 1 ]; then INTO="$a"; want_into=0; continue; fi
+  [ "$a" = "--into" ] && want_into=1
+done
+if [ -n "$INTO" ]; then
+  HERE="$(cd "$(dirname "$0")" && pwd)"
+  "$HERE/../lib/install-doctrine.sh" "$INTO" "$HERE/convocation-doctrine.md" --slug convocation
+fi
 exit 0
