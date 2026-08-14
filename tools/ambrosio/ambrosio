@@ -5,8 +5,26 @@
 # provider_node), and botline-pings JS "come play." REACHABILITY-GATED: inert while the host sleeps.
 #
 #   ambrosio check [--dry-run]   # the whole loop (silent if host down or nothing new)
-#   ambrosio status              # host reachability + currently-loaded models + seen count
+#   ambrosio status              # host reachability + currently-loaded models + seen count + want-list
 # Config: $AMBROSIO_HOME/config. Notifies via botline.
+#
+# RETRY CADENCE (2026-08-14): the M5 isn't always on the tailnet — it's a laptop, not an
+# always-on host. The schd job driving `check` runs every 4 hours (was daily until Jonathan
+# flagged that as too sparse a retry window), not something this script manages itself — `check`
+# is cheap and safe to run often: the host_up gate below is a single 6s-timeout curl, so an
+# unreachable M5 costs one fast probe and exits, no wasted work. See schd job d22dacaa (or
+# `schd list | grep -i ambrosio` for whatever superseded it) for the actual cadence.
+#
+# WANT-LIST (2026-08-14): $AMBROSIO_HOME/wantlist.txt holds specific model family terms Jonathan
+# explicitly wants pulled, distinct from the reactive HF-trending scan below (which only sees
+# whatever's trending THIS run — a wanted model that isn't currently trending would never surface
+# through that path alone). Want-list terms are tried FIRST every run, using the exact same
+# resolve_mlx_url + SEEN + MAX_PER_RUN machinery as trending candidates — no separate code path,
+# so a want-list entry gets the same size-cap/quant-preference/retry treatment as anything else.
+# An entry stays in the file (edit it directly, one term per line, `#` for comments) until it
+# either pulls successfully (then it's in $SEEN like any other model and won't re-pull) or JS
+# removes it — this is what makes it "durable across down periods": it isn't a queue that drains,
+# it's a standing list that keeps getting retried every 4h run until it lands or is removed.
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 AMBROSIO_HOME="${AMBROSIO_HOME:-$HOME/.ambrosio}"
@@ -14,6 +32,15 @@ mkdir -p "$AMBROSIO_HOME"
 CONF="$AMBROSIO_HOME/config"
 BOTLINE="${BOTLINE_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/botline/botline}"
 SEEN="$AMBROSIO_HOME/seen.txt"; touch "$SEEN"
+WANTLIST="$AMBROSIO_HOME/wantlist.txt"
+if [ ! -f "$WANTLIST" ]; then
+cat > "$WANTLIST" <<'WL'
+# ambrosio want-list — one model family search term per line (same term shape hot_candidates
+# would produce, e.g. "qwen3.6" or "glm-6"), '#' for comments, blank lines ignored. Tried FIRST
+# every run, ahead of the HF-trending scan, through the same resolve_mlx_url/SEEN/MAX_PER_RUN
+# path — no special-casing. Stays here until it pulls successfully or you remove the line.
+WL
+fi
 if [ ! -f "$CONF" ]; then
 cat > "$CONF" <<'CFG'
 # Headroom host running LM Studio (the play host). M5 now; repoint to the Strix Linux box later.
@@ -173,11 +200,15 @@ case "${1:-check}" in
   status)
     if host_up; then echo "host $HOST: UP"; echo "loaded:"; loaded_models | sed 's/^/  /'; else echo "host $HOST: DOWN (asleep/unreachable) — ambrosio is inert"; fi
     echo "seen: $(wc -l <"$SEEN" | tr -d ' ')"
+    echo "want-list ($WANTLIST):"
+    grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null | sed 's/^/  /' || echo "  (empty)"
     echo "trending-frontier candidates right now:"; hot_candidates | sed 's/^/  /' | head -10 ;;
   check)
     dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
     if ! host_up; then log "host $HOST down — inert (gated)"; exit 0; fi
     have="$(loaded_models)"; pulled=""; n=0
+    # want-list first (explicit asks outrank whatever HF happens to be trending this run), then
+    # the reactive trending scan — same loop body handles both, same SEEN/MAX_PER_RUN treatment.
     while IFS= read -r term; do
       [ -z "$term" ] && continue
       [ "$n" -ge "$MAX_PER_RUN" ] && { log "hit MAX_PER_RUN=$MAX_PER_RUN; remaining candidates wait for next run"; break; }
@@ -200,7 +231,7 @@ case "${1:-check}" in
       if [ "$ok" -eq 1 ]; then
         echo "$term" >>"$SEEN"; pulled="$pulled $term"; n=$((n+1)); log "pulled $term ($url) on $HOST"
       else log "pull FAILED for '$term' ($url) after resume retry — see $AMBROSIO_HOME/pull.log; will resume next run"; fi
-    done < <(hot_candidates)
+    done < <(grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null; hot_candidates)
     pulled="$(echo "$pulled" | xargs 2>/dev/null || true)"
     [ -z "$pulled" ] && { log "no new hot models"; exit 0; }
     command -v "$OMNIROUTE" >/dev/null && "$OMNIROUTE" models "$OMNIROUTE_NODE" >/dev/null 2>&1 || true
