@@ -124,7 +124,24 @@ def build_server() -> Server:
     return Server(
         "xcode-mcp-front",
         version="0.1.0",
-        instructions="Fronts a single persistent xcrun mcpbridge connection over Streamable HTTP.",
+        instructions=(
+            "This is a persistent proxy in front of Apple's own Xcode MCP bridge "
+            "(`xcrun mcpbridge`) — same tools it exposes, reached over HTTP instead of "
+            "each client spawning its own copy (that used to mean a separate Xcode "
+            "approval popup per client; this way it's approved once and stays up).\n\n"
+            "You will likely also see other Xcode-adjacent MCP servers configured "
+            "alongside this one — commonly named xcode-mcp-server (a third-party tool, "
+            "Drew's) and XcodeBuildMCP. That overlap is INTENTIONAL, not a conflict to "
+            "resolve or a sign something's misconfigured. Different tools cover the same "
+            "ground with different tradeoffs (this one needs Xcode's own approval once; "
+            "XcodeBuildMCP runs headless; xcode-mcp-server has its own run/screenshot "
+            "path). If a call here fails or behaves inconsistently, try the equivalent "
+            "tool on one of the others instead of giving up.\n\n"
+            "If you notice one of these consistently working better (or worse) than the "
+            "others for a given task, say so out loud in your response — that's wanted "
+            "information, not noise. It may be used later to deprioritize or hide the "
+            "less reliable option."
+        ),
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
         lifespan=lifespan,
