@@ -155,6 +155,14 @@ XCODE_APP_PATH = os.environ.get("XCODE_MCP_FRONT_XCODE_APP_PATH", "/Applications
 XCODE_BINARY_PATH = f"{XCODE_APP_PATH.rstrip('/')}/Contents/MacOS/Xcode"
 RECONNECT_POLL_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_RECONNECT_POLL_S", "5"))
 CONNECT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CONNECT_TIMEOUT_S", "15"))
+# Generous on purpose - a real Xcode build_project call can legitimately run
+# for minutes. The point isn't to bound normal work, it's to make sure NO call
+# can wedge the daemon forever (found live, 2026-08-14: with no timeout at all,
+# one genuinely hung upstream call held the connection lock for 2+ minutes and
+# counting, wedging every future call to that upstream, single-upstream or
+# combined, until manually restarted). Raise this if a real workload needs
+# longer than the default.
+CALL_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CALL_TIMEOUT_S", "120"))
 SERVER_NAME = os.environ.get("XCODE_MCP_FRONT_SERVER_NAME", "xcode-mcp-front")
 
 logging.basicConfig(level=logging.INFO, format=f"%(asctime)s {SERVER_NAME} %(message)s")
@@ -195,14 +203,41 @@ def _xcode_is_running() -> bool:
 
 
 async def _run_osascript(script: str) -> bytes:
+    """Raises on a nonzero exit instead of returning empty bytes. Found by
+    convocation review, 2026-08-14: with stderr sent to DEVNULL and no
+    returncode check, a TCC grant getting revoked or dying (the documented
+    failure mode after any edit to the ad-hoc-signed wrapper .app — new hash,
+    dead grant) made osascript exit nonzero with an error, which this
+    previously returned as plain b"" — indistinguishable from "no dialog
+    showing". The click loop would then silently stop working with nothing in
+    the log naming the actual cause. Now surfaces it: caller's except-block
+    already logs at warning level, so a dead grant shows up as a real,
+    diagnosable log line instead of a silent no-op.
+
+    Also found LIVE the same day, the hard way: a real System Events hang
+    (osascript stuck talking to it, unrelated to the return-code fix above —
+    System Events itself was wedged) piled up one leaked orphan osascript
+    process EVERY poll tick, forever, because `asyncio.wait_for` timing out
+    only abandons Python's own wait — it does NOT kill the underlying
+    subprocess. Confirmed live: 30+ orphaned osascript processes accumulated
+    in under 10 minutes before this was caught, and System Events itself
+    became unresponsive to even a basic query as a result. Now explicitly
+    kills the process on timeout instead of leaving it to run forever."""
     proc = await asyncio.create_subprocess_exec(
         "osascript",
         "-e",
         script,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
     )
-    out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()  # reap it — don't leave a zombie behind either
+        raise RuntimeError("osascript timed out after 5s (System Events may be unresponsive)")
+    if proc.returncode != 0:
+        raise RuntimeError(f"osascript exited {proc.returncode}: {err.decode(errors='replace').strip()}")
     return out
 
 
@@ -245,7 +280,8 @@ end tell
     try:
         out = await _run_osascript(read_script)
     except Exception as e:
-        log.debug("checking for an approval dialog failed (harmless, will retry next tick): %s", e)
+        log.warning("checking for an approval dialog failed (will retry, but if this repeats, check "
+                     "whether the wrapper .app's Accessibility/Automation grant is still valid): %s", e)
         return False
 
     text = out.decode(errors="replace")
@@ -274,7 +310,8 @@ end tell
     try:
         out2 = await _run_osascript(click_script)
     except Exception as e:
-        log.debug("clicking the approval dialog failed (harmless, will retry next tick): %s", e)
+        log.warning("clicking the approval dialog failed (will retry, but if this repeats, check "
+                     "whether the wrapper .app's Accessibility/Automation grant is still valid): %s", e)
         return False
 
     clicked = b"clicked" in out2
@@ -308,8 +345,16 @@ class Upstream:
             if self.session is None:
                 return types.ListToolsResult(tools=[])
             try:
-                return await self.session.list_tools(params=params)
+                with anyio.fail_after(CALL_TIMEOUT_SECONDS):
+                    return await self.session.list_tools(params=params)
             except Exception as e:
+                # Found live, 2026-08-14: this call had NO timeout at all before
+                # this fix — a genuinely hung upstream call (confirmed: a real
+                # tool call sat for 2+ minutes with nothing in the log, no
+                # timeout, no recovery) held self.lock forever, permanently
+                # wedging this upstream for every future call, single-upstream
+                # or combined. A timeout here means a hang gets treated the
+                # same as any other failure: marked broken, reconnected fresh.
                 self.known_broken = True
                 log.warning("[%s] list_tools failed, marking connection broken: %s", self.name, e)
                 return types.ListToolsResult(tools=[])
@@ -323,8 +368,10 @@ class Upstream:
                 return None
             log.info("[%s] call_tool %s", self.name, tool_name)
             try:
-                result = await self.session.call_tool(tool_name, arguments)
+                with anyio.fail_after(CALL_TIMEOUT_SECONDS):
+                    result = await self.session.call_tool(tool_name, arguments)
             except Exception as e:
+                # See list_tools' comment — same missing-timeout bug, same fix.
                 self.known_broken = True
                 log.warning("[%s] call_tool %s failed, marking connection broken: %s", self.name, tool_name, e)
                 return None

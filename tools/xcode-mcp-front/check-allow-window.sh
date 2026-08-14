@@ -16,6 +16,15 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 
 TARGET_PID="${1:-}"
 
+# Digits-only guard: TARGET_PID gets interpolated straight into AppleScript
+# source below. A PID is only ever digits, so anything else is either a typo
+# or an attempt to break out of the string literal — reject it loud rather
+# than let it reach osascript.
+if [ -n "$TARGET_PID" ] && ! [[ "$TARGET_PID" =~ ^[0-9]+$ ]]; then
+  echo "check-allow-window.sh: '$TARGET_PID' is not a plain PID (digits only)" >&2
+  exit 64
+fi
+
 if [ -z "$TARGET_PID" ]; then
   osascript -e '
 tell application "System Events" to tell process "Xcode"
@@ -43,7 +52,11 @@ tell application \"System Events\" to tell process \"Xcode\"
       try
         set winText to (value of every static text of w) as string
       end try
-      if winText contains (\"PID: \" & my_pid) then
+      -- exact match, not substring: \"PID: 123\" must not false-match a
+      -- dialog whose real PID is 12345 (found by convocation review,
+      -- 2026-08-14). The PID line is always immediately followed by a
+      -- newline before \"Signed by: \", so require that boundary.
+      if winText contains (\"PID: \" & my_pid & (ASCII character 10)) then
         return \"match\"
       end if
     end if

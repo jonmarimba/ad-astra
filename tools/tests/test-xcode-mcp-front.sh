@@ -17,13 +17,13 @@ need python3 "brew install python3"
 mcp_call() { # usage: mcp_call <port> <method> <params-json>  -> prints the raw SSE response body
   local port="$1" method="$2" params="$3"
   local init_resp session
-  init_resp="$(curl -s -D - -X POST "http://127.0.0.1:$port/mcp" \
+  init_resp="$(curl -s --max-time 30 -D - -X POST "http://127.0.0.1:$port/mcp" \
     -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
     -H "MCP-Protocol-Version: 2025-06-18" \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}')"
   session="$(printf '%s' "$init_resp" | grep -i "mcp-session-id" | tr -d '\r' | awk '{print $2}')"
   [ -n "$session" ] || { echo "NO_SESSION"; return 1; }
-  curl -s -X POST "http://127.0.0.1:$port/mcp" \
+  curl -s --max-time 30 -X POST "http://127.0.0.1:$port/mcp" \
     -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
     -H "MCP-Protocol-Version: 2025-06-18" -H "Mcp-Session-Id: $session" \
     -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"$method\",\"params\":$params}"

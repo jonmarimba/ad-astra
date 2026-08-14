@@ -140,7 +140,14 @@ cmd_launchd_install() {
   # Config file, not an env var: this process is launched via a signed .app
   # bundle rather than a plain fork/exec, and env propagation through that path
   # isn't reliable. daemon.py reads this file directly off disk instead.
-  echo "AUTO_ALLOW=\"${XCODE_MCP_FRONT_AUTO_ALLOW:-1}\"" > "$STATE/config"
+  #
+  # Key MUST be the full XCODE_MCP_FRONT_AUTO_ALLOW name, not a bare AUTO_ALLOW
+  # (that was a real live bug, found by convocation review 2026-08-14: daemon.py
+  # only ever reads os.environ["XCODE_MCP_FRONT_AUTO_ALLOW"], so a bare
+  # AUTO_ALLOW key was silently ignored - the documented "set
+  # XCODE_MCP_FRONT_AUTO_ALLOW=0 before install" off switch did nothing under
+  # launchd, only ever mattered for the never-used manual-mode env-var path).
+  echo "XCODE_MCP_FRONT_AUTO_ALLOW=\"${XCODE_MCP_FRONT_AUTO_ALLOW:-1}\"" > "$STATE/config"
   cat > "$LAUNCHD_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

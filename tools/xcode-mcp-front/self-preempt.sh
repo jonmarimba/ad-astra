@@ -16,8 +16,16 @@
 # only touch a pid that's actually bound to our own port.
 #
 # Requires PORT to be set by the caller before sourcing this.
+#
+# -nP on lsof is load-bearing, not decoration: without it, lsof substitutes
+# /etc/services names for well-known ports. Port 8765 is registered there as
+# "ultraseek-http" (confirmed live, 2026-08-14 - the running daemon's lsof line
+# reads "TCP localhost:ultraseek-http (LISTEN)"), so a bare `grep ":8765 "`
+# never matches and this whole self-preempt step silently no-ops for that
+# port - exactly the stale-daemon-holds-the-port disease this script exists to
+# cure. Port 8767 happened to work by luck (no /etc/services entry for it).
 for _pid in $(pgrep -f "$HERE/daemon.py" 2>/dev/null); do
-  if lsof -p "$_pid" 2>/dev/null | grep -q ":$PORT "; then
+  if lsof -nP -p "$_pid" 2>/dev/null | grep -q ":$PORT "; then
     echo "self-preempt: killing stale daemon.py (pid $_pid) on port $PORT before starting fresh"
     kill -9 "$_pid" 2>/dev/null
   fi
