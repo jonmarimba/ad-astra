@@ -16,12 +16,32 @@ daemon, and front it with a Streamable HTTP MCP server. Every downstream client
 at this daemon's URL instead of spawning mcpbridge itself. Xcode approves ONE PID,
 once, and stays approved as long as this daemon (and its mcpbridge child) keep running.
 
+Runs in one of two modes, chosen by which env vars are set (see below):
+  - SINGLE-upstream (default, what's been running since 2026-08-14): fronts just
+    one upstream (normally mcpbridge). Dumb passthrough — tool names forwarded
+    unprefixed, exactly as the upstream advertises them. This is the deployed
+    xcode-mcp-front daemon; nothing about its behavior changes in this mode.
+  - MULTI-upstream (XCODE_MCP_FRONT_UPSTREAMS set): fronts several upstreams
+    behind the SAME endpoint, tool names prefixed per-upstream
+    (`<name>__<tool>`, e.g. `xcode__BuildProject`, `drews__run_project_unmonitored`)
+    so two upstreams that happen to share a tool name can't collide or shadow
+    each other. Built for exactly one reason: Drew's xcode-mcp
+    (`drews-xcode-mcp`) has no approval-dialog friction on its own — a client can
+    already spawn `uvx drews-xcode-mcp` directly with zero setup, no wrapper
+    needed — so it never got its own standalone daemon (built, verified, then
+    torn back down, 2026-08-14 — see git history). But "one endpoint with BOTH
+    Xcode tools available, prefixed so there's no confusion" is a real,
+    different thing worth having alongside the single-upstream daemon, not
+    instead of it. Both modes share every line of connection/click/reconnect
+    logic below via the Upstream class — no duplicated logic between them.
+
 This is a dumb passthrough, not a real aggregator: it forwards list_tools/call_tool
-to the one shared upstream ClientSession and returns whatever comes back. It does not
-interpret tool semantics, and does not (yet) multiplex more than one upstream. Calls
-are serialized through a lock: mcpbridge's tolerance for concurrent overlapping calls
-hasn't been tested, so this starts correctness-first. Tool calls are human-paced
-anyway; serialization shouldn't be felt in practice.
+to the relevant upstream ClientSession(s) and returns whatever comes back. It does
+not interpret tool semantics. Calls to a given upstream are serialized through
+that upstream's own lock (tolerance for concurrent overlapping calls hasn't been
+tested, so this starts correctness-first — tool calls are already human-paced, so
+serialization shouldn't be felt in practice); different upstreams' calls are
+fully independent of each other.
 
 VALIDATED 2026-08-14 (all live, against a real Xcode):
 - One connection tolerates many sequential calls of different shapes, no reconnect
@@ -34,35 +54,54 @@ VALIDATED 2026-08-14 (all live, against a real Xcode):
   process keeps running, reconnecting mcpbridge in a loop should NOT need a fresh
   approval each time, only the very first connection (or after a genuine
   permission reset) does.
+- The approval prompt is requested LAZILY, on the first list_tools call, not at
+  the initial connect — the per-upstream reconnect loop polls for it (and
+  clicks it) continuously in the connected steady-state too, not just while
+  reconnecting.
+- Xcode's approval dialogs do NOT stack — only one shows at a time, and a stale
+  unanswered one blocks the next (including this daemon's own) from appearing.
+  The click logic reads each dialog's own PID: clicks Allow for our own live
+  pid, clicks Don't Allow for a dead pid (nobody's waiting on it — a plain
+  os.kill(pid,0) liveness check, no PID-history file needed), leaves any other
+  live pid's dialog strictly alone.
+- Drew's xcode-mcp (drews-xcode-mcp) has NO approval-dialog behavior at all —
+  folder-allowlist auth (XCODEMCP_ALLOWED_FOLDERS / --allowed) instead of a
+  live per-PID popup. Its Upstream instance just never finds a dialog to click;
+  harmless no-op, no special-casing needed.
 
-Recovery design (Jonathan, 2026-08-14, after watching a stuck approval sit
-unclicked because the click-attempt and the reconnect-attempt weren't on the
-same timer): "any time the connection is lost... poll for xcode, then poll for
-the allow window... because you may not know if it's broken because it lost
-auth somehow or if xcode isn't running." One loop, in-process (no more
-exit-and-let-the-supervisor-respawn — reconnecting in place is simpler and
-doesn't burn a fresh PID / fresh approval each time): while not connected,
-every poll tick — check Xcode is running, best-effort click "Allow" if it's
-showing, then attempt a fresh connect. Gentle (a few seconds between tries),
-indefinite, and it's the SAME check whether the break was "Xcode quit" or
-"connection died some other way" — no need to know which, the recovery is
-identical either way.
-
-Env overrides:
+Env overrides — SINGLE-upstream mode (default):
   XCODE_MCP_FRONT_UPSTREAM_CMD    default "xcrun"
   XCODE_MCP_FRONT_UPSTREAM_ARGS   default "mcpbridge" (space-separated)
-  XCODE_MCP_FRONT_HOST            default "127.0.0.1" (do not bind wider — no auth layer)
-  XCODE_MCP_FRONT_PORT            default "8765"
-  XCODE_MCP_FRONT_XCODE_APP_PATH  default "/Applications/Xcode.app" — the reconnect
-                                   loop matches THIS exact binary path, not a bare
-                                   process name (Xcode.app and Xcode-beta.app share
-                                   both their process name and bundle ID, so only
-                                   the full path tells them apart — confirmed live)
+  XCODE_MCP_FRONT_REQUIRE_XCODE   default "1" — wait for Xcode.app before connecting.
+                                   Set "0" for an upstream (like drews-xcode-mcp)
+                                   that doesn't need a live Xcode process at all.
+  XCODE_MCP_FRONT_AUTO_ALLOW      default "1" — click-Allow-automatically. Off
+                                   switch for anyone who'd rather approve by hand.
+  XCODE_MCP_FRONT_SERVER_NAME     default "xcode-mcp-front"
+
+Env overrides — MULTI-upstream mode (mutually exclusive with the single-upstream
+UPSTREAM_CMD/ARGS/REQUIRE_XCODE vars above — set THIS instead):
+  XCODE_MCP_FRONT_UPSTREAMS       semicolon-separated upstream specs, each
+                                   "name:require_xcode:command:arg1,arg2,...".
+                                   Example:
+                                   "xcode:1:xcrun:mcpbridge;drews:0:uvx:drews-xcode-mcp"
+                                   Tool names are prefixed "<name>__" in the
+                                   merged tool list and un-prefixed again when
+                                   routing a call back to that upstream.
+
+Env overrides — both modes:
+  XCODE_MCP_FRONT_HOST             default "127.0.0.1" (do not bind wider — no auth layer)
+  XCODE_MCP_FRONT_PORT             default "8765"
+  XCODE_MCP_FRONT_XCODE_APP_PATH   default "/Applications/Xcode.app" — the reconnect
+                                    loop matches THIS exact binary path, not a bare
+                                    process name (Xcode.app and Xcode-beta.app share
+                                    both their process name and bundle ID, so only
+                                    the full path tells them apart — confirmed live)
   XCODE_MCP_FRONT_RECONNECT_POLL_S default "5" (seconds between reconnect attempts)
   XCODE_MCP_FRONT_CONNECT_TIMEOUT_S default "15" (per-attempt connect timeout, so a
-                                   stuck approval dialog can't hang a whole attempt
-                                   forever — it just times out and the next tick
-                                   tries the click again)
+                                    stuck approval dialog can't hang a whole attempt
+                                    forever — it just times out and the next tick
+                                    tries the click again)
 """
 
 import asyncio
@@ -81,10 +120,10 @@ from mcp.server.lowlevel.server import ServerRequestContext
 
 
 def _load_config_file() -> None:
-    """Reached via `open -a` in launchd mode (see xcodemcpfront_launch.sh), which
-    does NOT reliably forward a launchd plist's EnvironmentVariables into the
-    launched app's process — a LaunchServices quirk, separate from the TCC one
-    this tool is already built around. A config file sidesteps that entirely:
+    """Reached via a wrapped .app under launchd in real deployment, which does
+    NOT reliably forward a launchd plist's EnvironmentVariables into the
+    launched app's process (a LaunchServices quirk, separate from the TCC one
+    this tool is already built around). A config file sidesteps that entirely:
     it's read directly off disk, so it works regardless of how this process was
     launched. Real env vars still win if both are set (checked with setdefault,
     same layering as ollama-watch's config convention elsewhere in this repo)."""
@@ -102,13 +141,8 @@ def _load_config_file() -> None:
 
 _load_config_file()
 
-UPSTREAM_COMMAND = os.environ.get("XCODE_MCP_FRONT_UPSTREAM_CMD", "xcrun")
-UPSTREAM_ARGS = os.environ.get("XCODE_MCP_FRONT_UPSTREAM_ARGS", "mcpbridge").split()
 HOST = os.environ.get("XCODE_MCP_FRONT_HOST", "127.0.0.1")
 PORT = int(os.environ.get("XCODE_MCP_FRONT_PORT", "8765"))
-# Off switch for the click-Allow-automatically behavior, for anyone who'd rather
-# affirmatively approve each connection by hand. Default on — matches what's
-# already running today.
 AUTO_ALLOW = os.environ.get("XCODE_MCP_FRONT_AUTO_ALLOW", "1") == "1"
 
 # Both /Applications/Xcode.app and /Applications/Xcode-beta.app share the exact
@@ -121,46 +155,10 @@ XCODE_APP_PATH = os.environ.get("XCODE_MCP_FRONT_XCODE_APP_PATH", "/Applications
 XCODE_BINARY_PATH = f"{XCODE_APP_PATH.rstrip('/')}/Contents/MacOS/Xcode"
 RECONNECT_POLL_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_RECONNECT_POLL_S", "5"))
 CONNECT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CONNECT_TIMEOUT_S", "15"))
-# This daemon fronts more than one upstream now (mcpbridge, drews-xcode-mcp).
-# mcpbridge needs a live Xcode.app to bridge to at all; drews-xcode-mcp does
-# NOT (confirmed live, 2026-08-14: it connects and lists tools with no Xcode
-# process running, no approval dialog either — a folder-allowlist auth model
-# instead). So the "wait for Xcode" gate before even attempting a connect is
-# only correct for SOME upstreams — make it optional rather than bake in the
-# mcpbridge-specific assumption.
-REQUIRE_XCODE_RUNNING = os.environ.get("XCODE_MCP_FRONT_REQUIRE_XCODE", "1") == "1"
 SERVER_NAME = os.environ.get("XCODE_MCP_FRONT_SERVER_NAME", "xcode-mcp-front")
 
 logging.basicConfig(level=logging.INFO, format=f"%(asctime)s {SERVER_NAME} %(message)s")
 log = logging.getLogger(SERVER_NAME)
-
-# Serializes every downstream call through the one shared upstream session.
-# Set once a connection is live; None means "not connected right now" (a client
-# that calls while disconnected gets a clear error instead of a hang or crash).
-upstream_lock = anyio.Lock()
-upstream_session: ClientSession | None = None
-
-# Flipped True the first time a call proves the current connection is actually
-# dead. The connection loop watches for this to know when to stop holding the
-# session open and go back to reconnecting.
-upstream_known_broken = False
-
-
-def _not_connected_result() -> types.CallToolResult:
-    return types.CallToolResult(
-        content=[
-            types.TextContent(
-                type="text",
-                text=(
-                    "xcode-mcp-front: not connected to Xcode right now. This daemon "
-                    "retries on its own every few seconds (checking Xcode is running "
-                    "and clicking its approval prompt if one is showing) — a retry "
-                    "shortly should work without any manual action."
-                ),
-            )
-        ],
-        is_error=True,
-    )
 
 
 def _pid_is_alive(pid_str: str) -> bool:
@@ -212,7 +210,9 @@ async def _click_allow_if_present() -> bool:
     """Best-effort, narrowly scoped: only ever touches a button whose title is
     the exact literal string "Allow" or "Don't Allow", only in Xcode's own
     process. This is the one dialog this tool exists to eat, not a general
-    click-any-prompt macro.
+    click-any-prompt macro. Harmless no-op for an upstream (like
+    drews-xcode-mcp) that never triggers this dialog at all — it just never
+    finds anything to click.
 
     Xcode's approval dialogs do NOT stack (confirmed live, 2026-08-14 — only
     one is ever showing; a new connection attempt's own dialog stays hidden
@@ -285,123 +285,218 @@ end tell
     return clicked and action == "Allow"
 
 
-async def on_list_tools(
-    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
-) -> types.ListToolsResult:
-    global upstream_known_broken
-    async with upstream_lock:
-        if upstream_session is None:
-            return types.ListToolsResult(tools=[])
-        try:
-            return await upstream_session.list_tools(params=params)
-        except Exception as e:
-            upstream_known_broken = True
-            log.warning("list_tools failed, marking connection broken: %s", e)
-            return types.ListToolsResult(tools=[])
+class Upstream:
+    """One upstream MCP server this daemon fronts, and everything needed to
+    keep a persistent connection to it alive. In single-upstream mode there's
+    exactly one of these and its tools are forwarded unprefixed (unchanged
+    behavior from before multi-upstream support existed). In multi-upstream
+    mode there are several, and the aggregator (see build_server) prefixes
+    each one's tools with `self.name + "__"` so two upstreams that happen to
+    share a tool name can't collide."""
+
+    def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool):
+        self.name = name
+        self.command = command
+        self.args = args
+        self.require_xcode_running = require_xcode_running
+        self.lock = anyio.Lock()
+        self.session: ClientSession | None = None
+        self.known_broken = False
+
+    async def list_tools(self, params: types.PaginatedRequestParams | None) -> types.ListToolsResult:
+        async with self.lock:
+            if self.session is None:
+                return types.ListToolsResult(tools=[])
+            try:
+                return await self.session.list_tools(params=params)
+            except Exception as e:
+                self.known_broken = True
+                log.warning("[%s] list_tools failed, marking connection broken: %s", self.name, e)
+                return types.ListToolsResult(tools=[])
+
+    async def call_tool(self, tool_name: str, arguments: dict) -> types.CallToolResult | None:
+        """Returns None if not connected — caller decides how to report that,
+        since the aggregator needs a slightly different message than the
+        single-upstream case (naming which upstream is down)."""
+        async with self.lock:
+            if self.session is None:
+                return None
+            log.info("[%s] call_tool %s", self.name, tool_name)
+            try:
+                result = await self.session.call_tool(tool_name, arguments)
+            except Exception as e:
+                self.known_broken = True
+                log.warning("[%s] call_tool %s failed, marking connection broken: %s", self.name, tool_name, e)
+                return None
+            if not isinstance(result, types.CallToolResult):
+                # upstream returned something this dumb proxy doesn't forward
+                # (e.g. InputRequiredResult) — surface as an error, don't crash.
+                return types.CallToolResult(
+                    content=[
+                        types.TextContent(
+                            type="text",
+                            text=f"xcode-mcp-front: [{self.name}] unsupported upstream result type "
+                            f"{type(result).__name__}",
+                        )
+                    ],
+                    is_error=True,
+                )
+            return result
+
+    async def connection_manager(self) -> None:
+        """Owns this upstream's connection for the daemon's whole life. Loops
+        forever: while not connected, check Xcode is running (if this upstream
+        needs it), best-effort click its approval prompt if showing, attempt a
+        fresh connect. Once connected, holds the session open — polling (and
+        clicking) on the same timer — until a call proves it's broken, then
+        goes back to reconnecting. In-process, never exits on its own; a
+        genuine crash is what the process supervisor (launchd) is for."""
+        params = StdioServerParameters(command=self.command, args=self.args)
+        while True:
+            if self.require_xcode_running and not _xcode_is_running():
+                log.info("[%s] Xcode not running, waiting", self.name)
+                await anyio.sleep(RECONNECT_POLL_SECONDS)
+                continue
+
+            if AUTO_ALLOW:
+                await _click_allow_if_present()
+
+            log.info("[%s] attempting connect: %s %s", self.name, self.command, self.args)
+            try:
+                async with stdio_client(params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
+                            await session.initialize()
+                        async with self.lock:
+                            self.session = session
+                            self.known_broken = False
+                        log.info("[%s] connected — serving until this breaks", self.name)
+                        while not self.known_broken:
+                            await anyio.sleep(RECONNECT_POLL_SECONDS)
+                            # The approval prompt has been observed appearing
+                            # AFTER a successful initialize() — requested
+                            # lazily, apparently on the first real list_tools
+                            # call rather than at the handshake. So keep
+                            # checking even once connected, not just while
+                            # reconnecting — safe every tick regardless, since
+                            # it only ever acts on our own pid or a dead one.
+                            if AUTO_ALLOW:
+                                await _click_allow_if_present()
+            except Exception as e:
+                log.warning("[%s] connect attempt failed (will retry): %s", self.name, e)
+
+            async with self.lock:
+                self.session = None
+            log.info("[%s] not connected, retrying in %ss", self.name, RECONNECT_POLL_SECONDS)
+            await anyio.sleep(RECONNECT_POLL_SECONDS)
 
 
-async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
-    global upstream_known_broken
-    async with upstream_lock:
-        if upstream_session is None:
-            return _not_connected_result()
-        log.info("call_tool %s", params.name)
-        try:
-            result = await upstream_session.call_tool(params.name, params.arguments)
-        except Exception as e:
-            upstream_known_broken = True
-            log.warning("call_tool %s failed, marking connection broken: %s", params.name, e)
-            return _not_connected_result()
-        if not isinstance(result, types.CallToolResult):
-            # upstream returned something this dumb proxy doesn't forward (e.g.
-            # InputRequiredResult) — surface it as an error rather than crash the daemon.
-            return types.CallToolResult(
-                content=[
-                    types.TextContent(
-                        type="text",
-                        text=f"xcode-mcp-front: unsupported upstream result type {type(result).__name__}",
-                    )
-                ],
-                is_error=True,
+def _parse_multi_upstreams(spec: str) -> list[Upstream]:
+    """"name:require_xcode:command:arg1,arg2,...;name2:..." -> [Upstream, ...]"""
+    upstreams = []
+    for chunk in spec.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        name, require_xcode, command, argstr = chunk.split(":", 3)
+        args = [a for a in argstr.split(",") if a]
+        upstreams.append(Upstream(name.strip(), command.strip(), args, require_xcode.strip() == "1"))
+    if not upstreams:
+        raise ValueError(f"XCODE_MCP_FRONT_UPSTREAMS set but parsed to zero upstreams: {spec!r}")
+    return upstreams
+
+
+def _build_upstreams() -> list[Upstream]:
+    multi_spec = os.environ.get("XCODE_MCP_FRONT_UPSTREAMS")
+    if multi_spec:
+        return _parse_multi_upstreams(multi_spec)
+    return [
+        Upstream(
+            name="default",
+            command=os.environ.get("XCODE_MCP_FRONT_UPSTREAM_CMD", "xcrun"),
+            args=os.environ.get("XCODE_MCP_FRONT_UPSTREAM_ARGS", "mcpbridge").split(),
+            require_xcode_running=os.environ.get("XCODE_MCP_FRONT_REQUIRE_XCODE", "1") == "1",
+        )
+    ]
+
+
+def _not_connected_result(detail: str) -> types.CallToolResult:
+    return types.CallToolResult(
+        content=[
+            types.TextContent(
+                type="text",
+                text=(
+                    f"xcode-mcp-front: {detail} This daemon retries on its own every few "
+                    "seconds (checking Xcode is running and clicking its approval prompt if "
+                    "one is showing) — a retry shortly should work without any manual action."
+                ),
             )
+        ],
+        is_error=True,
+    )
+
+
+def build_server(upstreams: list[Upstream]) -> Server:
+    single = len(upstreams) == 1
+    prefix_of = {u: (f"{u.name}__" if not single else "") for u in upstreams}
+    upstream_by_prefix = {prefix_of[u]: u for u in upstreams}
+
+    async def on_list_tools(
+        ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+    ) -> types.ListToolsResult:
+        all_tools: list[types.Tool] = []
+        for u in upstreams:
+            result = await u.list_tools(params)
+            prefix = prefix_of[u]
+            for t in result.tools:
+                if prefix:
+                    t = t.model_copy(update={"name": f"{prefix}{t.name}"})
+                all_tools.append(t)
+        return types.ListToolsResult(tools=all_tools)
+
+    async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
+        name = params.name
+        target = None
+        tool_name = name
+        for prefix, u in upstream_by_prefix.items():
+            if prefix and name.startswith(prefix):
+                target = u
+                tool_name = name[len(prefix) :]
+                break
+        if target is None:
+            # single-upstream mode (no prefixes at all), or a multi-upstream
+            # call that somehow arrived unprefixed — route to the sole
+            # upstream if there's only one, otherwise this is a real error.
+            if single:
+                target = upstreams[0]
+            else:
+                return types.CallToolResult(
+                    content=[
+                        types.TextContent(
+                            type="text",
+                            text=f"xcode-mcp-front: tool name '{name}' doesn't match any known upstream prefix "
+                            f"({', '.join(p for p in upstream_by_prefix if p)})",
+                        )
+                    ],
+                    is_error=True,
+                )
+
+        result = await target.call_tool(tool_name, params.arguments)
+        if result is None:
+            return _not_connected_result(f"[{target.name}] not connected right now.")
         return result
 
-
-async def connection_manager() -> None:
-    """Owns the upstream connection for the daemon's whole life. Loops forever:
-    while not connected, check Xcode is running, best-effort click its approval
-    prompt if showing, then attempt a fresh connect — the SAME check whether the
-    prior break was "Xcode quit" or "connection died some other way", since
-    there's no way to tell which from here and the recovery is identical either
-    way. Once connected, holds the session open until a call proves it's broken,
-    then goes back to reconnecting. Never exits on its own; a genuine crash is
-    what the process supervisor (launchd) is for."""
-    global upstream_session, upstream_known_broken
-    params = StdioServerParameters(command=UPSTREAM_COMMAND, args=UPSTREAM_ARGS)
-    while True:
-        if REQUIRE_XCODE_RUNNING and not _xcode_is_running():
-            log.info("Xcode not running, waiting")
-            await anyio.sleep(RECONNECT_POLL_SECONDS)
-            continue
-
-        if AUTO_ALLOW:
-            await _click_allow_if_present()
-
-        log.info("attempting connect: %s %s", UPSTREAM_COMMAND, UPSTREAM_ARGS)
-        try:
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
-                        await session.initialize()
-                    async with upstream_lock:
-                        upstream_session = session
-                        upstream_known_broken = False
-                    log.info("connected — serving until this breaks")
-                    while not upstream_known_broken:
-                        await anyio.sleep(RECONNECT_POLL_SECONDS)
-                        # The approval prompt has been observed appearing AFTER a
-                        # successful initialize() — apparently requested lazily,
-                        # possibly on the first real tool call rather than at the
-                        # handshake (confirmed live, 2026-08-14: a dialog for this
-                        # exact daemon's own pid showed up well into a session
-                        # already marked "connected", and nothing was watching for
-                        # it). So keep checking even once connected, not just
-                        # while reconnecting — safe to run every tick regardless,
-                        # since it only ever acts on our own pid or a dead one.
-                        if AUTO_ALLOW:
-                            await _click_allow_if_present()
-        except Exception as e:
-            log.warning("connect attempt failed (will retry): %s", e)
-
-        async with upstream_lock:
-            upstream_session = None
-        log.info("not connected, retrying in %ss", RECONNECT_POLL_SECONDS)
-        await anyio.sleep(RECONNECT_POLL_SECONDS)
-
-
-@contextlib.asynccontextmanager
-async def lifespan(app: Server):
-    async with anyio.create_task_group() as tg:
-        tg.start_soon(connection_manager)
-        try:
-            yield {}
-        finally:
-            tg.cancel_scope.cancel()
-
-
-def build_server() -> Server:
-    return Server(
-        SERVER_NAME,
-        version="0.3.0",
-        instructions=(
+    names = ", ".join(u.name for u in upstreams)
+    if single:
+        instructions = (
             "This is a persistent proxy in front of Apple's own Xcode MCP bridge "
             "(`xcrun mcpbridge`) — same tools it exposes, reached over HTTP instead of "
             "each client spawning its own copy (that used to mean a separate Xcode "
             "approval popup per client; this way it's approved once and stays up).\n\n"
-            "If a call says 'not connected to Xcode right now', this daemon is already "
-            "retrying on its own every few seconds — checking Xcode is running and "
-            "clicking its approval prompt if one is showing — so a short retry should "
-            "work without any manual action.\n\n"
+            "If a call says 'not connected right now', this daemon is already retrying "
+            "on its own every few seconds — checking Xcode is running and clicking its "
+            "approval prompt if one is showing — so a short retry should work without "
+            "any manual action.\n\n"
             "You will likely also see other Xcode-adjacent MCP servers configured "
             "alongside this one — commonly named xcode-mcp-server (a third-party tool, "
             "Drew's) and XcodeBuildMCP. That overlap is INTENTIONAL, not a conflict to "
@@ -414,17 +509,45 @@ def build_server() -> Server:
             "others for a given task, say so out loud in your response — that's wanted "
             "information, not noise. It may be used later to deprioritize or hide the "
             "less reliable option."
-        ),
+        )
+    else:
+        instructions = (
+            f"This is a persistent proxy fronting MULTIPLE Xcode-adjacent MCP servers "
+            f"behind one endpoint: {names}. Every tool is prefixed with its upstream's "
+            f"name (e.g. `{upstreams[0].name}__SomeTool`) so two upstreams that happen to "
+            "expose a same-named tool can't collide or shadow each other — always use "
+            "the prefixed name shown in the tool list, never the bare upstream name.\n\n"
+            "If a call says 'not connected right now', that specific upstream is "
+            "reconnecting on its own — the others are unaffected, since each upstream "
+            "has its own independent connection. A short retry should work."
+        )
+
+    return Server(
+        SERVER_NAME,
+        version="0.4.0",
+        instructions=instructions,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
-        lifespan=lifespan,
+        lifespan=lambda app: _lifespan(app, upstreams),
     )
 
 
+@contextlib.asynccontextmanager
+async def _lifespan(app: Server, upstreams: list[Upstream]):
+    async with anyio.create_task_group() as tg:
+        for u in upstreams:
+            tg.start_soon(u.connection_manager)
+        try:
+            yield {}
+        finally:
+            tg.cancel_scope.cancel()
+
+
 def main() -> None:
-    server = build_server()
+    upstreams = _build_upstreams()
+    server = build_server(upstreams)
     app = server.streamable_http_app(host=HOST)
-    log.info("listening on http://%s:%s/mcp", HOST, PORT)
+    log.info("listening on http://%s:%s/mcp (upstreams: %s)", HOST, PORT, ", ".join(u.name for u in upstreams))
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 
 

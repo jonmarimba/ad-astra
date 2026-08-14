@@ -116,9 +116,16 @@ cmd_status() {
 # Direct-exec makes the app's process launchd's own direct child, so
 # kickstart/KeepAlive genuinely own its lifecycle. The TCC grant still applies
 # either way — it's pinned to the .app's identity, not to how it's launched.
-# Label/KeepAlive-shape/ThrottleInterval match the convention already established
-# by kickerd's own LaunchAgent (~/Library/LaunchAgents/com.jonathansaggau.kickerd.plist)
-# on this machine — consistency with what's already there, not a new convention.
+# Label/ThrottleInterval match the convention already established by kickerd's
+# own LaunchAgent (~/Library/LaunchAgents/com.jonathansaggau.kickerd.plist) on
+# this machine. KeepAlive does NOT match it, on purpose: kickerd uses
+# {SuccessfulExit: false} (only respawn on a genuine failure exit), but this
+# daemon's most likely failure mode — the port already in use — makes uvicorn
+# shut down gracefully with exit code 0, which {SuccessfulExit: false} reads as
+# "finished on purpose, don't respawn" (confirmed live, 2026-08-14 — the daemon
+# silently stayed dead after an EADDRINUSE). Plain `true` respawns regardless
+# of exit code, which is what a persistent service that should never
+# intentionally "finish" actually needs.
 LAUNCHD_LABEL="com.jonathansaggau.xcode-mcp-front"
 LAUNCHD_OLD_LABEL="local.xcode-mcp-front"  # pre-2026-08-14 label, cleaned up below if present
 LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
@@ -150,10 +157,7 @@ cmd_launchd_install() {
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<dict>
-		<key>SuccessfulExit</key>
-		<false/>
-	</dict>
+	<true/>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
 	<key>StandardOutPath</key>
