@@ -102,4 +102,4 @@ run_brand(){ # $1 label  $2... command
 ( cd "$REPO" && run_brand codex  codex exec --sandbox read-only "$P" ) &
 ( cd "$REPO" && run_brand ollama ollama run "$OMODEL" "$OP" ) &
 wait
-echo "convene[$NAME]: all brands returned. Raw findings in $OUT/$NAME.{claude,codex,qwen}.txt"
+echo "convene[$NAME]: all brands returned. Raw findings in $OUT/$NAME.{claude,codex,ollama}.txt"
