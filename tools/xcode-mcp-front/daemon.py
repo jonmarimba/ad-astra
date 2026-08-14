@@ -162,7 +162,15 @@ CONNECT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CONNECT_TIMEOUT_
 # counting, wedging every future call to that upstream, single-upstream or
 # combined, until manually restarted). Raise this if a real workload needs
 # longer than the default.
-CALL_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CALL_TIMEOUT_S", "120"))
+#
+# Default corrected to 600s (was 120s) by convocation review, 2026-08-14: 120s
+# contradicted this comment's own "can legitimately run for minutes" — a real
+# clean/first build commonly runs past 2 minutes, so the old default silently
+# killed and dropped exactly the workload it claimed to tolerate, then
+# reconnected and reported "not connected right now, retry shortly" — which is
+# actively misleading once this fires, since the build was killed mid-flight,
+# not merely delayed; a retry starts it over, it doesn't resume it.
+CALL_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CALL_TIMEOUT_S", "600"))
 SERVER_NAME = os.environ.get("XCODE_MCP_FRONT_SERVER_NAME", "xcode-mcp-front")
 
 logging.basicConfig(level=logging.INFO, format=f"%(asctime)s {SERVER_NAME} %(message)s")
@@ -265,15 +273,23 @@ async def _click_allow_if_present() -> bool:
         else's legitimate in-flight request, not ours to approve OR deny
     """
     my_pid = str(os.getpid())
+    # Iterate every window, not just window 1 — found by convocation review,
+    # 2026-08-14: the approval dialog isn't guaranteed to be window 1 (e.g. a
+    # project window frontmost, or the dialog opening as window 2). Window 1
+    # only would silently never find the dialog and leave it unclicked
+    # forever. check-allow-window.sh already iterated all windows correctly;
+    # this production path didn't match it.
     read_script = """
 tell application "System Events" to tell process "Xcode"
-  if exists (button "Allow" of window 1) then
-    set winText to ""
-    try
-      set winText to (value of every static text of window 1) as string
-    end try
-    return winText
-  end if
+  repeat with w in windows
+    if exists (button "Allow" of w) then
+      set winText to ""
+      try
+        set winText to (value of every static text of w) as string
+      end try
+      return winText
+    end if
+  end repeat
   return ""
 end tell
 """
@@ -300,10 +316,12 @@ end tell
 
     click_script = f"""
 tell application "System Events" to tell process "Xcode"
-  if exists (button "{action}" of window 1) then
-    click (button "{action}" of window 1)
-    return "clicked"
-  end if
+  repeat with w in windows
+    if exists (button "{action}" of w) then
+      click (button "{action}" of w)
+      return "clicked"
+    end if
+  end repeat
   return "gone"
 end tell
 """
