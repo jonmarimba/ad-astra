@@ -1,0 +1,182 @@
+#!/bin/bash
+# omniroute-model-sync — keeps qwen's and OpenCode's model pickers in sync with each other,
+# sourced from OmniRoute's own live catalog as the single system of record. Built 2026-08-14
+# after two separate incidents: (1) an earlier `omniroute setup-qwen` run silently wiped qwen's
+# hand-curated model list (it writes a different, incompatible schema — see ambrosio's own
+# comment on this), and (2) qwen and OpenCode's lists had drifted apart with no way to tell
+# without diffing them by hand. This is a NEW, separate tool — it never touches ambrosio, and
+# ambrosio never touches modelProviders, so the two can't step on each other.
+#
+# Scope, on purpose: only the `ollamacloud` provider in OmniRoute's catalog — that's the "new
+# hot model dropped" domain this exists for. LM Studio / local models are ambrosio's job.
+#
+# Routing: new entries route THROUGH OmniRoute (baseUrl http://localhost:20128/v1), not direct
+# to a local port — Jonathan's explicit preference (single system of record, log visibility).
+#
+# The model id used for routing comes from `omniroute api models get-api-models` — the real
+# management "models getter" endpoint (Jonathan's term, and he's right: this is the documented
+# way to get this, not something to derive/guess). It returns each model's actual `fullModel`
+# id (e.g. "ollamacloud/gemma4:31b" — nothing like the display-name-derived tag guessing this
+# script used at first) and an `available` boolean. First version of this script guessed a tag
+# from the catalog's display name and verified it against `ollama show`; that missed 3 of 9
+# ollamacloud models outright (Gemma, Nemotron, Qwen 3.5 — their real ids don't follow the
+# lowercase-dashes-plus-":cloud" pattern at all) and, worse, an earlier iteration used the raw
+# display name as the routing id and 404'd in production before being caught. Reading OmniRoute's
+# own getter instead of pattern-matching fixes both.
+#
+# `available: false` on an entry means Jonathan has to flip it on himself in the OmniRoute web
+# dashboard (Providers/Endpoints page) before it can route — the admin/enable endpoints need his
+# own logged-in session, not the proxy API key this script runs with (confirmed live: the
+# providers/logs management endpoints 401 against OMNIROUTE_API_KEY). This script surfaces those
+# as a skip with an explicit "go enable this" message, never tries to force them.
+#
+# Context window size: OmniRoute's own catalog/getter endpoints don't carry it for ollamacloud
+# entries (checked live — comes back "-"/absent). The one real source is `ollama show <tag>`,
+# which works for cloud models without pulling them locally, using the REAL tag from get-api-models
+# (not a guess) — so this now only relies on ollama for the one field OmniRoute doesn't have,
+# never for the routing id itself.
+#
+# Additive only: never edits or removes an existing entry in either file, never touches the
+# active `model` selection, never touches ambrosio, never touches anything outside the
+# modelProviders.openai list (qwen) / omniroute.models map (OpenCode).
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+
+QW="${QWEN_SETTINGS:-$HOME/.qwen/settings.json}"
+OC="${OPENCODE_SETTINGS:-$HOME/.config/opencode/opencode.jsonc}"
+DRY_RUN=0
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+
+need(){ command -v "$1" >/dev/null || { echo "omniroute-model-sync: missing dependency '$1'" >&2; exit 1; }; }
+need omniroute
+need ollama
+need python3
+need jq
+
+[ -f "$QW" ] || { echo "omniroute-model-sync: qwen settings not found at $QW" >&2; exit 1; }
+[ -f "$OC" ] || { echo "omniroute-model-sync: opencode settings not found at $OC" >&2; exit 1; }
+
+TMP="$(mktemp -d -t omniroute-model-sync)"
+trap 'rm -rf "$TMP"' EXIT
+
+echo "omniroute-model-sync: fetching live ollamacloud models from OmniRoute's own getter (get-api-models)..."
+# omniroute prints its own "Loaded env from ..." banner lines to STDOUT ahead of the real JSON
+# (confirmed live — they're not on stderr, `2>/dev/null` alone doesn't strip them), so trim
+# everything before the actual '{' that starts the JSON object.
+omniroute --output json api models get-api-models 2>/dev/null | sed -n '/^{/,$p' \
+  | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for m in data.get('models', []):
+    if m.get('provider') == 'ollamacloud':
+        # tab-separated: fullModel, display name, available (1/0) — avoids fighting the shell
+        # over spaces in display names like 'DeepSeek V4 Pro'.
+        print(f\"{m['fullModel']}\t{m['name']}\t{1 if m.get('available') else 0}\")
+" > "$TMP/models.tsv"
+
+if [ ! -s "$TMP/models.tsv" ]; then
+  echo "omniroute-model-sync: OmniRoute returned zero ollamacloud entries — is 'omniroute serve' up? Nothing to do." >&2
+  exit 1
+fi
+
+echo "omniroute-model-sync: getter returned $(wc -l < "$TMP/models.tsv" | tr -d ' ') ollamacloud model(s)"
+
+ADDED_QW=0
+ADDED_OC=0
+NEEDS_ENABLE=0
+
+OMNIROUTE_KEY="${OMNIROUTE_API_KEY:-}"
+if [ -z "$OMNIROUTE_KEY" ]; then
+  echo "omniroute-model-sync: OMNIROUTE_API_KEY not set in this shell's environment — can't live-verify routing, aborting rather than write unverified entries" >&2
+  exit 1
+fi
+
+while IFS=$'\t' read -r route_id display_name available; do
+  [ -z "$route_id" ] && continue
+
+  if [ "$available" != "1" ]; then
+    echo "  NEEDS ENABLING: '$display_name' ($route_id) — OmniRoute reports this unavailable. Enable it yourself in the OmniRoute web dashboard (Providers/Endpoints page — needs your login, the proxy API key this script uses can't do it) before it can be added here."
+    NEEDS_ENABLE=$((NEEDS_ENABLE+1))
+    continue
+  fi
+
+  # real ollama tag, straight from the getter's fullModel field: "ollamacloud/<tag>" -> "<tag>"
+  tag="${route_id#ollamacloud/}"
+  ctx="$(ollama show "${tag}:cloud" 2>/dev/null | awk '/context length/{print $3}')"
+  [ -z "$ctx" ] && ctx="$(ollama show "$tag" 2>/dev/null | awk '/context length/{print $3}')"
+  if [ -z "$ctx" ]; then
+    echo "  '$display_name' ($route_id) — real id confirmed by OmniRoute's own getter, but 'ollama show' has no context-length metadata for it. Adding without a contextWindowSize override rather than guessing one."
+  fi
+
+  # Live-verify the route actually works before writing it anywhere — one real request. The
+  # getter's `available: true` means OmniRoute THINKS it's ready; this proves it, since a
+  # provider can report available while still failing (expired upstream key, model retired, etc.).
+  probe="$(curl -s --max-time 20 "http://localhost:20128/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $OMNIROUTE_KEY" \
+    -d "{\"model\":\"${route_id}\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with one word: PING\"}],\"stream\":false}" 2>&1)"
+  if printf '%s' "$probe" | grep -qi '"error"'; then
+    echo "  skip '$display_name' ($route_id) — reported available but the real request failed: $(printf '%s' "$probe" | head -c 200)"
+    continue
+  fi
+
+  already_qw="$(jq --arg id "$route_id" '.modelProviders.openai // [] | map(.id == $id) | any' "$QW")"
+  already_oc="$(grep -qF "\"$route_id\"" "$OC" && echo true || echo false)"
+
+  if [ "$already_qw" = "true" ] && [ "$already_oc" = "true" ]; then
+    continue
+  fi
+
+  echo "  NEW: '$display_name' -> verified live route '$route_id'${ctx:+ (real context: $ctx tokens)}"
+
+  if [ "$already_qw" != "true" ]; then
+    echo "    -> would add to qwen ($QW) as id '$route_id'"
+    ADDED_QW=$((ADDED_QW+1))
+    if [ "$DRY_RUN" -eq 0 ]; then
+      python3 - "$QW" "$route_id" "$display_name" "${ctx:-0}" <<'PYEOF'
+import json, sys
+qw, route_id, display_name, ctx = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+d = json.load(open(qw))
+d.setdefault('modelProviders', {}).setdefault('openai', [])
+entry = {
+    "baseUrl": "http://localhost:20128/v1",
+    "envKey": "OMNIROUTE_API_KEY",
+    "id": route_id,
+    "name": f"{display_name} (OmniRoute)",
+}
+if ctx:
+    entry["generationConfig"] = {"contextWindowSize": ctx}
+d['modelProviders']['openai'].append(entry)
+json.dump(d, open(qw, 'w'), indent=2)
+PYEOF
+    fi
+  fi
+
+  if [ "$already_oc" != "true" ]; then
+    echo "    -> would add to opencode ($OC) as key '$route_id'"
+    ADDED_OC=$((ADDED_OC+1))
+    if [ "$DRY_RUN" -eq 0 ]; then
+      python3 - "$OC" "$route_id" "$display_name" <<'PYEOF'
+import re, sys
+oc, route_id, display_name = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(oc).read()
+if f'"{route_id}"' not in s:
+    m = re.search(r'("omniroute"\s*:\s*\{.*?"models"\s*:\s*\{)', s, re.S)
+    if m:
+        entry = '\n        "%s": {\n          "name": "%s (OmniRoute)"\n        },' % (route_id, display_name)
+        s = s[:m.end()] + entry + s[m.end():]
+        open(oc, 'w').write(s)
+PYEOF
+    fi
+  fi
+done < "$TMP/models.tsv"
+
+if [ "$NEEDS_ENABLE" -gt 0 ]; then
+  echo "omniroute-model-sync: $NEEDS_ENABLE model(s) need enabling in the OmniRoute dashboard before this script can add them — see NEEDS ENABLING lines above"
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "omniroute-model-sync: [dry-run] would add $ADDED_QW to qwen, $ADDED_OC to opencode — nothing written"
+else
+  echo "omniroute-model-sync: added $ADDED_QW to qwen, $ADDED_OC to opencode"
+fi
