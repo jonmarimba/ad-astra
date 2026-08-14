@@ -27,6 +27,32 @@ LOGFILE="$STATE/daemon.log"
 PORT="${XCODE_MCP_FRONT_PORT:-8765}"
 mkdir -p "$STATE"
 
+# Xcode's MCP-connection approval is a normal in-app AXButton titled exactly
+# "Allow" (confirmed live, 2026-08-14 — not a hardened system TCC prompt, a
+# regular accessible button in Xcode's own window). Poll for it for a few
+# seconds after spawning and click it if it shows up, so a fresh daemon PID
+# doesn't sit there waiting on a human. Scoped tight on purpose: only ever
+# clicks a button whose title is the exact literal string "Allow", only in
+# Xcode's own process — this is the one dialog this tool exists to eat, not
+# a general click-any-prompt macro.
+auto_allow() {
+  local tries=0
+  while [ "$tries" -lt 10 ]; do
+    if osascript -e 'tell application "System Events" to tell process "Xcode"
+      if exists (button "Allow" of window 1) then
+        click (button "Allow" of window 1)
+        return "clicked"
+      end if
+    end tell' 2>/dev/null | grep -q "clicked"; then
+      echo "auto-allow: clicked Xcode's connection-approval prompt"
+      return 0
+    fi
+    tries=$((tries + 1))
+    sleep 1
+  done
+  return 1
+}
+
 running_pid() {
   [ -f "$PIDFILE" ] || return 1
   local pid; pid="$(cat "$PIDFILE" 2>/dev/null)"
@@ -48,7 +74,8 @@ cmd_start() {
   nohup uv run --script "$HERE/daemon.py" >>"$LOGFILE" 2>&1 &
   local newpid=$!
   echo "$newpid" > "$PIDFILE"
-  sleep 3  # give uvicorn + the upstream mcpbridge handshake a beat to fail fast if Xcode isn't running
+  auto_allow || true  # best-effort; if no prompt shows (already approved, or Xcode not running) this just no-ops
+  sleep 1  # auto_allow already spent up to ~10s polling, so a short settle is enough here
   if kill -0 "$newpid" 2>/dev/null; then
     echo "started (pid $newpid)"
   else
