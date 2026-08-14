@@ -309,7 +309,17 @@ end tell
     if dialog_pid == my_pid:
         action = "Allow"
     elif not _pid_is_alive(dialog_pid):
-        action = "Don't Allow"
+        # Real button title uses U+2019 (’), not a straight apostrophe — found
+        # live, 2026-08-14, chasing a stray "Allow 'Codex' to access Xcode?"
+        # dialog left over from a convocation run. A straight-quote "Don't
+        # Allow" never matches Xcode's actual button, so this branch has
+        # silently never clicked anything: `exists (button "Don't Allow" ...)`
+        # is always false against the real AX tree, `_run_osascript` returns
+        # "not found" cleanly (no exception), and the caller just logs
+        # clicked=False with nothing louder. A dead-PID's stale dialog would
+        # sit there forever, blocking every future connection attempt behind
+        # it — exactly what this branch exists to prevent.
+        action = "Don’t Allow"
     else:
         log.debug("a pending approval dialog belongs to a live pid (%s) that isn't us — leaving it alone", dialog_pid)
         return False
