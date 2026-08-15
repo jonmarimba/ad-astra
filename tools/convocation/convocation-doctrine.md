@@ -14,6 +14,6 @@ PYTHONPATH=src python3 -m session_bridge.convoq.cli search '<tool name / bug ter
 
 - **Claude** — this harness (Agent / Workflow subagents).
 - **Codex / GPT** — `codex exec --sandbox read-only '<prompt>'` (headless, authed).
-- **Qwen CLI → omniroute → hot cloud models** — `qwen -m <model> -p '<prompt>'`, where `<model>` is an omniroute id (e.g. `hf/moonshotai/Kimi-K2.7-Code`, `hf/deepseek-ai/DeepSeek-V4-Pro`, `hf/zai-org/GLM-5.2`). List available: `curl -s http://localhost:20128/v1/models`. A raw `ollama/<model>` or `auto/<x>` will 404 — use the exact `hf/…` id.
+- **Qwen CLI → omniroute → ollama cloud models** — `qwen -m <model> -p '<prompt>'`, where `<model>` uses the `ollamacloud/` prefix (e.g. `ollamacloud/glm-5.2`, `ollamacloud/kimi-k2.7-code`, `ollamacloud/deepseek-v4-pro:preview`). Do NOT use `hf/...` IDs — those route to the HuggingFace provider, which is a different upstream and will fail. List available ollama cloud models: `curl -s http://localhost:20128/v1/models | jq -r '.data[].id' | grep '^ollamacloud/'`. Jonathan pays $100/month for Ollama Max — use it.
 
 Prefer cross-brand verification too: have one brand adversarially verify another brand's findings, so a confirmed defect survived a *different* architecture, not the same one that raised it.
