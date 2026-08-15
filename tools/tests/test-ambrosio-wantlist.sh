@@ -51,6 +51,11 @@ echo '[]' > "$SB/search_empty.json"
 mkdir -p "$SB/bin"
 cat > "$SB/bin/curl" <<SHIM
 #!/usr/bin/env bash
+# log every call's full argv — this is what the comment-line RED control below actually checks
+# against (found by convocation review, 2026-08-14: the original version asserted against
+# pull.log, which nothing here ever writes a search URL to — a tautology that would pass even if
+# comment lines WERE being sent to HF as literal search terms).
+printf '%s\n' "\$*" >> "$SB/curl-calls.log"
 for a in "\$@"; do case "\$a" in
   *sort=trendingScore*) cat "$SB/trending.json"; exit 0 ;;
   *api/models?search=GLM-4.5-Air*) cat "$SB/search_trendingonly.json"; exit 0 ;;
@@ -108,8 +113,10 @@ assert_not_contains "$SB/ssh.log" "GLM-4.5-Air" "want-list entry consumed the so
 grep -qxF "Qwen3-30B-A3B" "$AMBROSIO_HOME/seen.txt" && pass "want-list delivery recorded in seen.txt" || fail "Qwen3-30B-A3B not recorded in seen.txt"
 
 # ---- RED control: comment/blank lines in wantlist.txt must never reach resolve_mlx_url as a
-#      literal search term — checked against the real HF search log ambrosio itself writes ----
-assert_not_contains "$AMBROSIO_HOME/pull.log" "search=%23" "a '#' comment line was never sent to HF as a literal search term (url-encoded '#')"
+#      literal search term — checked against the shim's own call log, not pull.log (pull.log
+#      only ever receives curl's STDERR on a real failure; it was never going to contain a search
+#      URL either way, which is exactly why this control was a tautology before the fix above) ----
+assert_not_contains "$SB/curl-calls.log" "search=%23" "a '#' comment line was never sent to HF as a literal search term (url-encoded '#')"
 
 # ---- second run: want-list entry already in seen.txt, so the NOW-unblocked trending candidate
 #      gets its slot — proves the want-list doesn't permanently starve the trending scan, only

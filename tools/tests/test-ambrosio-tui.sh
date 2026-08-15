@@ -28,11 +28,13 @@ CLEAN_CWD="$SB/cwd"; mkdir -p "$CLEAN_CWD"   # no .mcp.json here — a real one 
 # "Untrusted MCP server" approval dialog that swallows every keystroke sent after it, including
 # /model (found live, 2026-08-14, launching qwen from this repo's own root by accident)
 
-# REALISTIC starting fixtures — matching the actual shape of Jonathan's real files (found live,
-# 2026-08-14: the ORIGINAL test-ambrosio.sh's opencode.jsonc fixture was missing the "npm" field
-# every real omniroute provider block has; `opencode models` silently does not register a
-# provider block without it, so that test's assert_contains passed while the real CLI would have
-# shown nothing — exactly the gap this file exists to close).
+# REALISTIC starting fixtures — matching the actual shape of Jonathan's real files. (Correction,
+# 2026-08-14: an earlier version of this comment claimed `opencode models` needs the "npm" field
+# to register a provider's entries — that was an unverified inference from an earlier debug
+# session that changed two things at once (an empty models map AND the missing npm field) and
+# blamed the wrong one. Tested each in isolation afterward: npm absent + a real model entry still
+# shows up fine; an EMPTY models map is what actually produces nothing. The RED control below
+# tests the real variable, not the wrong one.)
 cat > "$HOME/.config/opencode/opencode.jsonc" <<'EOF'
 {
   "$schema": "https://opencode.ai/config.json",
@@ -145,10 +147,71 @@ sleep 1
 tmux kill-session -t "$SESSION" 2>/dev/null
 
 assert_contains "$SB/qwen_tui.out" "pre-existing-default" "REAL qwen TUI /model picker shows the pre-existing entry (sanity: the picker actually opened against the sandboxed HOME)"
-assert_contains "$SB/qwen_tui.out" "qwen3-30b-a3b-4bit" "REAL qwen TUI /model picker shows the model ambrosio just delivered — not a config-file check, the actual rendered picker"
+# expose_model only ever replaces the top-level `model` field, never appends to modelProviders —
+# so the delivered model surfaces as the active/Runtime slot the picker renders at item 1, not as
+# a second, independent list entry. The string genuinely appears in the real rendered picker
+# (RED-capable — deleting expose_model's `d['model']={...}` assignment makes it vanish, verified
+# live), the label just used to overclaim which part of the UI that proves.
+assert_contains "$SB/qwen_tui.out" "qwen3-30b-a3b-4bit" "REAL qwen TUI shows the delivered model as the active/Runtime slot in the real rendered /model picker — not a config-file check"
 
-# ---- RED control: a model NEVER delivered must NOT appear anywhere real ----
-assert_not_contains "$SB/opencode_models.out" "totally-fabricated-model-never-delivered" "RED: a model that was never delivered does not appear in real opencode output (proves the positive checks above aren't vacuously true)"
-assert_not_contains "$SB/qwen_tui.out" "totally-fabricated-model-never-delivered" "RED: same, for the real qwen TUI picker"
+# ---- RED control: prove the positive checks above are load-bearing, not vacuous. A fabricated
+#      name being absent proves nothing (nothing could ever make it present) — found by
+#      convocation review, 2026-08-14, and it was right: the two checks that used to be here were
+#      tautologies, always green regardless of whether the real checks above meant anything.
+#
+#      The real RED case is a HOME the delivery never touched: same config shape as the ORIGINAL
+#      pre-ambrosio fixture, minus the model this run delivered. If the positive checks above
+#      would pass against this too, they were never actually reading real output. (An earlier
+#      version of this control instead removed the "npm" field, based on a wrong inference from
+#      an earlier debug session — tested in isolation afterward, npm turned out not to matter at
+#      all; an EMPTY models map is what actually produces no output. Fixed to test the real
+#      variable — see the fixture comment above.) ----
+NEVER_DELIVERED_HOME="$SB/home-never-delivered"; mkdir -p "$NEVER_DELIVERED_HOME/.config/opencode" "$NEVER_DELIVERED_HOME/.qwen"
+cat > "$NEVER_DELIVERED_HOME/.config/opencode/opencode.jsonc" <<'EOF'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "omniroute": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OmniRoute",
+      "options": { "baseURL": "http://localhost:20128/v1", "apiKey": "test-key" },
+      "models": { "lms/pre-existing-model": { "name": "pre-existing" } }
+    }
+  }
+}
+EOF
+never_out="$(cd "$SB" && HOME="$NEVER_DELIVERED_HOME" timeout 15 opencode models 2>/dev/null)"
+printf '%s' "$never_out" > "$SB/opencode_models_never_delivered.out"
+assert_not_contains "$SB/opencode_models_never_delivered.out" "qwen3-30b-a3b-4bit" "RED, proven not assumed: a HOME the delivery never touched does not show the delivered model in real opencode output — confirms the positive check above is reading something real, not passing regardless"
+
+# same RED case, qwen side — same never-delivered HOME shape, a real tmux session, real capture
+mkdir -p "$NEVER_DELIVERED_HOME/.qwen"
+cat > "$NEVER_DELIVERED_HOME/.qwen/settings.json" <<'EOF'
+{
+  "$version": 4,
+  "model": { "name": "pre-existing-default", "baseUrl": "http://localhost:20128/v1" },
+  "modelProviders": { "openai": [ { "id": "pre-existing-default", "name": "pre-existing" } ] },
+  "security": {
+    "auth": { "baseUrl": "http://localhost:20128/v1", "selectedType": "openai", "apiKey": "test-key" }
+  },
+  "selectedProvider": "omniroute"
+}
+EOF
+[ -f "$HOME_REAL/.qwen/installation_id" ] 2>/dev/null && cp "$HOME_REAL/.qwen/installation_id" "$NEVER_DELIVERED_HOME/.qwen/installation_id" 2>/dev/null || true
+NEVER_SESSION="ambrosio-tui-never-$$"
+tmux kill-session -t "$NEVER_SESSION" 2>/dev/null
+tmux new-session -d -s "$NEVER_SESSION" -x 200 -y 50 -c "$CLEAN_CWD" -e HOME="$NEVER_DELIVERED_HOME"
+tmux send-keys -t "$NEVER_SESSION" "qwen" Enter
+sleep 4
+tmux send-keys -t "$NEVER_SESSION" "/model"
+sleep 1
+tmux send-keys -t "$NEVER_SESSION" Enter
+sleep 2
+tmux capture-pane -t "$NEVER_SESSION" -p > "$SB/qwen_tui_never_delivered.out"
+tmux send-keys -t "$NEVER_SESSION" "/quit" Enter 2>/dev/null
+sleep 1
+tmux kill-session -t "$NEVER_SESSION" 2>/dev/null
+assert_contains "$SB/qwen_tui_never_delivered.out" "pre-existing-default" "sanity: the never-delivered qwen picker still opened for real (same rigor as the primary sanity check above)"
+assert_not_contains "$SB/qwen_tui_never_delivered.out" "qwen3-30b-a3b-4bit" "RED, proven not assumed: same never-delivered HOME, real qwen TUI — delivered model does not appear, confirms the qwen positive check is reading something real"
 
 finish
