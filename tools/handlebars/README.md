@@ -2,11 +2,23 @@
 
 *"I can ride my bike with no handlebars."* wrap-in-app's design (2026-08-12: `.app` references the script by absolute path, the script never lives inside the bundle) has a property beyond "fix the mail wrapper": granting a `.app` bundle a macOS TCC permission grants *that code-signed identity*, not *a task*. Since the app's hash — and therefore its grant — survives any edit to the script it calls, one wrapper granted **every** TCC permission it will ever plausibly need becomes a standing tower: mint it once, reprogram what it does forever by editing `handlebars.sh`, never touch the app, never re-grant.
 
+## Install
+
+```
+cd tools/handlebars
+./install.sh        # brew bundle (ffmpeg) + build Handlebars.app via wrap-in-app
+./handlebars.sh     # see which TCC domains are granted (all 8 will say BLOCKED on a fresh install)
+```
+
+Then grant each domain one at a time in System Settings, following the pane paths the output prints.
+
 ## What this is
 
 - `handlebars.sh` — the payload. Edit this freely; the grant survives (per wrap-in-app's core guarantee).
 - `Handlebars.app` — the granted identity. **Never edit this directly** (a wrap-in-app re-run over it, or any change to the bundle itself, changes its hash and silently kills every grant it holds — reread as EPERM with no prompt, exactly the original TCC disease).
 - `handlebars_launch.sh` — the schd/launchd-facing shim (swallows the app's stdout-eating, restores poke-on-output).
+- `install.sh` / `uninstall.sh` — standard @astra tool lifecycle. install.sh will not rebuild an existing .app (that would kill its grants).
+- `Brewfile` — declares ffmpeg (needed for mic + camera probes; the other 6 checks use pure macOS tools).
 
 ## ONE grant at a time — never a batch skeleton key
 
@@ -17,7 +29,7 @@ Jonathan, 2026-08-14: *"we do one at a time in the script. And coordinate where 
 3. Jonathan does it himself, in the seat, watching it happen — never done unattended, never batched.
 4. Run `handlebars.sh screen` (or the matching domain arg) to confirm that ONE grant took, before moving on.
 
-Run `handlebars.sh` with no argument to see current state across all wired domains (Full Disk Access, Automation, Screen Recording, Messages, Photos so far) — read-only, checks only what's already been granted, never prompts for anything new. Each domain gets its check added to the script only when a real task needs it — the tower is built one deliberate brick at a time, not minted whole.
+Run `handlebars.sh` with no argument to see current state across all 8 wired domains (Full Disk Access, Screen Recording, Automation/Notes, Contacts, Calendar, Accessibility, Microphone, Camera) — read-only, checks only what's already been granted, never prompts for anything new. Each BLOCKED line prints the exact System Settings pane to visit. Mic and Camera probes need ffmpeg; without it they report SKIP instead of BLOCKED.
 
 Once granted, the identity IS broad by construction (that's what makes reprogramming via `handlebars.sh` valuable) — the discipline is entirely in how deliberately each individual grant gets added, never in pretending the tower stays narrow after the fact.
 
