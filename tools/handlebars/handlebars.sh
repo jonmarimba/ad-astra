@@ -83,8 +83,15 @@ case "$DOMAIN" in
                  rm -f /tmp/handlebars_screencheck.jpg ;;
   messages)      check "Messages DB (chat.db readable)" test -r "$HOME/Library/Messages/chat.db" ;;
   photos)        check "Photos library readable" test -r "$HOME/Pictures/Photos Library.photoslibrary" ;;
-  mic|accessibility|camera|contacts|calendar)
-                 echo "  (no check wired yet for '$DOMAIN' — add one when this domain is actually needed)" ;;
+  contacts)     check "Contacts (read one vCard)" osascript -e 'tell application "Contacts" to get name of first person' ;;
+  calendar)     check "Calendar (count calendars)" osascript -e 'tell application "Calendar" to count of calendars' ;;
+  mic)          # ffmpeg records 0.1s from the default audio input — TCC-gated, no audible side-effect
+                check "Microphone (ffmpeg 0.1s)" ffmpeg -f avfoundation -i ":0" -t 0.1 -y /tmp/handlebars_miccheck.wav -loglevel quiet
+                rm -f /tmp/handlebars_miccheck.wav ;;
+  camera)       # ffmpeg grabs a single frame from the default camera — TCC-gated, fast, no GUI
+                check "Camera (ffmpeg single frame)" ffmpeg -f avfoundation -framerate 1 -i "0" -frames:v 1 -y /tmp/handlebars_camcheck.jpg -loglevel quiet
+                rm -f /tmp/handlebars_camcheck.jpg ;;
+  accessibility) check "Accessibility (AX: Finder)" osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' ;;
   "")
     echo "handlebars: current grant state (checks only; does not request anything new)"
     check "Full Disk Access"        test -r "$HOME/Library/Mail"
@@ -92,7 +99,11 @@ case "$DOMAIN" in
     check "Screen Recording"        screencapture -x -t jpg /tmp/handlebars_screencheck.jpg; rm -f /tmp/handlebars_screencheck.jpg
     check "Messages DB"             test -r "$HOME/Library/Messages/chat.db"
     check "Photos library"          test -r "$HOME/Pictures/Photos Library.photoslibrary"
-    echo "  (mic / accessibility / camera / contacts / calendar: no check wired yet)"
+    check "Contacts"               osascript -e 'tell application "Contacts" to get name of first person'
+    check "Calendar"               osascript -e 'tell application "Calendar" to count of calendars'
+    check "Microphone"             ffmpeg -f avfoundation -i ":0" -t 0.1 -y /tmp/handlebars_miccheck.wav -loglevel quiet; rm -f /tmp/handlebars_miccheck.wav
+    check "Camera"                 ffmpeg -f avfoundation -framerate 1 -i "0" -frames:v 1 -y /tmp/handlebars_camcheck.jpg -loglevel quiet; rm -f /tmp/handlebars_camcheck.jpg
+    check "Accessibility (AX)"     osascript -e 'tell application "System Events" to get name of first process whose frontmost is true'
     ;;
   *) echo "handlebars: unknown domain '$DOMAIN'" >&2; exit 64 ;;
 esac
