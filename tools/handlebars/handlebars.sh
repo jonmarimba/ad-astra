@@ -68,42 +68,102 @@ echo "handlebars: tower run @ $(date '+%Y-%m-%d %H:%M:%S')"
 # No argument = list domains and their current OK/BLOCKED state (read-only, checks only
 # what's ALREADY been granted so far — does not prompt for anything new).
 
-check(){ # usage: check <label> <cmd...>
-  local label="$1"; shift
-  if "$@" >/dev/null 2>&1; then echo "  OK      $label"; return 0
-  else echo "  BLOCKED $label (rc=$?)"; return 1
+# Each domain probe is:
+#   1. Innocuous — reads one datum, captures one frame, records 0.1s of silence, then cleans up.
+#   2. TCC-triggering — the specific syscall/IPC that makes macOS register a pairing in
+#      System Settings → Privacy & Security → <pane>, so the user can grant it.
+#   3. Self-cleaning — temp files go through mktemp and are removed in a trap.
+#   4. Portable — uses only macOS system tools (osascript, screencapture). The mic and camera
+#      probes need ffmpeg (brew install ffmpeg); if it's missing they report SKIP, not FAIL.
+#
+# "Prompt-able" vs "add-in-Settings": Automation/Mic/Camera/Accessibility will pop a macOS
+# consent dialog on first attempt. FDA/Screen Recording/Messages/Photos/Contacts/Calendar
+# do NOT prompt — the user must add the app manually in System Settings. The output tells
+# the user which pane to visit for each BLOCKED domain.
+
+TMPDIR_HB="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_HB"' EXIT
+
+# check <short_label> <settings_pane_name> <cmd...>
+#   Runs the command silently. Reports OK / BLOCKED / SKIP (missing tool).
+#   On BLOCKED, prints which System Settings pane to visit.
+check(){
+  local label="$1" pane="$2"; shift 2
+  local cmd_name="$1"
+  if ! command -v "$cmd_name" >/dev/null 2>&1; then
+    echo "  SKIP    $label  (${cmd_name} not installed)"
+    return 0
+  fi
+  local err_file="$TMPDIR_HB/${label// /_}.err"
+  if "$@" >"$TMPDIR_HB/out" 2>"$err_file"; then
+    echo "  OK      $label"
+    return 0
+  else
+    local rc=$?
+    echo "  BLOCKED $label  ->  System Settings > Privacy & Security > $pane"
+    # Show first line of stderr if it's informative (not empty, not just usage noise)
+    local first_err
+    first_err="$(head -1 "$err_file" 2>/dev/null)"
+    if [ -n "$first_err" ]; then
+      echo "          ($first_err)"
+    fi
+    return $rc
   fi
 }
 
 DOMAIN="${1:-}"
 case "$DOMAIN" in
-  fda)           check "Full Disk Access (~/Library/Mail readable)" test -r "$HOME/Library/Mail" ;;
-  automation)    check "Automation -> Notes (osascript)" osascript -e 'tell application "Notes" to count of notes' ;;
-  screen)        check "Screen Recording (screencapture)" screencapture -x -t jpg /tmp/handlebars_screencheck.jpg
-                 rm -f /tmp/handlebars_screencheck.jpg ;;
-  messages)      check "Messages DB (chat.db readable)" test -r "$HOME/Library/Messages/chat.db" ;;
-  photos)        check "Photos library readable" test -r "$HOME/Pictures/Photos Library.photoslibrary" ;;
-  contacts)     check "Contacts (read one vCard)" osascript -e 'tell application "Contacts" to get name of first person' ;;
-  calendar)     check "Calendar (count calendars)" osascript -e 'tell application "Calendar" to count of calendars' ;;
-  mic)          # ffmpeg records 0.1s from the default audio input — TCC-gated, no audible side-effect
-                check "Microphone (ffmpeg 0.1s)" ffmpeg -f avfoundation -i ":0" -t 0.1 -y /tmp/handlebars_miccheck.wav -loglevel quiet
-                rm -f /tmp/handlebars_miccheck.wav ;;
-  camera)       # ffmpeg grabs a single frame from the default camera — TCC-gated, fast, no GUI
-                check "Camera (ffmpeg single frame)" ffmpeg -f avfoundation -framerate 1 -i "0" -frames:v 1 -y /tmp/handlebars_camcheck.jpg -loglevel quiet
-                rm -f /tmp/handlebars_camcheck.jpg ;;
-  accessibility) check "Accessibility (AX: Finder)" osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' ;;
+  fda)
+    check "Full Disk Access" "Full Disk Access" \
+      test -r "$HOME/Library/Mail" ;;
+  automation)
+    check "Automation (Notes)" "Automation > Handlebars > Notes" \
+      osascript -e 'tell application "Notes" to count of notes' ;;
+  screen)
+    check "Screen Recording" "Screen Recording & System Audio" \
+      screencapture -x -t jpg "$TMPDIR_HB/screen.jpg" ;;
+  messages)
+    check "Messages" "Full Disk Access" \
+      test -r "$HOME/Library/Messages/chat.db" ;;
+  photos)
+    check "Photos" "Photos" \
+      test -r "$HOME/Pictures/Photos Library.photoslibrary" ;;
+  contacts)
+    check "Contacts" "Contacts" \
+      osascript -e 'tell application "Contacts" to get name of first person' ;;
+  calendar)
+    check "Calendar" "Calendars" \
+      osascript -e 'tell application "Calendar" to count of calendars' ;;
+  mic)
+    check "Microphone" "Microphone" \
+      ffmpeg -f avfoundation -i ":0" -t 0.1 -y "$TMPDIR_HB/mic.wav" -loglevel quiet ;;
+  camera)
+    check "Camera" "Camera" \
+      ffmpeg -f avfoundation -framerate 1 -i "0" -frames:v 1 -y "$TMPDIR_HB/cam.jpg" -loglevel quiet ;;
+  accessibility)
+    check "Accessibility" "Accessibility" \
+      osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' ;;
   "")
-    echo "handlebars: current grant state (checks only; does not request anything new)"
-    check "Full Disk Access"        test -r "$HOME/Library/Mail"
-    check "Automation -> Notes"     osascript -e 'tell application "Notes" to count of notes'
-    check "Screen Recording"        screencapture -x -t jpg /tmp/handlebars_screencheck.jpg; rm -f /tmp/handlebars_screencheck.jpg
-    check "Messages DB"             test -r "$HOME/Library/Messages/chat.db"
-    check "Photos library"          test -r "$HOME/Pictures/Photos Library.photoslibrary"
-    check "Contacts"               osascript -e 'tell application "Contacts" to get name of first person'
-    check "Calendar"               osascript -e 'tell application "Calendar" to count of calendars'
-    check "Microphone"             ffmpeg -f avfoundation -i ":0" -t 0.1 -y /tmp/handlebars_miccheck.wav -loglevel quiet; rm -f /tmp/handlebars_miccheck.wav
-    check "Camera"                 ffmpeg -f avfoundation -framerate 1 -i "0" -frames:v 1 -y /tmp/handlebars_camcheck.jpg -loglevel quiet; rm -f /tmp/handlebars_camcheck.jpg
-    check "Accessibility (AX)"     osascript -e 'tell application "System Events" to get name of first process whose frontmost is true'
+    echo "handlebars: current grant state  (8 TCC domains)"
+    echo "  Each BLOCKED line shows the System Settings pane where you add Handlebars.app."
+    echo "  Mic and Camera probes need ffmpeg (brew install ffmpeg); SKIP = not installed."
+    echo ""
+    check "Full Disk Access"    "Full Disk Access" \
+      test -r "$HOME/Library/Mail"
+    check "Screen Recording"    "Screen Recording & System Audio" \
+      screencapture -x -t jpg "$TMPDIR_HB/screen.jpg"
+    check "Automation (Notes)"  "Automation > Handlebars > Notes" \
+      osascript -e 'tell application "Notes" to count of notes'
+    check "Contacts"            "Contacts" \
+      osascript -e 'tell application "Contacts" to get name of first person'
+    check "Calendar"            "Calendars" \
+      osascript -e 'tell application "Calendar" to count of calendars'
+    check "Accessibility"       "Accessibility" \
+      osascript -e 'tell application "System Events" to get name of first process whose frontmost is true'
+    check "Microphone"          "Microphone" \
+      ffmpeg -f avfoundation -i ":0" -t 0.1 -y "$TMPDIR_HB/mic.wav" -loglevel quiet
+    check "Camera"              "Camera" \
+      ffmpeg -f avfoundation -framerate 1 -i "0" -frames:v 1 -y "$TMPDIR_HB/cam.jpg" -loglevel quiet
     ;;
   *) echo "handlebars: unknown domain '$DOMAIN'" >&2; exit 64 ;;
 esac
