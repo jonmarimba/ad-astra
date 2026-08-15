@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
-# ambrosio — food of the gods, delivered. So JS never weekly-searches "what's hot": watches HF
-# trending (filtered to his frontier watchlist), auto-pulls the best-fitting new model onto the
-# headroom host's LM Studio, lets OmniRoute discover it (it already watches that host as a
-# provider_node), and botline-pings JS "come play." REACHABILITY-GATED: inert while the host sleeps.
+# ambrosio — named for Alessandra Ambrosio, because the job is finding JS HOT MODELS (the pun is
+# the whole point; the previous version of this comment earnestly explained Greek mythology
+# instead and that was wrong, corrected 2026-08-14). So JS never weekly-searches "what's hot":
+# watches HF trending (filtered to his frontier watchlist), auto-pulls the best-fitting NEW and
+# GENUINELY WORTH HIS TIME model onto the headroom host's LM Studio, lets OmniRoute discover it
+# (it already watches that host as a provider_node), and botline-pings JS "come play."
+# REACHABILITY-GATED: inert while the host sleeps.
+#
+# "Hot" means real signal, not just "downloaded and didn't error" (found live, 2026-08-14, after
+# delivering Nemotron-3-Nano — passed every filter, downloaded fine, and was dead weight: same
+# architecture family and size class as Nemotron-3.5-Lightning, already loaded, already the
+# active default. A tool that pings "come play" for that isn't finding hot models, it's finding
+# models that exist and fit). Two real checks now gate a pull, both below: a popularity floor
+# (HF's own `downloads` count, already in every search response, previously read and ignored) and
+# a redundancy check against what's already on the host before treating a new download as news.
 #
 #   ambrosio check [--dry-run]   # the whole loop (silent if host down or nothing new)
 #   ambrosio status              # host reachability + currently-loaded models + seen count + want-list
@@ -148,12 +159,20 @@ for m in ms:
     if term.replace(' ','-') not in low.replace('_','-'): continue
     if any(j in low for j in JUNK): continue
     org_rank = GOOD_ORGS.index(org.lower()) if org.lower() in GOOD_ORGS else 5
-    cands.append((org_rank, quant_rank(tail), mid))
+    # downloads: real signal already in every search response, previously ignored entirely
+    # (found live, 2026-08-14 — the whole point is HOT models, and org-is-reputable alone says
+    # nothing about whether anyone is actually using this specific quant). Used as a tiebreaker,
+    # NOT a hard floor: a genuinely hot model that dropped this week can have a low download
+    # count purely from being new, so rejecting low-download repos outright would filter out
+    # exactly the freshest drops this tool exists to catch. Sort descending within each
+    # org/quant tier instead — among otherwise-equal options, prefer the one people are using.
+    downloads = m.get('downloads', 0) or 0
+    cands.append((org_rank, quant_rank(tail), -downloads, mid))
 cands.sort()
 # walk ALL candidates best-first; first one whose ACTUAL repo size fits the cap wins.
 # No [:N] slice — each probe is one cheap API call, and a fitting repo ranked 7th must
 # not be invisible (the no-silent-caps rule).
-for _,_,mid in cands:
+for _,_,_,mid in cands:
     gb=repo_gb(mid)
     if gb is not None and 3<=gb<=cap:   # floor: <3GB = draft head / toy distill, not a frontier model
         print(f'https://huggingface.co/{mid}'); break
@@ -209,11 +228,33 @@ case "${1:-check}" in
     have="$(loaded_models)"; pulled=""; n=0
     # want-list first (explicit asks outrank whatever HF happens to be trending this run), then
     # the reactive trending scan — same loop body handles both, same SEEN/MAX_PER_RUN treatment.
-    while IFS= read -r term; do
+    # Each line is tagged with its source (WANT or SCAN) so the redundancy check below can tell
+    # an explicit ask (always honored, redundant or not — Jonathan asked for it on purpose) from
+    # a reactive trending hit (skipped if it's not actually adding anything new).
+    while IFS=$'\t' read -r src term; do
       [ -z "$term" ] && continue
       [ "$n" -ge "$MAX_PER_RUN" ] && { log "hit MAX_PER_RUN=$MAX_PER_RUN; remaining candidates wait for next run"; break; }
       grep -qxF "$term" "$SEEN" && continue
       printf '%s\n' "$have" | grep -qiF "$term" && { echo "$term" >>"$SEEN"; continue; }   # already on the host
+      # redundancy check (found live, 2026-08-14 — Nemotron-3-Nano passed every other filter and
+      # was dead weight: same architecture family, same size class, as the already-loaded and
+      # already-active Nemotron-3.5-Lightning). Leading alphabetic prefix of the family term
+      # (e.g. "nemotron" from "Nemotron-3-Nano") checked against what's already on the host — a
+      # blunt heuristic, not a real capability comparison, but it catches the exact failure mode
+      # that happened: same family, different version number, nothing new. Only gates the
+      # reactive scan; a want-list entry is an explicit ask and always goes through.
+      if [ "$src" = "SCAN" ]; then
+        # leading letters only, stopping at the first digit — a strip-these-characters approach
+        # (tried first, found live, 2026-08-14) leaves stray letters behind when a unit suffix
+        # sits right after a digit ("qwen3.6-35b" stripped digits/dots/dashes still left "b" from
+        # "35b" stuck onto "qwen", becoming "qwenb" — silently never matched "qwen" at all).
+        prefix="$(printf '%s' "$term" | tr '[:upper:]' '[:lower:]' | python3 -c "import sys,itertools; print(''.join(itertools.takewhile(str.isalpha, sys.stdin.read())))")"
+        if [ -n "$prefix" ] && printf '%s\n' "$have" | tr '[:upper:]' '[:lower:]' | grep -qF "$prefix"; then
+          log "skip '$term' — same family ('$prefix') already on $HOST; not obviously new, not pulling (add it to wantlist.txt to force it anyway)"
+          echo "$term" >>"$SEEN"
+          continue
+        fi
+      fi
       url="$(resolve_mlx_url "$term")"
       [ -z "$url" ] && { log "no MLX repo found yet for '$term' — will retry next run (quant may not exist yet)"; continue; }
       if [ "$dry" -eq 1 ]; then log "[dry-run] would: ssh $SSH_TARGET '$LMS_BIN get \"$url\" --yes'"; echo "$term" >>"$SEEN"; pulled="$pulled $term"; n=$((n+1)); continue; fi
@@ -231,7 +272,7 @@ case "${1:-check}" in
       if [ "$ok" -eq 1 ]; then
         echo "$term" >>"$SEEN"; pulled="$pulled $term"; n=$((n+1)); log "pulled $term ($url) on $HOST"
       else log "pull FAILED for '$term' ($url) after resume retry — see $AMBROSIO_HOME/pull.log; will resume next run"; fi
-    done < <(grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null; hot_candidates)
+    done < <(grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null | sed 's/^/WANT\t/'; hot_candidates | sed 's/^/SCAN\t/')
     pulled="$(echo "$pulled" | xargs 2>/dev/null || true)"
     [ -z "$pulled" ] && { log "no new hot models"; exit 0; }
     command -v "$OMNIROUTE" >/dev/null && "$OMNIROUTE" models "$OMNIROUTE_NODE" >/dev/null 2>&1 || true
