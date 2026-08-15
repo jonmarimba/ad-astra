@@ -39,13 +39,15 @@ CTX="$OUT/$NAME.context.md"
   echo "# Known issues for cluster '$NAME' (from convoq — treat as ground truth, do not rediscover)"
   echo
   if [ -n "$CONVOQ" ]; then
-    ( cd "$CONVOQ_DIR" && PYTHONPATH=src python3 -m session_bridge.convoq.cli update >/dev/null 2>&1 || true )
+    if ! ( cd "$CONVOQ_DIR" && PYTHONPATH=src python3 -m session_bridge.convoq.cli update >/dev/null 2>&1 ); then
+      echo "convene[$NAME]: WARNING — convoq update failed (rc=$?); searching stale index" >&2
+    fi
     old_ifs="$IFS"; IFS='|'
     for term in $CONVOQ; do
       IFS="$old_ifs"
       echo "## \"$term\""
       ( cd "$CONVOQ_DIR" && PYTHONPATH=src python3 -m session_bridge.convoq.cli search "$term" 2>/dev/null ) \
-        | grep -iE "human:|assistant:" | sed 's/^/  /' | head -6
+        | grep -iE "human:|assistant:" | sed 's/^/  /'
       echo
       IFS='|'
     done
