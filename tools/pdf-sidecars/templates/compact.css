@@ -1,0 +1,12 @@
+/* md2pdf compact template — tighter tables for data-heavy docs. */
+@page { size: letter; margin: 0.75in; }
+html { -webkit-print-color-adjust: exact; }
+body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 10pt; line-height: 1.35; color: #000; }
+h1,h2,h3 { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-weight: bold; }
+h1 { font-size: 14pt; } h2 { font-size: 12pt; } h3 { font-size: 11pt; }
+code,pre { font-family: Menlo, monospace; font-size: 9pt; }
+pre { background:#f4f4f4; padding:6px; white-space:pre-wrap; }
+table { border-collapse: collapse; font-size: 9pt; }
+td,th { border:1px solid #999; padding:2px 4px; white-space: nowrap; }
+th { background: #f0f0f0; }
+a { color:#000; text-decoration: underline; }
