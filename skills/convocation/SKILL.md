@@ -35,6 +35,9 @@ One adjudicator (you, or a fresh agent) merges:
 
 Deliverable: one SYNTHESIS doc + the scorecard. The synthesis note in Apple Notes / the repo is the living copy.
 
+## Cross-fix variant (for prose and design artifacts)
+When the convocation targets an editable artifact (a document, a design, a config) rather than a codebase, replace round 2 with a cross-fix round. Model A's findings go to model B for fixing; model B's findings go to model A. The original finder then approves or rejects each fix. This forces the fixer to understand the finding deeply enough to apply it, and gives the finder real veto power over fixes that changed meaning or missed the point. The cross-fix IS the cross-brand verification — a different architecture both interprets and corrects the finding. Triage before cross-fixing: not every finding is worth a fix. Pick the ones that change how a reader understands the document. Leave marginal style preferences on the floor.
+
 ## When to convoke vs when not
 Convoke: research with checkable claims, audits, design reviews, anything feeding a purchase or an architecture decision. Don't convoke: mechanical tasks, matters of taste, anything where one live probe answers the question outright — run the probe instead.
 
