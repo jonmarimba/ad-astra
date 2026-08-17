@@ -64,7 +64,7 @@ echo "handlebars: tower run @ $(date '+%Y-%m-%d %H:%M:%S')"
 # he does it while watching, THEN this check proves that ONE grant took. Never batch.
 #
 # Usage: handlebars.sh <domain>   where <domain> is one of: fda | automation | screen |
-#                                  messages | photos | mic | accessibility | camera | contacts | calendar | imsg
+#                                  messages | photos | mic | accessibility | camera | contacts | calendar
 # No argument = list domains and their current OK/BLOCKED state (read-only, checks only
 # what's ALREADY been granted so far — does not prompt for anything new).
 
@@ -125,19 +125,6 @@ case "$DOMAIN" in
   messages)
     check "Messages" "Full Disk Access" \
       test -r "$HOME/Library/Messages/chat.db" ;;
-  imsg)
-    echo "handlebars: read-only iMessage readiness check for Bot Saggau (+17049185655)"
-    if ! imsg chats --limit 100000 --json >"$TMPDIR_HB/imsg-chats.json" 2>"$TMPDIR_HB/imsg.err"; then
-      echo "  BLOCKED imsg Messages database access"
-      head -1 "$TMPDIR_HB/imsg.err"
-      exit 1
-    fi
-    if grep -Fq '+17049185655' "$TMPDIR_HB/imsg-chats.json"; then
-      echo "  OK      Bot Saggau thread is present"
-    else
-      echo "  MISSING Bot Saggau thread is not present; direct send remains possible by exact number"
-    fi
-    echo "  OK      imsg read access through Handlebars.app" ;;
   photos)
     check "Photos" "Photos" \
       test -r "$HOME/Pictures/Photos Library.photoslibrary" ;;
@@ -177,7 +164,6 @@ case "$DOMAIN" in
       ffmpeg -f avfoundation -i ":0" -t 0.1 -y "$TMPDIR_HB/mic.wav" -loglevel quiet
     check "Camera"              "Camera" \
       ffmpeg -f avfoundation -framerate 1 -i "0" -frames:v 1 -y "$TMPDIR_HB/cam.jpg" -loglevel quiet
-    "$0" imsg
     ;;
   *) echo "handlebars: unknown domain '$DOMAIN'" >&2; exit 64 ;;
 esac
