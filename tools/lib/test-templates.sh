@@ -25,6 +25,32 @@ echo "$after" | grep -q kickerd && fail+=("kickerd survived its own template's u
 echo "$out" | grep -q "KEPT" || fail+=("shared tools were not reported as KEPT")
 [ $rc -eq 0 ] || fail+=("uninstall exited $rc on a successful run")
 
+
+# ── State-file integrity ────────────────────────────────────────────────────
+# The overlap property above is only as good as the record it reasons from.
+# installed_templates() used to swallow every read error into an empty list, so
+# a corrupt or hand-edited state file made uninstall believe nothing else
+# claimed a shared tool — and it would remove tools a still-installed template
+# needed. Reading "I cannot tell" as "nothing installed" is the bug.
+
+echo '{"templates": ["swift-ios"], "tools":' > "$T/.astra/manifest.json"   # truncated mid-write
+out="$(python3 "$A/tools/lib/template.py" uninstall kicker-dev --into "$T" 2>&1)"; rc=$?
+if [ "$rc" -eq 65 ] && echo "$out" | grep -q "unreadable"; then
+  echo "  corrupt state refused instead of read as empty"
+else
+  fail+=("a corrupt manifest did not stop uninstall (rc=$rc) — it would remove tools another template still needs")
+fi
+
+# A deleted record with the tools still present is the same class: the repo is
+# not empty, so an empty list is not the answer.
+rm -f "$T/.astra/manifest.json"
+out="$(python3 "$A/tools/lib/template.py" uninstall kicker-dev --into "$T" 2>&1)"; rc=$?
+if [ "$rc" -eq 65 ] && echo "$out" | grep -q "not recorded as installed"; then
+  echo "  deleted state refused rather than acted on as an empty list"
+else
+  fail+=("a deleted manifest let uninstall run from an empty list (rc=$rc)")
+fi
+
 rm -rf "$(dirname "$T")"
 if [ ${#fail[@]} -eq 0 ]; then echo "templates: non-exclusive overlap holds"; exit 0; fi
 printf 'FAIL: %s\n' "${fail[@]}"; exit 1

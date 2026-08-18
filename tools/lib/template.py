@@ -80,24 +80,66 @@ def run_tool(name, verb, repo):
 
 
 def state_path(repo):
-    return Path(repo) / ".astra-templates.json"
+    """Template state lives in the SAME file as tool state.
+
+    It used to sit in its own .astra-templates.json at the repo root, which made
+    two files that had to agree about one repo and gave no reason they would.
+    Everything a repo knows about its astra install now lives in
+    .astra/manifest.json.
+    """
+    return Path(repo) / ".astra" / "manifest.json"
+
+
+def _read_state(repo):
+    p = state_path(repo)
+    try:
+        return json.loads(p.read_text())
+    except FileNotFoundError:
+        # Genuinely nothing installed. A legitimate empty answer.
+        legacy = Path(repo) / ".astra-templates.json"
+        if legacy.exists():
+            try:
+                old = json.loads(legacy.read_text()).get("installed", [])
+                return {"templates": sorted(old)}
+            except Exception:
+                pass
+        return {}
+    except Exception as e:
+        # NOT the same as "nothing installed", and the difference is the whole
+        # non-exclusive property. installed_templates() used to swallow every
+        # error into an empty list, so a corrupt or hand-edited state file made
+        # uninstall believe no other template claimed anything — and it would
+        # then remove tools a second, still-installed template needed. Refuse.
+        print(f"{p} is unreadable ({e}). Refusing to act on template state we "
+              f"cannot read, because reading it as empty would let uninstall "
+              f"remove tools another template still needs.", file=sys.stderr)
+        sys.exit(65)
 
 
 def installed_templates(repo):
-    try:
-        return json.loads(state_path(repo).read_text()).get("installed", [])
-    except Exception:
-        return []
+    return _read_state(repo).get("templates", [])
 
 
 def record_template(repo, name, add=True):
-    cur = installed_templates(repo)
+    data = _read_state(repo)
+    cur = list(data.get("templates", []))
     if add and name not in cur:
         cur.append(name)
     if not add and name in cur:
         cur.remove(name)
-    state_path(repo).write_text(
-        json.dumps({"installed": sorted(cur)}, indent=2) + "\n")
+    data["templates"] = sorted(cur)
+    p = state_path(repo)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # Write beside and rename: a half-written manifest is exactly the corrupt
+    # state the refusal above exists to catch, and there is no reason to
+    # manufacture it ourselves.
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, p)
+    # Retire the old sidecar file once its contents are safely carried over.
+    legacy = Path(repo) / ".astra-templates.json"
+    if legacy.exists():
+        legacy.unlink()
 
 
 def tools_still_claimed(repo, excluding):
@@ -156,6 +198,30 @@ def _apply(verb, args):
         print(f"no such template: {name}", file=sys.stderr)
         return 66
     repo = _target(args)
+
+    # UNINSTALL ONLY WHAT THE RECORD SAYS IS INSTALLED.
+    #
+    # tools_still_claimed() answers "what do the OTHER installed templates
+    # need" by reading the record. If the record has been deleted, truncated or
+    # hand-edited, that question comes back empty and uninstall happily removes
+    # tools a second, still-installed template depends on. The corrupt case is
+    # refused when the file is read; this catches the deleted one, and it does
+    # so without guessing at what is installed by inspecting the filesystem —
+    # which cannot work anyway, since MCP templates write .mcp.json rather than
+    # a directory of their own.
+    #
+    # Being asked to remove something no record mentions is suspicious on its
+    # own terms. Say so rather than acting on an empty list.
+    if verb == "uninstall" and name not in installed_templates(repo):
+        print(f"'{name}' is not recorded as installed in {repo}.", file=sys.stderr)
+        print(f"  Refusing, because deciding what to remove means asking which "
+              f"OTHER templates still need each tool, and that question cannot "
+              f"be answered from a record that does not list this one.",
+              file=sys.stderr)
+        print(f"  Recorded: {', '.join(installed_templates(repo)) or '(none)'}",
+              file=sys.stderr)
+        return 65
+
     ok_n = fail_n = kept_n = 0
     print(f"{verb}ing template '{name}' -> {repo}")
     keep = tools_still_claimed(repo, name) if verb == "uninstall" else set()
