@@ -63,11 +63,36 @@ if [ -f "$HOOK" ]; then
   echo "backed up existing pre-commit"
 fi
 
-# A repo that already had the old hand-rolled version gets it replaced wholesale;
-# anything else is preserved and this block appended.
-if [ -f "$HOOK" ] && ! grep -qF "$BEGIN" "$HOOK" \
-   && ! grep -q "generate_pdf_sidecars" "$HOOK"; then
-  KEEP="$(cat "$HOOK")"
+# PRESERVE THE REPO'S OWN HOOK CONTENT. Only this tool's managed block is ever
+# replaced. An earlier version here discarded the whole file whenever it found
+# the old hand-rolled sidecar code, which would have silently eaten any
+# repo-specific guard living in the same hook — js-hoa has one that refuses
+# commits deleting scraped evidence. A tool that removes somebody else's work
+# while installing itself is the same disease as the sync that overwrote local
+# edits, one layer up.
+if [ -f "$HOOK" ]; then
+  KEEP="$(python3 - "$HOOK" "$BEGIN" "$END" <<'PY'
+import sys, pathlib
+hook, begin, end = sys.argv[1], sys.argv[2], sys.argv[3]
+lines = pathlib.Path(hook).read_text().splitlines()
+out, skipping = [], False
+for line in lines:
+    if line.strip() == begin:
+        skipping = True
+        continue
+    if line.strip() == end:
+        skipping = False
+        continue
+    if not skipping:
+        out.append(line)
+# Drop the old hand-rolled sidecar hook, which the managed block replaces. It is
+# recognised by its own call, not by position.
+text = "\n".join(out)
+if "generate_pdf_sidecars" in text and begin not in text:
+    text = "#!/bin/bash"
+print(text.rstrip() or "#!/bin/bash")
+PY
+)"
 else
   KEEP="#!/bin/bash"
 fi
