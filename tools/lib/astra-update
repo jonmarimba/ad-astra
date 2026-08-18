@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""
+astra-update — vendored into every repo at .astra/astra-update.
+
+WHAT THIS IS
+------------
+The pull half of astra's tool distribution. A repo that has astra tools
+installed carries this script and a manifest saying where each tool came from
+and what it looked like on arrival. This asks the source whether anything has
+moved on, and updates in place.
+
+WHY IT IS HERE AND NOT IN ASTRA (Jonathan, 2026-08-18)
+------------------------------------------------------
+The first design had astra push: a post-commit hook in astra rewrote files
+across six checkouts, deciding what belonged to it by matching filenames. That
+put the blast radius in the wrong place. A bug in astra could destroy work in a
+legal repo, and it did — the fork guard was unreachable, so an edited copy was
+silently overwritten.
+
+Pull inverts it. Each repo asks, on its own schedule, from its own hook. Astra
+never reaches into anything. A repo can be cloned, moved, or taken offline and
+this still behaves correctly, which a central list of absolute paths cannot.
+
+THE SAFETY RULE, learned the hard way
+-------------------------------------
+Update a file only when it is EXACTLY what we installed. The manifest records
+the hash of every file at install time, so a local edit is a fact rather than
+an inference. Matching hash means nobody touched it and replacing it loses
+nothing. Anything else is reported and left alone — never silently overwritten,
+and never silently skipped either, because a watcher that hides work is how the
+real problem gets missed.
+
+    .astra/astra-update            report what is behind, change nothing
+    .astra/astra-update --pull     update the unmodified, report the rest
+"""
+import hashlib
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent          # <repo>/.astra
+MANIFEST = HERE / "manifest.json"
+
+
+def sha(p):
+    try:
+        return hashlib.sha256(Path(p).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def load():
+    try:
+        return json.loads(MANIFEST.read_text())
+    except FileNotFoundError:
+        print(f"no manifest at {MANIFEST} — nothing installed here", file=sys.stderr)
+        raise SystemExit(0)
+    except Exception as e:
+        # A corrupt manifest must never be treated as "nothing installed".
+        # That reading would make a broken repo look like a clean one.
+        print(f"manifest unreadable ({e}) — refusing to guess", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def save(data):
+    tmp = MANIFEST.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, MANIFEST)
+
+
+def main():
+    pull = "--pull" in sys.argv
+    data = load()
+    behind = modified = current = missing = 0
+
+    for tool, meta in sorted(data.get("tools", {}).items()):
+        src_root = Path(meta.get("source", ""))
+        src_dir = src_root / "tools" / tool
+        dest_dir = HERE / tool
+
+        if not src_dir.is_dir():
+            # The source is gone or this repo moved to a machine without it.
+            # Say so plainly; the installed copy still works.
+            print(f"  SOURCE GONE  {tool}  (looked in {src_dir})")
+            missing += 1
+            continue
+
+        for fname, installed_sha in sorted(meta.get("files", {}).items()):
+            src = src_dir / fname
+            dest = dest_dir / fname
+            upstream, live = sha(src), sha(dest)
+
+            if upstream is None:
+                print(f"  SOURCE GONE  {tool}/{fname}")
+                missing += 1
+            elif live is None:
+                print(f"  MISSING      {tool}/{fname} — reinstall the tool")
+                missing += 1
+            elif live == upstream:
+                current += 1
+            elif live != installed_sha:
+                # Diverged from what we put here. Could be a deliberate local
+                # change or an accident; either way it is not ours to discard.
+                print(f"  LOCAL EDITS  {tool}/{fname} — differs from what was "
+                      f"installed; not touching it")
+                modified += 1
+            elif pull:
+                tmp = dest.with_name(dest.name + ".astra-tmp")
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dest)       # atomic: never a truncated tool
+                meta["files"][fname] = upstream
+                print(f"  updated      {tool}/{fname}")
+                behind += 1
+            else:
+                print(f"  BEHIND       {tool}/{fname} — run .astra/astra-update --pull")
+                behind += 1
+
+    if pull and behind:
+        save(data)
+
+    parts = [f"{current} current"]
+    if behind:
+        parts.append(f"{behind} {'updated' if pull else 'behind'}")
+    if modified:
+        parts.append(f"{modified} locally modified")
+    if missing:
+        parts.append(f"{missing} missing")
+    print(", ".join(parts))
+
+    # Nonzero only for things a human must act on. Being behind is not a
+    # failure when --pull just fixed it.
+    return 1 if (modified or missing or (behind and not pull)) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

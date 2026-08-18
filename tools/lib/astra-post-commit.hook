@@ -1,0 +1,12 @@
+#!/bin/bash
+# astra: keep this repo's vendored tools current.
+#
+# The repo asks; nothing reaches in from outside. --pull updates only files
+# that still match what was installed, and reports anything locally modified
+# instead of overwriting it.
+#
+# Runs in the background so a commit never waits on it.
+if [ -x "$(git rev-parse --show-toplevel)/.astra/astra-update" ]; then
+  ( "$(git rev-parse --show-toplevel)/.astra/astra-update" --pull \
+      >> "$(git rev-parse --show-toplevel)/.astra/update.log" 2>&1 & ) >/dev/null 2>&1
+fi

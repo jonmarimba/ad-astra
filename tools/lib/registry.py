@@ -179,8 +179,31 @@ def discover(names):
     return buckets
 
 
-def cmd_scan(_):
-    """Rebuild the registry from what is actually on disk."""
+def cmd_scan(args):
+    """Refresh the ledger, and REPORT unregistered look-alikes without adopting them.
+
+    OWNERSHIP IS RECORDED, NOT INFERRED. This is the correction Jonathan made on
+    2026-08-18, and it dissolves a whole class of bug rather than guarding
+    against it.
+
+    The first version decided what belonged to astra by matching FILENAMES
+    across the workspace. That is a guess, and it is the guess that made
+    everything downstream dangerous: any repo with its own rules.json or lib.sh
+    was silently adopted as an astra install, and the post-commit hook then
+    overwrote it with astra's version. Two astra tools already share a basename
+    with each other, so it could confuse even its own files. Guarding a bad
+    inference with ever-cleverer fork detection was the wrong shape of fix.
+
+    Now the ledger is authoritative. sync() only ever writes to paths the ledger
+    already holds, and the ledger only grows when something is deliberately
+    adopted. A same-named file that is NOT in the ledger is reported as a
+    candidate and left completely alone.
+
+    The 36 installs present when this changed were verified current against
+    canonical and seeded once with `scan --adopt`. Every later addition should
+    come from a tool's own install.sh recording where it wrote.
+    """
+    adopt = "--adopt" in args
     reg = load()
     canon_files = []
     for d in (ASTRA / "tools").iterdir() if (ASTRA / "tools").is_dir() else []:
@@ -215,14 +238,20 @@ def cmd_scan(_):
         for i in t.get("installs", []):
             prior[(tname, i.get("path"))] = i
 
+    known = {p for (_, p) in prior}
     tools = {}
+    candidates = []
     for canon, hits in found.items():
-        if not hits:
-            continue
         tname = Path(canon).name
         entry = {"canonical": str(Path(canon).relative_to(ASTRA)),
                  "canonical_sha": sha(canon), "installs": []}
         for h in hits:
+            # THE GATE. An unregistered look-alike is somebody else's file until
+            # a human says otherwise. Reporting it is useful; adopting it on
+            # sight is how the collision bug destroyed data.
+            if str(h) not in known and not adopt:
+                candidates.append((tname, str(h)))
+                continue
             ok, why = is_safe_target(h)
             was = prior.get((tname, str(h)), {})
             live = sha(h)
@@ -237,11 +266,30 @@ def cmd_scan(_):
             # Only stamped the FIRST time this path is ever seen.
             rec["first_seen_sha"] = was.get("first_seen_sha", live)
             entry["installs"].append(rec)
-        tools[tname] = entry
+        if entry["installs"]:
+            tools[tname] = entry
+
+    # A ledger entry whose file is gone stays in the ledger and is reported by
+    # status as GONE. Dropping it here would make an uninstalled tool look like
+    # a tool that was never installed.
+    for tname, t in (reg.get("tools") or {}).items():
+        if tname in tools:
+            continue
+        surviving = [i for i in t.get("installs", []) if Path(i["path"]).exists()]
+        if surviving:
+            t["installs"] = surviving
+            tools[tname] = t
+
     reg["tools"] = tools
     save(reg)
     n = sum(len(t["installs"]) for t in tools.values())
-    print(f"registry: {len(tools)} tool(s), {n} installed cop(y|ies) -> {REGISTRY}")
+    print(f"registry: {len(tools)} tool(s), {n} recorded cop(y|ies) -> {REGISTRY}")
+    if candidates:
+        print(f"\n{len(candidates)} same-named file(s) NOT in the ledger — "
+              f"left untouched. These may be other projects' own files:")
+        for tname, p in sorted(candidates):
+            print(f"     {tname:28} {p.replace(str(Path.home()) + '/', '~/')}")
+        print("  Adopt deliberately with `registry.py scan --adopt` if they really are ours.")
     return 0
 
 

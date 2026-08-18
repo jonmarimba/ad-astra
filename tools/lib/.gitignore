@@ -1,1 +1,3 @@
 sync.log
+__pycache__/
+*.pyc
