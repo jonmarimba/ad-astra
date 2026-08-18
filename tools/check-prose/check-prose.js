@@ -33,26 +33,91 @@ const path = require('path');
 function loadRules() {
     const base = JSON.parse(fs.readFileSync(path.join(__dirname, 'rules.json'), 'utf8'));
     const local = path.join(process.cwd(), '.check-prose.json');
-    if (fs.existsSync(local)) {
-        try {
-            const over = JSON.parse(fs.readFileSync(local, 'utf8'));
-            for (const k of Object.keys(over)) {
-                if (Array.isArray(base[k]) && Array.isArray(over[k])) base[k] = base[k].concat(over[k]);
-                else base[k] = over[k];
+    if (!fs.existsSync(local)) return base;
+
+    let over;
+    try {
+        over = JSON.parse(fs.readFileSync(local, 'utf8'));
+    } catch (e) {
+        console.error(`check-prose: ${local} is unreadable (${e.message}) — refusing to run on partial rules`);
+        process.exit(2);
+    }
+
+    // A LOCAL FILE MAY ADD. IT MAY NOT QUIETLY SUBTRACT.
+    //
+    // The merge used to assign over[k] straight onto base[k] for anything that
+    // was not a plain array, so a repo containing
+    //     {"self_referential": {"patterns": []}}
+    // replaced the whole object and switched that entire category off. The
+    // checker then ran, found nothing, and exited 0 — a repo could look like
+    // its prose was being checked while nothing checked it. Same one-liner
+    // disabled candor_disclaimers, and {"label_fragment":{"verbish":".*"}}
+    // matched every label there is.
+    //
+    // Extension is the documented purpose, so additions merge silently. Any
+    // narrowing is applied but ANNOUNCED, because a rule someone turned off on
+    // purpose is fine and a rule that vanished is not, and silence cannot tell
+    // you which happened.
+    const nested = ['self_referential', 'candor_disclaimers'];
+    for (const k of Object.keys(over)) {
+        if (Array.isArray(base[k]) && Array.isArray(over[k])) {
+            base[k] = base[k].concat(over[k]);
+        } else if (nested.includes(k) && over[k] && Array.isArray(over[k].patterns)) {
+            const had = (base[k] && base[k].patterns || []).length;
+            base[k] = { patterns: (base[k] && base[k].patterns || []).concat(over[k].patterns) };
+            if (over[k].patterns.length === 0 && had > 0) {
+                console.error(`check-prose: ${local} supplies an empty pattern list for "${k}" — kept the ${had} default(s); a local file may add rules, not remove them`);
             }
-        } catch (e) {
-            console.error(`check-prose: ${local} is unreadable (${e.message}) — refusing to run on partial rules`);
-            process.exit(2);
+        } else {
+            base[k] = over[k];
+            console.error(`check-prose: ${local} REPLACES "${k}" wholesale — the defaults for it are no longer in effect`);
         }
     }
     return base;
 }
 
+// Compile one pattern, naming the culprit instead of dying on a stack trace.
+// These strings come from a file any repo can write, so an invalid expression
+// is an input error to report, not a crash.
+function compile(pattern, where) {
+    try {
+        return new RegExp(pattern, 'i');
+    } catch (e) {
+        console.error(`check-prose: invalid pattern in ${where}: ${JSON.stringify(pattern)} (${e.message})`);
+        process.exit(2);
+    }
+}
+
+// Banned entries are literal words and phrases, never expressions. Escaping
+// them means a rules entry containing a regex character matches the text a
+// reader expects rather than silently changing what the rule means.
+function escapeLiteral(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const RULES = loadRules();
 const BANNED = RULES.banned_words.concat(RULES.banned_phrases);
-const SELF_REFERENTIAL = RULES.self_referential.patterns.map(p => new RegExp(p, 'i'));
-const CANDOR = (RULES.candor_disclaimers ? RULES.candor_disclaimers.patterns : []).map(p => new RegExp(p, 'i'));
-const LABEL_VERBISH = new RegExp(RULES.label_fragment.verbish, 'i');
+// Word boundaries only where a word character actually sits at the edge. \b is
+// a boundary BETWEEN a word and a non-word character, so wrapping an entry that
+// begins or ends in punctuation — "c++", or a phrase ending in a comma — asks
+// for a boundary that cannot occur and the rule silently never fires. Found by
+// test 6, which is the only reason it is not still true.
+function bounded(word) {
+    const lead = /\w/.test(word[0]) ? '\\b' : '';
+    const tail = /\w/.test(word[word.length - 1]) ? '\\b' : '';
+    return new RegExp(lead + escapeLiteral(word) + tail, 'i');
+}
+const BANNED_RE = BANNED.map(w => ({ word: w, re: bounded(w) }));
+const SELF_REFERENTIAL = RULES.self_referential.patterns.map(p => compile(p, 'self_referential'));
+const CANDOR = (RULES.candor_disclaimers ? RULES.candor_disclaimers.patterns : []).map(p => compile(p, 'candor_disclaimers'));
+const LABEL_VERBISH = compile(RULES.label_fragment.verbish, 'label_fragment.verbish');
+
+// A checker that silently has nothing to check is indistinguishable from clean
+// prose. Refuse rather than pass.
+if (BANNED.length === 0 && SELF_REFERENTIAL.length === 0 && CANDOR.length === 0) {
+    console.error('check-prose: every rule category is empty — nothing would be checked. Refusing to report success.');
+    process.exit(2);
+}
 
 function sentences(text) {
     return text.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
@@ -74,8 +139,8 @@ function check(file) {
 
         const prose = line.replace(/`[^`]*`/g, 'X').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
 
-        for (const word of BANNED) {
-            if (new RegExp('\\b' + word + '\\b', 'i').test(prose)) {
+        for (const { word, re } of BANNED_RE) {
+            if (re.test(prose)) {
                 problems.push([n, 'banned word "' + word + '"', line.slice(0, 70)]);
             }
         }
