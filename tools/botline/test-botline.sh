@@ -34,6 +34,42 @@ r = A.exchange()
 if not r.partner_answered: fail.append("did not register the answer")
 if st()["alice"]["syn"] == seen[0]: fail.append("syn not advanced after answer")
 
+# THIRD-LEG PROPERTY (GhOST-OpenClaw review): round_complete must be FALSE
+# until a side has had its own SYN/ACK confirmed, and TRUE thereafter. Testing
+# only that it eventually goes true would pass a version that returns True
+# unconditionally — so assert the "not early" half too. That half is the one
+# that can actually catch a false positive.
+import os
+p2 = path + ".rc"
+for f in (p2, p2.replace(".json", "") + ".lock"):
+    if os.path.exists(f): os.unlink(f)
+C = Botline(p2, me="alice", partner="bob")
+D = Botline(p2, me="bob", partner="alice")
+r1 = C.exchange()                      # A: SYN
+if r1.round_complete: fail.append("round_complete true on the very first SYN")
+r2 = D.exchange()                      # B: SYN/ACK + own SYN
+if r2.round_complete: fail.append("round_complete true before any ACK exists")
+r3 = C.exchange()                      # A: ACK (+ answers B's SYN)
+if r3.round_complete: fail.append("round_complete true on A before B confirmed A's synack")
+r4 = D.exchange()                      # B sees its SYN/ACK was ACK'd
+if not r4.round_complete: fail.append("B never reached round_complete after a full three-leg exchange")
+r5 = C.exchange()
+if not r5.round_complete: fail.append("A never reached round_complete after the round closed")
+for extra_round in range(2):
+    if not D.exchange().round_complete: fail.append("round_complete regressed on B")
+    if not C.exchange().round_complete: fail.append("round_complete regressed on A")
+
+# Reserved fields may not be overridden by a caller.
+try:
+    C.exchange(extra={"syn": "hijacked"})
+    fail.append("caller was allowed to override the reserved 'syn' field")
+except ValueError:
+    pass
+try:
+    C.exchange(extra={"my_own_key": 1})
+except ValueError:
+    fail.append("caller rejected for a NON-reserved key")
+
 rm = None
 for i in range(4):
     s = st(); s["bob"]["syn"] = f"dead{i:08d}"; s["bob"]["synack"] = None

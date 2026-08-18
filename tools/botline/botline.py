@@ -111,6 +111,13 @@ class Exchange:
 
 
 class Botline:
+    # Fields the handshake owns. A caller may add anything else via `extra`,
+    # but never these — see the collision check in exchange().
+    RESERVED = frozenset({
+        "syn", "synack", "ack", "handshake_misses", "partner_syn_seen",
+        "status", "problems", "counterpart", "info", "protocol", "last_check",
+    })
+
     def __init__(self, state_path, me, partner, misses_before_alarm=3):
         self.state_path = Path(state_path)
         self.lock_path = self.state_path.with_suffix(".lock")
@@ -283,6 +290,22 @@ class Botline:
                 "partner_syn_seen": their_syn,
                 "protocol": "botline/2 — three-way: SYN -> SYN/ACK -> ACK. Echo our syn as your synack; return our synack as your ack.",
             }
+            # RESERVED FIELDS ARE NOT OVERRIDABLE (GhOST-OpenClaw review,
+            # 2026-08-18). This used to be a bare entry.update(extra) AFTER the
+            # protocol fields, so any caller could quietly redefine syn, ack,
+            # status or protocol from outside — which defeats the single reason
+            # this module exists: neither side can drift from the shared
+            # protocol. Rejected LOUDLY rather than by silent precedence,
+            # because a caller passing `syn` has a bug and should be told, not
+            # have its intent dropped without a word.
+            collisions = sorted(set(extra or {}) & self.RESERVED)
+            if collisions:
+                raise ValueError(
+                    f"botline: caller tried to override reserved protocol "
+                    f"field(s) {collisions}. These are owned by the handshake "
+                    f"and may not be set by a caller — that is what keeps both "
+                    f"sides from drifting. Put your own data under different "
+                    f"keys.")
             entry.update(extra or {})
             state[self.me] = entry
             self._write_atomic(state)
