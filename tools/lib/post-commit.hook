@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# astra post-commit — push tool changes out to every repo they are installed in.
+#
+# Astra's model is copy-on-install and "re-run the installer to update". Nobody
+# ever re-ran it. On 2026-08-18 generate_pdf_sidecars.sh existed in five places
+# at four vintages, the legal repos silently running a month-old PDF converter.
+# Jonathan: "you need to keep a list of where each tool is installed and on
+# commit, reinstall/update each tool that's changed."
+#
+# Runs in the BACKGROUND so a commit never blocks on a filesystem walk, and logs
+# to tools/lib/sync.log. Read that log rather than trusting silence.
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+LOG="$REPO/tools/lib/sync.log"
+# Match every extension a tool can ship in. This filter was narrower than what
+# the registry TRACKS (.sh, .py, .js, rules.json), so a commit touching only
+# rules.json exited here without syncing — the propagation demo appeared to work
+# solely because that commit also happened to include a .py file. A trigger
+# narrower than the thing it triggers is a silent no-op.
+CHANGED="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | grep -E '^tools/.*(\.(sh|py|js)|/rules\.json)$' || true)"
+[ -z "$CHANGED" ] && exit 0
+{
+  echo "── $(date '+%Y-%m-%d %H:%M:%S')  commit $(git rev-parse --short HEAD)"
+  echo "   changed: $(echo "$CHANGED" | tr '\n' ' ')"
+  python3 "$REPO/tools/lib/registry.py" scan 2>&1 | sed 's/^/   /'
+  python3 "$REPO/tools/lib/registry.py" sync 2>&1 | sed 's/^/   /'
+} >> "$LOG" 2>&1 &
+exit 0
