@@ -105,6 +105,8 @@ class Exchange:
     round_complete: bool
     misses: int
     should_alarm: bool
+    partner_absent: bool = False
+    silent_minutes: float = None
     counterpart: list = field(default_factory=list)
     info: list = field(default_factory=list)
     my_syn: str = ""
@@ -113,12 +115,22 @@ class Exchange:
 class Botline:
     # Fields the handshake owns. A caller may add anything else via `extra`,
     # but never these — see the collision check in exchange().
+    # Wire protocol version. A peer speaking a different version must be
+    # REFUSED loudly, not silently misread: botline/2 puts the partner's echoed
+    # syn in `synack` and uses `ack` for leg three, while a two-leg peer writes
+    # the echo directly into `ack`. Same key names, different meanings — which
+    # makes a one-sided upgrade a guaranteed two-way latched false alarm rather
+    # than a partial improvement. Found by convocation before either side wired
+    # it in, 2026-08-18.
+    PROTOCOL = "botline/2"
+
     RESERVED = frozenset({
         "syn", "synack", "ack", "handshake_misses", "partner_syn_seen",
         "status", "problems", "counterpart", "info", "protocol", "last_check",
     })
 
-    def __init__(self, state_path, me, partner, misses_before_alarm=3):
+    def __init__(self, state_path, me, partner, misses_before_alarm=3,
+                 silence_minutes=180):
         self.state_path = Path(state_path)
         self.lock_path = self.state_path.with_suffix(".lock")
         self.me = me
@@ -127,6 +139,26 @@ class Botline:
         # consecutive unanswered pings is a partner that is genuinely not
         # listening. Anything lower re-invents the false-alarm problem.
         self.misses_before_alarm = misses_before_alarm
+        # YOU CANNOT DETECT SILENCE WITHOUT A CLOCK. The handshake replaces
+        # timestamps for "is the partner RESPONSIVE" — an unanswered ping is
+        # direct evidence, where an old timestamp was only an inference. But
+        # "is the partner THERE AT ALL" is a different question, and absence is
+        # observable only as elapsed time.
+        #
+        # An earlier version had no clock at all, on the theory that handshakes
+        # made timestamps obsolete. The result: a partner whose process simply
+        # stopped left its syn FROZEN, so "partner advanced without answering"
+        # was never true, so the miss counter sat at zero permanently and the
+        # module could not detect a dead partner at any horizon. Total silence
+        # is the commonest death mode — cron unloaded, gateway crashed, machine
+        # rebooted — and it was the one case that could never fire.
+        #
+        # So the clock is back, for absence only, and deliberately WIDE. It must
+        # comfortably exceed the partner's slowest plausible cadence, because
+        # this is exactly the knob that produced six false 3am texts when it was
+        # set tighter than the partner's period. Wide-and-reliable beats
+        # tight-and-crying-wolf: a monitor nobody believes is worth nothing.
+        self.silence_minutes = silence_minutes
 
     def _read(self):
         try:
@@ -258,6 +290,46 @@ class Botline:
                 info.append(f"handshake: {self.partner} ACK'd our SYN/ACK "
                             f"({str(their_ack)[:8]}) — round complete both ways")
 
+            # ── ABSENCE: the partner is not merely rude, it is GONE ───────
+            # Separate signal, separate cause. `misses` counts a partner that
+            # RAN and ignored us. This counts one that stopped running at all —
+            # the case the miss counter structurally cannot see, because a dead
+            # partner's syn never advances.
+            silent_minutes = None
+            their_last = theirs.get("last_check")
+            if their_last:
+                try:
+                    t = datetime.fromisoformat(their_last)
+                    if t.tzinfo is None:
+                        t = t.replace(tzinfo=timezone.utc)
+                    silent_minutes = (datetime.now(timezone.utc) - t).total_seconds() / 60
+                except (ValueError, TypeError) as e:
+                    counterpart.append(f"{self.partner} last_check unparseable: "
+                                       f"{their_last!r} ({e})")
+            elif theirs:
+                counterpart.append(f"{self.partner} has a state entry but no "
+                                   f"last_check — cannot judge absence")
+
+            gone = (silent_minutes is not None
+                    and silent_minutes > self.silence_minutes)
+            if gone:
+                counterpart.append(
+                    f"{self.partner} has written NOTHING for "
+                    f"{int(silent_minutes)}m (threshold {self.silence_minutes}m). "
+                    f"Not unresponsive — absent. Its scheduler is not running.")
+
+            # ── PROTOCOL VERSION: refuse, do not misread ──────────────────
+            # A two-leg peer writes the echoed syn straight into `ack`, where
+            # this version keeps leg three. Same keys, different meanings. Left
+            # unchecked, both sides increment forever and neither can clear.
+            their_proto = theirs.get("protocol")
+            if theirs and their_proto and not str(their_proto).startswith("botline/2"):
+                counterpart.append(
+                    f"PROTOCOL MISMATCH: {self.partner} speaks {their_proto!r}, "
+                    f"we speak {self.PROTOCOL}. Key names collide with different "
+                    f"meanings, so handshake results here are NOT trustworthy — "
+                    f"treat liveness as unknown until both sides match.")
+
             # Surface the partner's own verdict, but never let it set OUR status.
             if theirs.get("status") == "unhealthy":
                 their_problems = theirs.get("problems") or ["(none listed)"]
@@ -288,7 +360,10 @@ class Botline:
                 # has not run yet" — the distinction that keeps miss-counting
                 # independent of OUR polling rate.
                 "partner_syn_seen": their_syn,
-                "protocol": "botline/2 — three-way: SYN -> SYN/ACK -> ACK. Echo our syn as your synack; return our synack as your ack.",
+                "protocol": self.PROTOCOL,
+                "protocol_note": ("three-way: SYN -> SYN/ACK -> ACK. Echo our "
+                                  "syn as your synack; return our synack as "
+                                  "your ack."),
             }
             # RESERVED FIELDS ARE NOT OVERRIDABLE (GhOST-OpenClaw review,
             # 2026-08-18). This used to be a bare entry.update(extra) AFTER the
@@ -314,8 +389,11 @@ class Botline:
             partner=self.partner,
             partner_answered=answered,
             round_complete=completed,
+            partner_absent=gone,
+            silent_minutes=silent_minutes,
             misses=misses,
-            should_alarm=misses >= self.misses_before_alarm,
+            # Either signal alarms: ignored-while-alive, or absent entirely.
+            should_alarm=(misses >= self.misses_before_alarm) or gone,
             counterpart=counterpart,
             info=info,
             my_syn=my_syn,
