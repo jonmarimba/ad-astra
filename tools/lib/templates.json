@@ -1,17 +1,36 @@
 {
-  "_comment": "Named groups of astra tools fit for a KIND of project. Non-exclusive: installing one adds its tools and never removes another's, and two templates may overlap freely — swift-ios and legal-pdf both pull the writing tools, and installing one after the other must leave both intact.",
+  "_comment": "Named groups of astra tools fit for a KIND of project. Non-exclusive: installing one adds its tools and never removes another's, and two templates may overlap freely \u2014 swift-ios and legal-pdf both pull the writing tools, and installing one after the other must leave both intact.",
   "templates": {
     "swift-ios": {
-      "description": "Swift/iOS app work — the Maharam repos. Xcode both ways (Apple's bridge needs a one-time approval; XcodeBuildMCP is headless), plus simulator and device control.",
-      "tools": ["mcp-xcode", "mcp-XcodeBuildMCP", "mcp-ios-simulator", "mcp-mobile-mcp", "mcp-mac-control-mcp"]
+      "description": "Swift/iOS app work \u2014 the Maharam repos. Xcode both ways (Apple's bridge needs a one-time approval; XcodeBuildMCP is headless), plus simulator and device control.",
+      "tools": [
+        "mcp-xcode",
+        "mcp-XcodeBuildMCP",
+        "mcp-ios-simulator",
+        "mcp-mobile-mcp",
+        "mcp-mac-control-mcp"
+      ]
     },
     "legal-pdf": {
-      "description": "Legal repos — speedway, hoa, grandparentLegal. PDF to searchable text sidecars, OCR for scans, metadata provenance. NOTE: grandparentLegal wants `git config jsutils.metadataPolicy all` for every-PDF provenance; the default 'pattern' only does meeting-named files.",
-      "tools": ["pdf-sidecars"]
+      "description": "Legal repos \u2014 speedway, hoa, grandparentLegal. PDF to searchable text sidecars, OCR for scans, metadata provenance, plus the prose checker. NOTE: grandparentLegal wants `git config jsutils.metadataPolicy all` for every-PDF provenance; the default 'pattern' only does meeting-named files.",
+      "tools": [
+        "pdf-sidecars",
+        "check-prose"
+      ]
     },
     "kicker-dev": {
-      "description": "Working on kicker itself — its own daemon surface plus the mac and Xcode tooling.",
-      "tools": ["mcp-kickerd", "mcp-mac-control-mcp", "mcp-xcode"]
+      "description": "Working on kicker itself \u2014 its own daemon surface plus the mac and Xcode tooling.",
+      "tools": [
+        "mcp-kickerd",
+        "mcp-mac-control-mcp",
+        "mcp-xcode"
+      ]
+    },
+    "writing": {
+      "description": "Prose discipline \u2014 the ASD-STE100 standard plus the mechanical checker. Wanted by anything a human reads: the legal repos, the HOA site, client email drafts.",
+      "tools": [
+        "check-prose"
+      ]
     }
   }
 }
