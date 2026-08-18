@@ -585,27 +585,59 @@ disable_codex_block_one() {
   ensure_python3
 
   python3 - "$name" .codex/config.toml <<'PY'
-import re
 import sys
 from pathlib import Path
 
+# REMOVE ONE SECTION, NOT EVERYTHING AFTER IT.
+#
+# This used to match from [mcp_servers.<name>] forward to the next
+# [mcp_servers.  header or end of file, which is only correct when MCP servers
+# are the last thing in the file and nothing is interleaved. Given
+#
+#     [mcp_servers.xcode]
+#     command = "xcrun"
+#
+#     [features]
+#     web_search = true
+#
+#     [projects."/precious"]
+#     trust_level = "trusted"
+#
+# uninstalling xcode deleted [features] and [projects] with it. Codex ran that
+# case during the 2026-08-18 review and got back an empty file. Uninstalling one
+# MCP server must never touch a setting the user wrote by hand.
+#
+# A TOML section ends at the next section header, whatever that header is. Done
+# as a plain line scan rather than a regex, both because the boundary condition
+# is the entire bug and because nobody reads the regex.
 name = sys.argv[1]
 path = Path(sys.argv[2])
-text = path.read_text()
+target = "[mcp_servers.%s]" % name
 
-pattern = re.compile(
-    rf'(?ms)^\[mcp_servers\.{re.escape(name)}\]\n'
-    rf'.*?'
-    rf'(?=^\[mcp_servers\.|\Z)'
-)
+kept = []
+dropping = False
+for line in path.read_text().splitlines():
+    stripped = line.strip()
+    if stripped == target:
+        dropping = True
+        continue
+    # Any section header at all ends the section we are dropping. Includes
+    # [[array.of.tables]], which also opens with a bracket.
+    if dropping and stripped.startswith("["):
+        dropping = False
+    if not dropping:
+        kept.append(line)
 
-text = pattern.sub('', text)
-text = re.sub(r'\n{3,}', '\n\n', text).strip()
+# Collapse the run of blank lines the removal leaves behind, without touching
+# spacing elsewhere.
+out = []
+for line in kept:
+    if not line.strip() and out and not out[-1].strip():
+        continue
+    out.append(line)
 
-if text:
-    path.write_text(text + '\n')
-else:
-    path.write_text('')
+text = "\n".join(out).strip()
+path.write_text(text + "\n" if text else "")
 PY
 }
 
