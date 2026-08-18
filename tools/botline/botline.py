@@ -53,10 +53,12 @@ carry traffic.
 Design decisions that are load-bearing, each bought with a real bug:
 
   NO SHARED SCHEDULE. Neither side needs to know the other's cadence. Each
-  advances whichever leg it can whenever it happens to run. Schedule offset
-  therefore cannot produce a false alarm — which is precisely the failure this
-  replaces. A staleness threshold must be calibrated against the partner's
-  cadence; a handshake must not.
+  advances whichever leg it can whenever it happens to run. This only holds
+  because of two things that are easy to get wrong and were wrong in the first
+  draft: a syn is HELD until answered rather than reminted each run, and a miss
+  requires evidence the PARTNER ran without answering rather than evidence that
+  WE ran. Get either wrong and a fast poller alarms on a healthy partner, which
+  is the original bug rebuilt one layer down.
 
   A PARTNER'S TROUBLE IS NEVER YOUR OWN STATUS. `problems` holds YOUR local
   probes only. What the partner reports goes in `counterpart` and never sets
@@ -168,50 +170,82 @@ class Botline:
             theirs = state.get(self.partner, {})
 
             # ── three-way handshake state machine ─────────────────────────
-            # I advance whichever leg is available this run. Neither side needs
-            # to know the other's cadence; each just moves the conversation
-            # forward whenever it wakes up.
-            prev_syn = mine_prev.get("syn")
+            #
+            # TWO RULES HERE ARE LOAD-BEARING, both found by GhOST-OpenClaw
+            # reviewing this file on 2026-08-18. The first draft violated both
+            # while its own docstring claimed cadence-independence:
+            #
+            #   1. HOLD ONE OUTSTANDING SYN. The first version minted a fresh
+            #      syn every local run. If we poll faster than the partner, our
+            #      syn is replaced before they can answer it, so their synack
+            #      always targets a nonce we already discarded and the round can
+            #      NEVER complete. A syn is held until it is answered.
+            #
+            #   2. COUNT MISSES AGAINST PARTNER PROGRESS, NOT OUR POLLING. The
+            #      first version incremented on every local run while awaiting a
+            #      synack, so running 3x before the partner ran once produced an
+            #      alarm about a perfectly healthy partner. That is precisely the
+            #      cadence-dependent false alarm this module exists to abolish —
+            #      rebuilt one layer down. A miss now requires EVIDENCE the
+            #      partner ran and did not answer: their syn advanced while our
+            #      held syn remains un-synack'd. If they simply have not run, we
+            #      learn nothing and count nothing.
             misses = mine_prev.get("handshake_misses", 0)
+            held_syn = mine_prev.get("syn")
+            partner_syn_seen = mine_prev.get("partner_syn_seen")
 
             their_syn = theirs.get("syn")
             their_synack = theirs.get("synack")
             their_ack = theirs.get("ack")
 
-            # LEG 2 (mine to send): answer their SYN by echoing it as my synack.
-            # Always do this if they are asking something new — answering is
-            # free and withholding it is how a partner concludes you are dead.
+            # LEG 2 (ours to send): answer their SYN by echoing it as our synack.
+            # Answering is free; withholding it is how a partner concludes we
+            # are dead.
             my_synack = their_syn
-
-            # LEG 3 (mine to send): if they answered MY syn, confirm I heard it.
-            # This is the leg Jonathan required. It is what tells THEM that
-            # their reply landed, which two-leg ping/echo never establishes.
-            my_ack = their_synack if their_synack == prev_syn else mine_prev.get("ack")
 
             answered = False
             completed = False
-            if prev_syn is None:
-                info.append("handshake: first run — sending SYN")
+
+            if held_syn is None:
+                my_syn = uuid.uuid4().hex[:12]
+                info.append(f"handshake: first run — sending SYN {my_syn[:8]}")
                 misses = 0
-            elif their_synack == prev_syn:
-                # They answered us. We are now sending the closing ACK.
+            elif their_synack == held_syn:
+                # They answered the syn we were holding. Round advances: send the
+                # closing ACK and mint the next question.
                 answered = True
                 misses = 0
+                my_syn = uuid.uuid4().hex[:12]
                 info.append(f"handshake: {self.partner} SYN/ACK'd "
-                            f"{str(prev_syn)[:8]} — alive; sending ACK")
+                            f"{held_syn[:8]} — alive; sending ACK, next SYN "
+                            f"{my_syn[:8]}")
             else:
-                misses += 1
-                if misses < self.misses_before_alarm:
-                    info.append(f"handshake: awaiting SYN/ACK ({misses}/"
-                                f"{self.misses_before_alarm}) — not alarming")
+                # Unanswered. KEEP the same syn outstanding — replacing it is
+                # what made fast pollers unanswerable.
+                my_syn = held_syn
+                partner_advanced = (their_syn is not None
+                                    and their_syn != partner_syn_seen)
+                if partner_advanced:
+                    misses += 1
+                    if misses < self.misses_before_alarm:
+                        info.append(f"handshake: {self.partner} ran but did not "
+                                    f"answer SYN {held_syn[:8]} ({misses}/"
+                                    f"{self.misses_before_alarm})")
+                    else:
+                        counterpart.append(
+                            f"{self.partner} has run {misses} times without "
+                            f"answering SYN {held_syn[:8]}. It is alive but not "
+                            f"responding to US — a stronger signal than silence.")
                 else:
-                    counterpart.append(
-                        f"{self.partner} has not answered {misses} consecutive "
-                        f"SYNs (last {str(prev_syn)[:8]}). It is not responding "
-                        f"to US — a stronger signal than any stale timestamp.")
+                    info.append(f"handshake: awaiting SYN/ACK for "
+                                f"{held_syn[:8]}; {self.partner} has not run "
+                                f"since — no miss counted")
 
-            # Did THEY close the loop on the round before this one? That is how
-            # we know our own answers are being received, not just sent.
+            # LEG 3 (ours to send): confirm we received their answer.
+            my_ack = their_synack if their_synack == held_syn else mine_prev.get("ack")
+
+            # Did THEY close the loop on our previous answer? That is how we
+            # learn our own replies are being received, not merely sent.
             if their_ack and their_ack == mine_prev.get("synack"):
                 completed = True
                 info.append(f"handshake: {self.partner} ACK'd our SYN/ACK "
@@ -225,7 +259,11 @@ class Botline:
                     f"({len(their_problems)} problem(s)); "
                     f"first: {str(their_problems[0])[:160]}")
 
-            my_syn = uuid.uuid4().hex[:12]
+            # NOTE: my_syn is decided by the state machine above — it is either
+            # HELD (awaiting an answer) or freshly minted (round advanced). A
+            # leftover unconditional mint sat here through the first fix and
+            # silently overwrote every held syn, defeating the whole change
+            # while the tests still printed PASS. Do not reintroduce one.
             entry = {
                 "last_check": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 # Local probes ONLY. A partner's outage does not make us
@@ -238,6 +276,11 @@ class Botline:
                 "synack": my_synack,
                 "ack": my_ack,
                 "handshake_misses": misses,
+                # What the partner's syn looked like this run. Next run compares
+                # against it to tell "partner ran and ignored us" from "partner
+                # has not run yet" — the distinction that keeps miss-counting
+                # independent of OUR polling rate.
+                "partner_syn_seen": their_syn,
                 "protocol": "botline/2 — three-way: SYN -> SYN/ACK -> ACK. Echo our syn as your synack; return our synack as your ack.",
             }
             entry.update(extra or {})
