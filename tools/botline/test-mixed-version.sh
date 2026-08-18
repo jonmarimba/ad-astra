@@ -83,6 +83,15 @@ if death_claims:
 # And it must not ALARM at all on handshake grounds while the schema is known
 # untrustworthy. Alarming off a handshake you have declared unreliable is
 # incoherent, and in a mixed pair the partner is usually perfectly healthy.
+# THE requirement OpenClaw named: the LEGACY peer must not alarm either. An old
+# writer cannot be taught to suppress itself, so the new side has to keep the old
+# contract satisfied for the whole migration window. Merely reporting its miss
+# count — which the first version of this test did — is not an assertion.
+if legacy_misses >= 3:
+    fail.append(f"the LEGACY peer reached alarm state ({legacy_misses} misses). "
+                f"An old writer cannot suppress its own false obituary, so the "
+                f"new side must keep the legacy contract satisfied while both "
+                f"are deployed.")
 if claude_alarmed_at is not None:
     fail.append(f"raised a handshake alarm at cycle {claude_alarmed_at} despite "
                 f"having flagged the protocol as untrustworthy")
@@ -95,14 +104,36 @@ for k in ("ghost_claude", "openclaw"):
     if k not in s:
         fail.append(f"{k}'s key was lost during mixed-version operation")
 
+# Version admission must gate INTERPRETATION, not annotate it after the fact:
+# nothing may report a trusted answer or completion off mismatched data.
+if final.partner_answered or final.round_complete:
+    fail.append("reported a trusted answer/completion from a peer whose protocol "
+                "was rejected — admission did not gate interpretation")
+
+# Exact equality: a near-miss version string must NOT be accepted.
+s2 = json.load(open(path))
+s2["openclaw"]["protocol"] = "botline/20"
+json.dump(s2, open(path, "w"), indent=2)
+near = bl.exchange(status="healthy")
+if not any("PROTOCOL MISMATCH" in c for c in near.counterpart):
+    fail.append("accepted 'botline/20' — prefix matching instead of exact equality")
+
+# A MISSING protocol is incompatible, not trusted.
+s2 = json.load(open(path))
+s2["openclaw"].pop("protocol", None)
+json.dump(s2, open(path, "w"), indent=2)
+missing = bl.exchange(status="healthy")
+if not any("PROTOCOL MISMATCH" in c for c in missing.counterpart):
+    fail.append("trusted a peer that declared NO protocol at all")
+
 # 4. It must not WEDGE: after both sides speak the same protocol again, a normal
 #    handshake has to complete. This is what makes a rollback survivable.
 s["openclaw"] = {
     "last_check": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     "status": "healthy", "problems": [],
-    "syn": "peer-syn-1",
-    "synack": s["ghost_claude"]["syn"],     # now speaking three-leg
-    "ack": None,
+    "syn_v2": "peer-syn-1",
+    "synack_v2": s["ghost_claude"]["syn_v2"],   # now speaking three-leg
+    "ack_v2": None,
     "protocol": "botline/2",
 }
 json.dump(s, open(path, "w"), indent=2)

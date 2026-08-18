@@ -25,15 +25,15 @@ fail = []
 seen = []
 for _ in range(5):
     r = A.exchange()
-    seen.append(st()["alice"]["syn"])
+    seen.append(st()["alice"]["syn_v2"])
     if r.should_alarm: fail.append("alarmed while partner had not run")
 if len(set(seen)) != 1: fail.append(f"syn not held (changed {len(set(seen))}x)")
 
 B.exchange()
-if st()["bob"]["synack"] != seen[0]: fail.append("partner answered a stale syn")
+if st()["bob"]["synack_v2"] != seen[0]: fail.append("partner answered a stale syn")
 r = A.exchange()
 if not r.partner_answered: fail.append("did not register the answer")
-if st()["alice"]["syn"] == seen[0]: fail.append("syn not advanced after answer")
+if st()["alice"]["syn_v2"] == seen[0]: fail.append("syn not advanced after answer")
 
 # THIRD-LEG PROPERTY (GhOST-OpenClaw review): round_complete must be FALSE
 # until a side has had its own SYN/ACK confirmed, and TRUE thereafter. Testing
@@ -73,7 +73,7 @@ except ValueError:
 
 rm = None
 for i in range(4):
-    s = st(); s["bob"]["syn"] = f"dead{i:08d}"; s["bob"]["synack"] = None
+    s = st(); s["bob"]["syn_v2"] = f"dead{i:08d}"; s["bob"]["synack_v2"] = None
     open(path, "w").write(json.dumps(s))
     rm = A.exchange()
 if not rm.should_alarm: fail.append("never alarmed on an unresponsive partner")
@@ -97,6 +97,7 @@ E.exchange(); F.exchange(); E.exchange()      # a clean, completed round first
 # its last real run left it, only the clock moves on.
 s3 = st3 = json.load(open(p3))
 old_ts = (datetime.now(timezone.utc) - timedelta(minutes=200)).isoformat(timespec="seconds")
+s3["bob"]["protocol"] = "botline/2"
 s3["bob"]["last_check"] = old_ts
 open(p3, "w").write(json.dumps(s3))
 
@@ -121,7 +122,7 @@ for f in (p4, p4.replace(".json", ".lock")):
 G = Botline(p4, me="alice", partner="bob")
 G.exchange()
 s4 = json.load(open(p4))
-s4["bob"] = {"protocol": "two-leg/1", "syn": "abc123",
+s4["bob"] = {"protocol": "two-leg/1", "syn_v2": "abc123",
              "last_check": datetime.now(timezone.utc).isoformat(timespec="seconds")}
 open(p4, "w").write(json.dumps(s4))
 r_proto = G.exchange()

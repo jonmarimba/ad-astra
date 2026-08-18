@@ -125,7 +125,8 @@ class Botline:
     PROTOCOL = "botline/2"
 
     RESERVED = frozenset({
-        "syn", "synack", "ack", "handshake_misses", "partner_syn_seen",
+        "syn", "synack", "ack", "syn_v2", "synack_v2", "ack_v2",
+        "legacy_dual_write", "handshake_misses", "partner_syn_seen",
         "status", "problems", "counterpart", "info", "protocol", "last_check",
     })
 
@@ -220,7 +221,32 @@ class Botline:
                 problems.append(f"state file unreadable, partner key may be lost: {e}")
 
             mine_prev = state.get(self.me, {})
-            theirs = state.get(self.partner, {})
+            theirs_raw = state.get(self.partner, {})
+
+            # ── VERSION ADMISSION, BEFORE ANY HANDSHAKE INTERPRETATION ────
+            # GhOST-OpenClaw re-review 2026-08-18: the mismatch check ran AFTER
+            # syn/synack/ack had already been interpreted, so partner_answered
+            # and round_complete could be True on untrusted data before anyone
+            # noticed the schemas disagreed. Admission has to gate interpretation,
+            # not annotate it afterwards.
+            #
+            # EXACT equality, and a MISSING protocol is incompatible — not
+            # trusted. The previous startswith() also accepted "botline/20",
+            # which is the classic prefix bug.
+            their_proto = theirs_raw.get("protocol")
+            proto_ok = (their_proto == self.PROTOCOL)
+            proto_mismatch = bool(theirs_raw) and not proto_ok
+
+            # On mismatch the partner's handshake fields are NOT READ AT ALL.
+            # Nothing downstream can derive a trusted answer or completion from
+            # data we have declared unreadable.
+            theirs = theirs_raw if proto_ok else {}
+            if proto_mismatch:
+                counterpart.append(
+                    f"PROTOCOL MISMATCH: {self.partner} declares "
+                    f"{their_proto!r}, we speak {self.PROTOCOL}. Its handshake "
+                    f"fields were NOT interpreted. Liveness is UNKNOWN here — "
+                    f"not healthy, not dead — until both sides match.")
 
             # If the shared file lost our key, restore the alarm's progress from
             # the private journal rather than silently restarting at zero.
@@ -259,12 +285,15 @@ class Botline:
             #      held syn remains un-synack'd. If they simply have not run, we
             #      learn nothing and count nothing.
             misses = mine_prev.get("handshake_misses", 0)
-            held_syn = mine_prev.get("syn")
+            held_syn = mine_prev.get("syn_v2")
             partner_syn_seen = mine_prev.get("partner_syn_seen")
 
-            their_syn = theirs.get("syn")
-            their_synack = theirs.get("synack")
-            their_ack = theirs.get("ack")
+            # Read ONLY v2 names. Never fall back to the legacy fields: those
+            # carry different meanings and reading them is the misinterpretation
+            # this whole change exists to prevent.
+            their_syn = theirs.get("syn_v2")
+            their_synack = theirs.get("synack_v2")
+            their_ack = theirs.get("ack_v2")
 
             # LEG 2 (ours to send): answer their SYN by echoing it as our synack.
             # Answering is free; withholding it is how a partner concludes we
@@ -310,11 +339,11 @@ class Botline:
                                 f"since — no miss counted")
 
             # LEG 3 (ours to send): confirm we received their answer.
-            my_ack = their_synack if their_synack == held_syn else mine_prev.get("ack")
+            my_ack = their_synack if their_synack == held_syn else mine_prev.get("ack_v2")
 
             # Did THEY close the loop on our previous answer? That is how we
             # learn our own replies are being received, not merely sent.
-            if their_ack and their_ack == mine_prev.get("synack"):
+            if their_ack and their_ack == mine_prev.get("synack_v2"):
                 completed = True
                 info.append(f"handshake: {self.partner} ACK'd our SYN/ACK "
                             f"({str(their_ack)[:8]}) — round complete both ways")
@@ -351,22 +380,9 @@ class Botline:
             # A two-leg peer writes the echoed syn straight into `ack`, where
             # this version keeps leg three. Same keys, different meanings. Left
             # unchecked, both sides increment forever and neither can clear.
-            their_proto = theirs.get("protocol")
-            proto_mismatch = bool(theirs and their_proto
-                                  and not str(their_proto).startswith("botline/2"))
             if proto_mismatch:
-                counterpart.append(
-                    f"PROTOCOL MISMATCH: {self.partner} speaks {their_proto!r}, "
-                    f"we speak {self.PROTOCOL}. Key names collide with different "
-                    f"meanings, so handshake results here are NOT trustworthy — "
-                    f"treat liveness as unknown until both sides match.")
-                # SUPPRESS the handshake alarm entirely. Firing "your partner is
-                # dead" off a handshake we have just declared unreliable is
-                # incoherent — and in a mixed pair the partner is typically
-                # running perfectly, only speaking a different schema. The
-                # mixed-version test showed both sides alarming here; the
-                # mismatch itself is the finding a human needs, not a false
-                # obituary layered on top of it.
+                # Suppress liveness verdicts derived from data we refused to
+                # read. The mismatch itself is the finding.
                 misses = 0
                 gone = False
 
@@ -391,9 +407,24 @@ class Botline:
                 "problems": problems,
                 "counterpart": counterpart,
                 "info": info,
+                # v2 fields live under distinct names so the two protocols
+                # CANNOT collide. A legacy two-leg peer never sees a field whose
+                # meaning it would misread, and vice versa.
+                "syn_v2": my_syn,
+                "synack_v2": my_synack,
+                "ack_v2": my_ack,
+
+                # LEGACY DUAL-WRITE, for the migration window only.
+                # OpenClaw's decisive point: an old writer cannot be taught to
+                # suppress its own false alarm, so fixing only the new side
+                # leaves the old side emitting the same obituary. The new side
+                # must therefore keep the OLD contract satisfied while both are
+                # deployed — `syn` and `ack` carry their two-leg meanings, where
+                # `ack` is simply the partner's syn echoed. Remove these three
+                # once BOTH sides are on botline/2 and nothing reads them.
                 "syn": my_syn,
-                "synack": my_synack,
-                "ack": my_ack,
+                "ack": (theirs_raw.get("syn") if theirs_raw else None),
+                "legacy_dual_write": True,
                 "handshake_misses": misses,
                 # What the partner's syn looked like this run. Next run compares
                 # against it to tell "partner ran and ignored us" from "partner
@@ -429,8 +460,8 @@ class Botline:
             # never break the handshake it is only insuring.
             try:
                 jd = json.dumps({
-                    "syn": entry["syn"], "synack": entry["synack"],
-                    "ack": entry["ack"],
+                    "syn_v2": entry["syn_v2"], "synack_v2": entry["synack_v2"],
+                    "ack_v2": entry["ack_v2"],
                     "handshake_misses": entry["handshake_misses"],
                     "partner_syn_seen": entry["partner_syn_seen"],
                     "last_check": entry["last_check"],
