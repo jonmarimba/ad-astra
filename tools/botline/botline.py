@@ -352,12 +352,23 @@ class Botline:
             # this version keeps leg three. Same keys, different meanings. Left
             # unchecked, both sides increment forever and neither can clear.
             their_proto = theirs.get("protocol")
-            if theirs and their_proto and not str(their_proto).startswith("botline/2"):
+            proto_mismatch = bool(theirs and their_proto
+                                  and not str(their_proto).startswith("botline/2"))
+            if proto_mismatch:
                 counterpart.append(
                     f"PROTOCOL MISMATCH: {self.partner} speaks {their_proto!r}, "
                     f"we speak {self.PROTOCOL}. Key names collide with different "
                     f"meanings, so handshake results here are NOT trustworthy — "
                     f"treat liveness as unknown until both sides match.")
+                # SUPPRESS the handshake alarm entirely. Firing "your partner is
+                # dead" off a handshake we have just declared unreliable is
+                # incoherent — and in a mixed pair the partner is typically
+                # running perfectly, only speaking a different schema. The
+                # mixed-version test showed both sides alarming here; the
+                # mismatch itself is the finding a human needs, not a false
+                # obituary layered on top of it.
+                misses = 0
+                gone = False
 
             # Surface the partner's own verdict, but never let it set OUR status.
             if theirs.get("status") == "unhealthy":
