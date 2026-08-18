@@ -1,0 +1,8 @@
+{
+  "name": "mcp-kickerd",
+  "server": "kickerd",
+  "description": "The kicker daemon's own MCP surface.",
+  "dependencies": [],
+  "provides": "mcp-server",
+  "backed_by": "tools/mcp-bundle"
+}

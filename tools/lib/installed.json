@@ -158,36 +158,36 @@
     },
     "pdf_metadata.sh": {
       "canonical": "tools/pdf-sidecars/pdf_metadata.sh",
-      "canonical_sha": "3560ebfdaf85bfd9",
+      "canonical_sha": "f14fcd7672131b74",
       "installs": [
         {
           "path": "/Users/jonathan/svnCheckouts/js-hoa/13_Scripts/pdf_metadata.sh",
           "safe": true,
-          "sha": "3560ebfdaf85bfd9",
+          "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         },
         {
           "path": "/Users/jonathan/svnCheckouts/js-utils/pdf/pdf_metadata.sh",
           "safe": true,
-          "sha": "3560ebfdaf85bfd9",
+          "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         },
         {
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/pdf_metadata.sh",
           "safe": true,
-          "sha": "3560ebfdaf85bfd9",
+          "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         },
         {
           "path": "/Users/jonathan/svnCheckouts/js-grandparentLegal/13_Scripts/pdf_metadata.sh",
           "safe": true,
-          "sha": "3560ebfdaf85bfd9",
+          "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         },
         {
           "path": "/Users/jonathan/svnCheckouts/js-speedway/scripts/pdf_metadata.sh",
           "safe": true,
-          "sha": "3560ebfdaf85bfd9",
+          "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         }
       ]

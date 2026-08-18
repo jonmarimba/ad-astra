@@ -48,4 +48,9 @@ found=0
 for f in .mcp.json .qwen/settings.json .codex/config.toml; do
   [ -e "$TARGET/$f" ] && { echo "  still present: $f"; found=1; }
 done
-[ "$found" -eq 0 ] && echo "  none — clean"
+# `[ cond ] && echo` as the LAST statement returns the test's exit code, so a
+# successful uninstall that happened to leave a file behind exited 1 and every
+# caller read it as a failure. The template layer duly reported "FAILED
+# mcp-kickerd" about a server it had just removed correctly. Explicit exit.
+if [ "$found" -eq 0 ]; then echo "  none — clean"; fi
+exit 0

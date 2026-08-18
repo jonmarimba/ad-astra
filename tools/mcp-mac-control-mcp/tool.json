@@ -1,0 +1,11 @@
+{
+  "name": "mcp-mac-control-mcp",
+  "server": "mac-control-mcp",
+  "description": "Drive macOS: windows, clicks, keys, screen capture, accessibility tree.",
+  "dependencies": [
+    "mac_control_mcp",
+    "claude"
+  ],
+  "provides": "mcp-server",
+  "backed_by": "tools/mcp-bundle"
+}
