@@ -193,21 +193,51 @@ def cmd_scan(_):
                 canon_files.append(str(f))
 
     found = discover(canon_files)
+
+    # PROVENANCE IS NOT OBSERVATION. A previous version recorded each install's
+    # CURRENT hash on every scan, and then asked sync to detect local edits by
+    # comparing against that same field. Scanning therefore erased the evidence
+    # the guard needed, and since the post-commit hook runs scan immediately
+    # before sync, the guard was unreachable in exactly the situation it
+    # existed for. Reproduced 2026-08-18: edit an installed copy, fire the
+    # hook, the edit is gone and the run reports "1 updated, 0 skipped".
+    #
+    # So scan now PRESERVES two fields it did not author and must never
+    # rewrite:
+    #   synced_sha    — the canonical content SYNC last wrote here. Only sync
+    #                   sets it. Proof of what we put there.
+    #   first_seen_sha— what the file looked like when the registry first saw
+    #                   it, for copies we adopted rather than installed. That
+    #                   is the pdf-sidecars case: month-old copies nobody had
+    #                   forked, which the registry exists to bring current.
+    prior = {}
+    for tname, t in (reg.get("tools") or {}).items():
+        for i in t.get("installs", []):
+            prior[(tname, i.get("path"))] = i
+
     tools = {}
     for canon, hits in found.items():
         if not hits:
             continue
+        tname = Path(canon).name
         entry = {"canonical": str(Path(canon).relative_to(ASTRA)),
                  "canonical_sha": sha(canon), "installs": []}
         for h in hits:
             ok, why = is_safe_target(h)
-            entry["installs"].append({
+            was = prior.get((tname, str(h)), {})
+            live = sha(h)
+            rec = {
                 "path": str(h),
-                "sha": sha(h),
+                "sha": live,
                 "safe": ok,
                 "unsafe_reason": why or None,
-            })
-        tools[Path(canon).name] = entry
+            }
+            if was.get("synced_sha"):
+                rec["synced_sha"] = was["synced_sha"]
+            # Only stamped the FIRST time this path is ever seen.
+            rec["first_seen_sha"] = was.get("first_seen_sha", live)
+            entry["installs"].append(rec)
+        tools[tname] = entry
     reg["tools"] = tools
     save(reg)
     n = sum(len(t["installs"]) for t in tools.values())
@@ -261,19 +291,56 @@ def cmd_sync(args):
                 print(f"  REFUSED  {i['path']}  ({why})")
                 skipped += 1
                 continue
-            # A copy that matches NEITHER canonical nor its recorded install
-            # point has been edited in place. Updating it destroys that work.
-            if recorded and live != i.get("sha") and i.get("sha") != recorded:
-                print(f"  LOCAL EDITS, skipping  {i['path']}")
-                print(f"     differs from canonical AND from what was installed — "
-                      f"this is a fork, resolve by hand")
+
+            # A DESTINATION SYMLINK is a write to somewhere else. is_safe_target
+            # judged the path we were given; copy2 would follow the link and
+            # land wherever it points, including outside the workspace. We do
+            # not install through symlinks, so seeing one means something we do
+            # not understand — refuse rather than guess.
+            if Path(i["path"]).is_symlink():
+                print(f"  REFUSED  {i['path']}  (destination is a symlink)")
                 skipped += 1
                 continue
+
+            # WHAT COUNTS AS SAFE TO OVERWRITE. We may replace a copy only when
+            # we can account for its current contents:
+            #   - it is exactly what sync last wrote here (nobody touched it), or
+            #   - it is exactly what it looked like when we first found it, and
+            #     we have never written to it (the adopted-stale case: the
+            #     month-old pdf-sidecars copies this registry was built for).
+            # Anything else changed after we last had eyes on it. That is a
+            # fork, and overwriting it destroys work.
+            synced = i.get("synced_sha")
+            first_seen = i.get("first_seen_sha")
+            accounted = (live == synced) if synced else (live == first_seen)
+            if not accounted:
+                print(f"  LOCAL EDITS, skipping  {i['path']}")
+                print(f"     content is neither what we last wrote nor what we "
+                      f"first found — someone changed it, resolve by hand")
+                skipped += 1
+                continue
+
             if dry:
                 print(f"  would update  {i['path']}")
             else:
-                shutil.copy2(canon, i["path"])
+                # ATOMIC. copy2 opens the destination 'wb', truncating it before
+                # a single byte is copied, so an interrupted sync leaves a
+                # zero-length tool behind. Write beside it and rename, which is
+                # atomic within a filesystem: the target is either the old file
+                # or the new one, never a fragment.
+                dest = Path(i["path"])
+                tmp = dest.with_name(dest.name + ".astra-sync.tmp")
+                try:
+                    shutil.copy2(canon, tmp)
+                    os.replace(tmp, dest)
+                except Exception as e:
+                    if tmp.exists():
+                        tmp.unlink()
+                    print(f"  FAILED   {i['path']}  ({e})")
+                    skipped += 1
+                    continue
                 i["sha"] = csha
+                i["synced_sha"] = csha     # only sync ever writes this
                 print(f"  updated  {i['path']}")
             updated += 1
         t["canonical_sha"] = csha

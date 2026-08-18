@@ -1,28 +1,45 @@
 {
   "tools": {
+    "check-prose.js": {
+      "canonical": "tools/check-prose/check-prose.js",
+      "canonical_sha": "08d81b4711f2c34d",
+      "installs": [
+        {
+          "first_seen_sha": "08d81b4711f2c34d",
+          "path": "/Users/jonathan/svnCheckouts/js-hoa/tools/check-prose.js",
+          "safe": true,
+          "sha": "08d81b4711f2c34d",
+          "unsafe_reason": null
+        }
+      ]
+    },
     "export_docx.py": {
       "canonical": "tools/pdf-sidecars/export_docx.py",
       "canonical_sha": "ace45a30f376a747",
       "installs": [
         {
+          "first_seen_sha": "ace45a30f376a747",
           "path": "/Users/jonathan/svnCheckouts/js-hoa/13_Scripts/export_docx.py",
           "safe": true,
           "sha": "ace45a30f376a747",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "ace45a30f376a747",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/export_docx.py",
           "safe": true,
           "sha": "ace45a30f376a747",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "ace45a30f376a747",
           "path": "/Users/jonathan/svnCheckouts/js-grandparentLegal/13_Scripts/export_docx.py",
           "safe": true,
           "sha": "ace45a30f376a747",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "ace45a30f376a747",
           "path": "/Users/jonathan/svnCheckouts/js-speedway/scripts/export_docx.py",
           "safe": true,
           "sha": "ace45a30f376a747",
@@ -35,30 +52,35 @@
       "canonical_sha": "3a067b32631eded7",
       "installs": [
         {
+          "first_seen_sha": "3a067b32631eded7",
           "path": "/Users/jonathan/svnCheckouts/js-hoa/13_Scripts/generate_pdf_sidecars.sh",
           "safe": true,
           "sha": "3a067b32631eded7",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "3a067b32631eded7",
           "path": "/Users/jonathan/svnCheckouts/js-utils/pdf/generate_pdf_sidecars.sh",
           "safe": true,
           "sha": "3a067b32631eded7",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "3a067b32631eded7",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/generate_pdf_sidecars.sh",
           "safe": true,
           "sha": "3a067b32631eded7",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "3a067b32631eded7",
           "path": "/Users/jonathan/svnCheckouts/js-grandparentLegal/13_Scripts/generate_pdf_sidecars.sh",
           "safe": true,
           "sha": "3a067b32631eded7",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "3a067b32631eded7",
           "path": "/Users/jonathan/svnCheckouts/js-speedway/scripts/generate_pdf_sidecars.sh",
           "safe": true,
           "sha": "3a067b32631eded7",
@@ -71,12 +93,14 @@
       "canonical_sha": "9b7fdca51719c510",
       "installs": [
         {
+          "first_seen_sha": "9b7fdca51719c510",
           "path": "/Users/jonathan/svnCheckouts/js-utils/pdf/hook_pre_commit.sh",
           "safe": true,
           "sha": "9b7fdca51719c510",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "9b7fdca51719c510",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/hook_pre_commit.sh",
           "safe": true,
           "sha": "9b7fdca51719c510",
@@ -89,6 +113,7 @@
       "canonical_sha": "ffd4897f7e789372",
       "installs": [
         {
+          "first_seen_sha": "ffd4897f7e789372",
           "path": "/Users/jonathan/svnCheckouts/js-project-GhOST/tools/tests/lib.sh",
           "safe": true,
           "sha": "ffd4897f7e789372",
@@ -101,24 +126,28 @@
       "canonical_sha": "7ecf146bc72e33f3",
       "installs": [
         {
+          "first_seen_sha": "7ecf146bc72e33f3",
           "path": "/Users/jonathan/svnCheckouts/js-hoa/13_Scripts/marked_to_pdf.sh",
           "safe": true,
           "sha": "7ecf146bc72e33f3",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "7ecf146bc72e33f3",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/marked_to_pdf.sh",
           "safe": true,
           "sha": "7ecf146bc72e33f3",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "7ecf146bc72e33f3",
           "path": "/Users/jonathan/svnCheckouts/js-grandparentLegal/13_Scripts/marked_to_pdf.sh",
           "safe": true,
           "sha": "7ecf146bc72e33f3",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "7ecf146bc72e33f3",
           "path": "/Users/jonathan/svnCheckouts/js-speedway/scripts/marked_to_pdf.sh",
           "safe": true,
           "sha": "7ecf146bc72e33f3",
@@ -131,24 +160,28 @@
       "canonical_sha": "5714cd16cc0d495c",
       "installs": [
         {
+          "first_seen_sha": "5714cd16cc0d495c",
           "path": "/Users/jonathan/svnCheckouts/js-hoa/13_Scripts/pdf_add_footer.py",
           "safe": true,
           "sha": "5714cd16cc0d495c",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "5714cd16cc0d495c",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/pdf_add_footer.py",
           "safe": true,
           "sha": "5714cd16cc0d495c",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "5714cd16cc0d495c",
           "path": "/Users/jonathan/svnCheckouts/js-grandparentLegal/13_Scripts/pdf_add_footer.py",
           "safe": true,
           "sha": "5714cd16cc0d495c",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "5714cd16cc0d495c",
           "path": "/Users/jonathan/svnCheckouts/js-speedway/scripts/pdf_add_footer.py",
           "safe": true,
           "sha": "5714cd16cc0d495c",
@@ -161,30 +194,35 @@
       "canonical_sha": "f14fcd7672131b74",
       "installs": [
         {
+          "first_seen_sha": "f14fcd7672131b74",
           "path": "/Users/jonathan/svnCheckouts/js-hoa/13_Scripts/pdf_metadata.sh",
           "safe": true,
           "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "f14fcd7672131b74",
           "path": "/Users/jonathan/svnCheckouts/js-utils/pdf/pdf_metadata.sh",
           "safe": true,
           "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "f14fcd7672131b74",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/pdf_metadata.sh",
           "safe": true,
           "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "f14fcd7672131b74",
           "path": "/Users/jonathan/svnCheckouts/js-grandparentLegal/13_Scripts/pdf_metadata.sh",
           "safe": true,
           "sha": "f14fcd7672131b74",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "f14fcd7672131b74",
           "path": "/Users/jonathan/svnCheckouts/js-speedway/scripts/pdf_metadata.sh",
           "safe": true,
           "sha": "f14fcd7672131b74",
@@ -197,18 +235,21 @@
       "canonical_sha": "9d324a2bc30e7fa4",
       "installs": [
         {
+          "first_seen_sha": "9d324a2bc30e7fa4",
           "path": "/Users/jonathan/svnCheckouts/js-hoa/13_Scripts/reocr_all_pdfs.sh",
           "safe": true,
           "sha": "9d324a2bc30e7fa4",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "9d324a2bc30e7fa4",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/reocr_all_pdfs.sh",
           "safe": true,
           "sha": "9d324a2bc30e7fa4",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "9d324a2bc30e7fa4",
           "path": "/Users/jonathan/svnCheckouts/js-speedway/scripts/reocr_all_pdfs.sh",
           "safe": true,
           "sha": "9d324a2bc30e7fa4",
@@ -221,21 +262,37 @@
       "canonical_sha": "29fab3333fa2dbe9",
       "installs": [
         {
+          "first_seen_sha": "29fab3333fa2dbe9",
           "path": "/Users/jonathan/svnCheckouts/js-hoa/13_Scripts/reocr_all_pdfs_parallel.sh",
           "safe": true,
           "sha": "29fab3333fa2dbe9",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "29fab3333fa2dbe9",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/reocr_all_pdfs_parallel.sh",
           "safe": true,
           "sha": "29fab3333fa2dbe9",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "29fab3333fa2dbe9",
           "path": "/Users/jonathan/svnCheckouts/js-speedway/scripts/reocr_all_pdfs_parallel.sh",
           "safe": true,
           "sha": "29fab3333fa2dbe9",
+          "unsafe_reason": null
+        }
+      ]
+    },
+    "rules.json": {
+      "canonical": "tools/check-prose/rules.json",
+      "canonical_sha": "2759babb4756ca37",
+      "installs": [
+        {
+          "first_seen_sha": "2759babb4756ca37",
+          "path": "/Users/jonathan/svnCheckouts/js-hoa/tools/rules.json",
+          "safe": true,
+          "sha": "2759babb4756ca37",
           "unsafe_reason": null
         }
       ]
@@ -245,6 +302,7 @@
       "canonical_sha": "6912046801473524",
       "installs": [
         {
+          "first_seen_sha": "6912046801473524",
           "path": "/Users/jonathan/svnCheckouts/js-llmKicker/scripts/setup-mcp.sh",
           "safe": true,
           "sha": "6912046801473524",
@@ -257,12 +315,14 @@
       "canonical_sha": "e8bcd14d301daa35",
       "installs": [
         {
+          "first_seen_sha": "e8bcd14d301daa35",
           "path": "/Users/jonathan/svnCheckouts/js-utils/pdf/update_sidecars.sh",
           "safe": true,
           "sha": "e8bcd14d301daa35",
           "unsafe_reason": null
         },
         {
+          "first_seen_sha": "e8bcd14d301daa35",
           "path": "/Users/jonathan/svnCheckouts/pdf-sidecars/update_sidecars.sh",
           "safe": true,
           "sha": "e8bcd14d301daa35",
