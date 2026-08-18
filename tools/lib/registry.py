@@ -139,7 +139,12 @@ def discover(names):
     try:
         r = subprocess.run(
             ["find", "-L", str(WORKSPACE), "-type", "f",
-             "(", "-name", "*.sh", "-o", "-name", "*.py", ")",
+             # Track every extension a tool can ship in. An earlier version
+             # watched only .sh and .py, so check-prose.js and its rules.json —
+             # the very files whose hand-copied drift prompted this registry —
+             # would have gone untracked and drifted again in a new extension.
+             "(", "-name", "*.sh", "-o", "-name", "*.py",
+             "-o", "-name", "*.js", "-o", "-name", "rules.json", ")",
              "-not", "-path", "*/.git/*",
              "-not", "-path", "*/node_modules/*",
              "-not", "-path", "*/tmp/*",
@@ -182,7 +187,8 @@ def cmd_scan(_):
         if not d.is_dir():
             continue
         for f in d.iterdir():
-            if f.is_file() and f.suffix in (".sh", ".py") and f.name not in (
+            if f.is_file() and (f.suffix in (".sh", ".py", ".js")
+                                or f.name == "rules.json") and f.name not in (
                     "install.sh", "uninstall.sh", "setup.sh"):
                 canon_files.append(str(f))
 
