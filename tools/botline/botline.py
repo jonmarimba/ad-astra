@@ -200,7 +200,8 @@ class Botline:
                 pass
             raise
 
-    def exchange(self, status="healthy", problems=None, info=None, extra=None):
+    def exchange(self, status="healthy", problems=None, info=None, extra=None,
+                 alive=True):
         """Run one handshake round. Read, evaluate, write — under ONE lock.
 
         Single lock window on purpose: an earlier two-window version evaluated
@@ -298,7 +299,24 @@ class Botline:
             # LEG 2 (ours to send): answer their SYN by echoing it as our synack.
             # Answering is free; withholding it is how a partner concludes we
             # are dead.
-            my_synack = their_syn
+            # ANSWER ONLY IF WE CAN HONESTLY SAY WE ARE ALIVE.
+            #
+            # Convocation (Codex slice) 2026-08-18 found the deepest bug in this
+            # whole system: a health check running as a launchd job detected that
+            # its agent session was GONE, recorded that as a problem, and then
+            # answered the partner's liveness challenge anyway. The partner reset
+            # its miss counter and exited zero. The scheduler impersonated the
+            # session — which is exactly the silent-outage shape the system exists
+            # to catch, sitting inside the catcher.
+            #
+            # Callers that can probe their own liveness pass alive=False when
+            # those probes fail. Staying silent lets the partner's counter climb,
+            # which is the truth. A courteous lie is still a lie.
+            my_synack = their_syn if alive else None
+            if not alive:
+                info.append("handshake: NOT answering — caller reports its own "
+                            "liveness probes failed; answering would impersonate "
+                            "a dead agent")
 
             answered = False
             completed = False
