@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "xcode-mcp-server": {
+      "command": "uvx",
+      "args": [
+        "xcode-mcp-server"
+      ],
+      "env": {
+        "XCODEMCP_ALLOWED_FOLDERS": "/Users/jonathan/svnCheckouts"
+      }
+    }
+  },
+  "preferences": {
+    "coworkScheduledTasksEnabled": true,
+    "ccdScheduledTasksEnabled": true,
+    "sidebarMode": "chat",
+    "coworkWebSearchEnabled": true
+  }
+}
