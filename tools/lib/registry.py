@@ -319,7 +319,25 @@ def cmd_status(_):
 
 
 def cmd_sync(args):
-    """Copy canonical over stale installs. Refuses to clobber local edits."""
+    """RETIRED. Astra does not write into other repos.
+
+    This pushed canonical files out across the workspace and was the whole
+    reason ownership had to be guessed at. Distribution is now pull: each repo
+    carries .astra/manifest.json plus .astra/astra-update and fetches on its own
+    post-commit hook. Nothing reaches in from here.
+
+    Left in place as a loud refusal rather than deleted, because a script or a
+    habit may still call it, and a silently missing command is how the old
+    behaviour would quietly come back.
+    """
+    if "--i-know-this-is-retired" not in args:
+        print("registry sync is RETIRED — astra no longer writes into other repos.",
+              file=sys.stderr)
+        print("  Update a repo from inside it:  <repo>/.astra/astra-update --pull",
+              file=sys.stderr)
+        print("  Install or reinstall a tool:   tools/<tool>/install.sh --into <repo>",
+              file=sys.stderr)
+        return 78
     dry = "--dry-run" in args
     only = [a for a in args if not a.startswith("-")]
     reg = load()
