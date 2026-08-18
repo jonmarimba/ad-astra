@@ -133,6 +133,20 @@ class Botline:
                  silence_minutes=180):
         self.state_path = Path(state_path)
         self.lock_path = self.state_path.with_suffix(".lock")
+        # PRIVATE counter journal, separate from the SHARED state file.
+        #
+        # Convocation 2026-08-18 (MiniMax and Codex, independently): if the
+        # shared file is deleted, truncated or corrupted — a backup sweep, a
+        # disk hiccup, a partner that resets it — every implementation catches
+        # the read failure, starts from {}, and writes only its own key. That
+        # silently ZEROES the miss counter. An alarm two-thirds of the way to
+        # firing goes back to zero with no output, and an ongoing outage is
+        # laundered into an apparent first run.
+        #
+        # The alarm's own progress therefore must not live solely in a file the
+        # other party can destroy. It is mirrored here, in a file only we write.
+        self.journal_path = self.state_path.with_name(
+            f".{self.state_path.stem}-{me}-journal.json")
         self.me = me
         self.partner = partner
         # One quiet interval is two schedulers drifting, not an outage. Three
@@ -207,6 +221,21 @@ class Botline:
 
             mine_prev = state.get(self.me, {})
             theirs = state.get(self.partner, {})
+
+            # If the shared file lost our key, restore the alarm's progress from
+            # the private journal rather than silently restarting at zero.
+            if not mine_prev:
+                try:
+                    j = json.loads(self.journal_path.read_text())
+                except Exception:
+                    j = None
+                if j:
+                    mine_prev = j
+                    problems.append(
+                        f"shared state lost our key — restored handshake "
+                        f"counters from the private journal "
+                        f"(misses={j.get('handshake_misses', 0)}). The shared "
+                        f"file was deleted, truncated or reset by something.")
 
             # ── three-way handshake state machine ─────────────────────────
             #
@@ -384,6 +413,20 @@ class Botline:
             entry.update(extra or {})
             state[self.me] = entry
             self._write_atomic(state)
+
+            # Mirror the counters privately. Best-effort: a journal failure must
+            # never break the handshake it is only insuring.
+            try:
+                jd = json.dumps({
+                    "syn": entry["syn"], "synack": entry["synack"],
+                    "ack": entry["ack"],
+                    "handshake_misses": entry["handshake_misses"],
+                    "partner_syn_seen": entry["partner_syn_seen"],
+                    "last_check": entry["last_check"],
+                }, indent=2)
+                self.journal_path.write_text(jd + "\n")
+            except Exception:
+                pass
 
         return Exchange(
             partner=self.partner,
