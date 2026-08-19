@@ -30,11 +30,11 @@
 # providers/logs management endpoints 401 against OMNIROUTE_API_KEY). This script surfaces those
 # as a skip with an explicit "go enable this" message, never tries to force them.
 #
-# Context window size: OmniRoute's own catalog/getter endpoints don't carry it for ollamacloud
-# entries (checked live — comes back "-"/absent). The one real source is `ollama show <tag>`,
-# which works for cloud models without pulling them locally, using the REAL tag from get-api-models
-# (not a guess) — so this now only relies on ollama for the one field OmniRoute doesn't have,
-# never for the routing id itself.
+# Context window size: omniroute's /v1/models endpoint now carries context_length for ollamacloud
+# entries (verified 2026-08-15). The script reads it from there first, falling back to
+# `ollama show <tag>` only if omniroute's entry is absent. Previous versions only used
+# `ollama show`, which missed some models. NEVER copy-paste a context size from another model —
+# that's how 8 of 10 entries ended up wrong on 2026-08-15 (the copy-paste bug Jonathan flagged).
 #
 # Additive only: never edits or removes an existing entry in either file, never touches the
 # active `model` selection, never touches ambrosio, never touches anything outside the
@@ -100,23 +100,81 @@ while IFS=$'\t' read -r route_id display_name available; do
     continue
   fi
 
-  # real ollama tag, straight from the getter's fullModel field: "ollamacloud/<tag>" -> "<tag>"
-  tag="${route_id#ollamacloud/}"
-  ctx="$(ollama show "${tag}:cloud" 2>/dev/null | awk '/context length/{print $3}')"
-  [ -z "$ctx" ] && ctx="$(ollama show "$tag" 2>/dev/null | awk '/context length/{print $3}')"
+  # Context window: try omniroute's /v1/models endpoint first (it carries context_length for
+  # ollamacloud models now — verified 2026-08-15), fall back to `ollama show` only if absent.
+  # NEVER guess or copy from another model — that's how 8 of 10 entries ended up wrong.
+  ctx="$(curl -sf "http://localhost:20128/v1/models" | jq -r ".data[] | select(.id == \"$route_id\") | .context_length // empty" 2>/dev/null)"
   if [ -z "$ctx" ]; then
-    echo "  '$display_name' ($route_id) — real id confirmed by OmniRoute's own getter, but 'ollama show' has no context-length metadata for it. Adding without a contextWindowSize override rather than guessing one."
+    tag="${route_id#ollamacloud/}"
+    ctx="$(ollama show "${tag}:cloud" 2>/dev/null | awk '/context length/{print $3}')"
+    [ -z "$ctx" ] && ctx="$(ollama show "$tag" 2>/dev/null | awk '/context length/{print $3}')"
+  fi
+  if [ -z "$ctx" ]; then
+    echo "  '$display_name' ($route_id) — neither omniroute nor 'ollama show' has context-length metadata. Adding without a contextWindowSize rather than guessing one."
   fi
 
   # Live-verify the route actually works before writing it anywhere — one real request. The
   # getter's `available: true` means OmniRoute THINKS it's ready; this proves it, since a
   # provider can report available while still failing (expired upstream key, model retired, etc.).
-  probe="$(curl -s --max-time 20 "http://localhost:20128/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $OMNIROUTE_KEY" \
-    -d "{\"model\":\"${route_id}\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with one word: PING\"}],\"stream\":false}" 2>&1)"
+  # Found live 2026-08-15 (convocation review): `curl -s` on a connection failure/timeout
+  # writes NOTHING to stdout and prints its own error to stderr, which `-s` also
+  # suppresses — so the old `grep -qi '"error"'` check saw an empty string, found no
+  # "error" substring, and let the model through as "verified live" when the probe never
+  # actually reached OmniRoute at all. Now: check curl's own exit code AND require the
+  # response to contain a real, expected field ("choices", a genuine completion) before
+  # calling it verified — empty, truncated, or connection-failure responses are treated
+  # as failed verification, not as passing silence.
+  # Do NOT add max_tokens to this probe. Reasoning models (GLM, DeepSeek) emit `reasoning`
+  # tokens before any `content`, so a small cap returns a choice with empty content and
+  # OmniRoute reports "returned an empty response (no usable choices)" — which is
+  # indistinguishable from a dead model. Verified 2026-08-19: seven ollamacloud models read
+  # as dead at max_tokens=16 and every one of them served at 300.
+  #
+  # --max-time 120, not 20. A cold-start on a very large cloud model (qwen3.5:397b, the
+  # 675B Mistral) routinely exceeds 20 seconds on the first request of the day, and curl
+  # exit 28 is a TIMEOUT, never a verdict about the model. The old 20-second cap silently
+  # dropped qwen3.5:397b on 2026-08-19 while that model answered fine when given room.
+  # One retry, because a first-request timeout usually means the upstream is warming.
+  probe_once() {
+    curl -s --max-time 120 "http://localhost:20128/v1/chat/completions" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $OMNIROUTE_KEY" \
+      -d "{\"model\":\"${route_id}\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with one word: PING\"}],\"stream\":false}"
+  }
+  probe="$(probe_once)"
+  curl_rc=$?
+  if [ "$curl_rc" -eq 28 ] || { [ "$curl_rc" -ne 0 ] && [ -z "$probe" ]; }; then
+    echo "  '$display_name' ($route_id) — first probe timed out (curl exit $curl_rc); retrying once, large models cold-start slowly"
+    probe="$(probe_once)"
+    curl_rc=$?
+  fi
+  if [ "$curl_rc" -ne 0 ] || [ -z "$probe" ]; then
+    echo "  skip '$display_name' ($route_id) — probe request never got an answer from OmniRoute (curl exit $curl_rc, response was $([ -z "$probe" ] && echo empty || echo non-empty)). This is an UNKNOWN, not a verdict that the model is dead — re-run the sync and it may well add. Not writing an unverified route."
+    continue
+  fi
+  # A 402 from one model takes the WHOLE provider down for about two minutes, so a plain
+  # skip here would silently drop every model probed after it. Verified 2026-08-19: probing
+  # ollamacloud/kimi-k3 (extra-usage-only, not in the Ollama Max plan) returned 402, flipped
+  # the ollama-cloud connection to test_status=credits_exhausted, and every other ollamacloud
+  # model — including one that had just answered — then reported "No active credentials for
+  # provider: ollama-cloud" until the lockout expired 2m04s later. So when we see that exact
+  # message, wait the lockout out and re-probe instead of recording a false negative.
+  if printf '%s' "$probe" | grep -qi 'No active credentials for provider'; then
+    echo "  '$display_name' ($route_id) — provider is in its post-402 lockout (another model exhausted credits). Waiting 130s for it to clear, then re-probing."
+    sleep 130
+    probe="$(probe_once)"
+    curl_rc=$?
+    if [ "$curl_rc" -ne 0 ] || [ -z "$probe" ]; then
+      echo "  skip '$display_name' ($route_id) — still no answer after the provider lockout window. UNKNOWN, not a verdict; re-run the sync."
+      continue
+    fi
+  fi
   if printf '%s' "$probe" | grep -qi '"error"'; then
     echo "  skip '$display_name' ($route_id) — reported available but the real request failed: $(printf '%s' "$probe" | head -c 200)"
+    continue
+  fi
+  if ! printf '%s' "$probe" | grep -q '"choices"'; then
+    echo "  skip '$display_name' ($route_id) — response had neither an error field nor a real completion (\"choices\") — treating as unverified: $(printf '%s' "$probe" | head -c 200)"
     continue
   fi
 
@@ -156,14 +214,17 @@ PYEOF
     echo "    -> would add to opencode ($OC) as key '$route_id'"
     ADDED_OC=$((ADDED_OC+1))
     if [ "$DRY_RUN" -eq 0 ]; then
-      python3 - "$OC" "$route_id" "$display_name" <<'PYEOF'
+      python3 - "$OC" "$route_id" "$display_name" "${ctx:-0}" <<'PYEOF'
 import re, sys
-oc, route_id, display_name = sys.argv[1], sys.argv[2], sys.argv[3]
+oc, route_id, display_name, ctx = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 s = open(oc).read()
 if f'"{route_id}"' not in s:
     m = re.search(r'("omniroute"\s*:\s*\{.*?"models"\s*:\s*\{)', s, re.S)
     if m:
-        entry = '\n        "%s": {\n          "name": "%s (OmniRoute)"\n        },' % (route_id, display_name)
+        if ctx:
+            entry = '\n        "%s": {\n          "name": "%s (Ollama Cloud)",\n          "context_length": %d\n        },' % (route_id, display_name, ctx)
+        else:
+            entry = '\n        "%s": {\n          "name": "%s (Ollama Cloud)"\n        },' % (route_id, display_name)
         s = s[:m.end()] + entry + s[m.end():]
         open(oc, 'w').write(s)
 PYEOF
