@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# uninstall.sh — dis-integrate graphify-repo: remove its vault subdir (~/.notesq/vault/graphify).
-# Optional dep: the graphify CLI (uv tool 'graphifyy'). uv itself is foundational, kept.
-# NOTE: graphify-out/ dirs inside consumer repos (kicker, pot-mhm) are those repos' to remove.
+# uninstall.sh — remove graphify-repo from a repo.
+#
+# Removes only what install.sh placed. It does NOT delete graphify-out/, because
+# that is generated output that may represent a long run over a large tree, and
+# a tool that silently discards work while uninstalling itself is the same
+# mistake as one that overwrites a file while installing itself. Remove it by
+# hand if you want it gone.
+#
+# The .git/info/exclude line is also left alone: it is one comment-free line
+# naming a directory that may still exist, and rewriting another repo's git
+# config to tidy up is more risk than the tidiness is worth.
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
-. "$HERE/../lib/uninstall-common.sh"
-uc_parse "$@"
-echo "graphify-repo dis-integrate:"
-uc_rm_state "${GRAPHIFY_VAULT:-$HOME/.notesq/vault/graphify}" "graphify vault output dir"
-uc_keep uv "foundational Python tool runner (shared by many tools)"
-uc_uv_tool graphifyy "the graphify CLI"
-echo "done."
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/../lib/astra-install.sh"
+
+astra_target "$@"
+astra_remove graphify-repo
+
+if [ -d "$TARGET/graphify-out" ]; then
+  echo "note: $TARGET/graphify-out still holds generated graph output — left in place deliberately."
+fi
