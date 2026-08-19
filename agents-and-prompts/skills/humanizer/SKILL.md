@@ -16,21 +16,9 @@ This skill rewrites machine-written text into something a person would write. It
 
 The upstream skill at `github.com/blader/humanizer` works from the 33 patterns listed on Wikipedia's "Signs of AI writing" page. It carries an audit pass and a rule against inventing facts or citations the source text does not contain.
 
-Install the upstream plugin (not yet installed as of August 2026):
+The upstream is installed per-repo by running `install.sh` in this directory, which calls `npx skills add blader/humanizer` inside the target repo. Re-run the installer anytime to pull updates from the external source. The upstream is a prompt-only Markdown file with no executable code, no network calls, and no data sent externally. Text stays inside the session.
 
-```
-/plugin marketplace add blader/humanizer
-/plugin install humanizer@humanizer
-```
-
-Or via npx:
-
-```
-npx skills add blader/humanizer --global      # global skill
-npx skills add blader/humanizer               # project-local skill
-```
-
-Read `SKILL.md` in that repo before trusting it on client text. The skill edits prose, so it can change meaning as well as tone. Jonathan's standing rule: a pass over live client-facing content changes voice only, and he reviews the diff before anything ships.
+Jonathan's standing rule: a pass over live client-facing content changes voice only, and he reviews the diff before anything ships.
 
 ## Layer 2: Voice calibration
 
@@ -66,4 +54,3 @@ Voice register files live at `js-project-GhOST/reference/voice/`. Each file is g
 ## Open items
 
 1. Nothing wires the voice register files to the upstream humanizer plugin. A humanizer pass that reads the register before it rewrites would produce his voice rather than a generic de-slopped one.
-2. Nobody has run the real upstream skill against a hand-corrected document to see whether it agrees. Install it, run it over one document that has already been hand-corrected, and compare before trusting it on client text.

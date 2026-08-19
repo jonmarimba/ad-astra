@@ -448,6 +448,19 @@ class Upstream:
                         log.info("[%s] connected — serving until this breaks", self.name)
                         while not self.known_broken:
                             await anyio.sleep(RECONNECT_POLL_SECONDS)
+                            # Health-check: a silent list_tools call catches a
+                            # dead upstream before any client discovers it.
+                            # Without this, a killed Xcode leaves the daemon
+                            # sitting "connected" until a real client call
+                            # fails — minutes of silently serving zero tools.
+                            try:
+                                with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
+                                    await session.list_tools()
+                            except Exception as e:
+                                log.warning("[%s] heartbeat list_tools failed, marking broken: %s", self.name, e)
+                                async with self.lock:
+                                    self.known_broken = True
+                                break
                             # The approval prompt has been observed appearing
                             # AFTER a successful initialize() — requested
                             # lazily, apparently on the first real list_tools
@@ -520,13 +533,27 @@ def build_server(upstreams: list[Upstream]) -> Server:
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
         all_tools: list[types.Tool] = []
+        results_by_upstream: dict[str, list[types.Tool]] = {}
         for u in upstreams:
             result = await u.list_tools(params)
             prefix = prefix_of[u]
+            upstream_tools = []
             for t in result.tools:
                 if prefix:
                     t = t.model_copy(update={"name": f"{prefix}{t.name}"})
-                all_tools.append(t)
+                upstream_tools.append(t)
+            results_by_upstream[u.name] = upstream_tools
+            all_tools.extend(upstream_tools)
+        # In multi-upstream mode, ALL upstreams must be connected.  Serving a
+        # partial tool list silently hides the missing upstream from the client
+        # — it gets half the tools and has no idea.  Return zero tools and a
+        # loud message instead so the client retries once the daemon reconnects
+        # the dead upstream (which it does on its own, every few seconds).
+        if not single:
+            missing = [u.name for u in upstreams if not results_by_upstream.get(u.name)]
+            if missing:
+                log.warning("list_tools: refusing to serve partial tool list — missing upstreams: %s", missing)
+                return types.ListToolsResult(tools=[])
         return types.ListToolsResult(tools=all_tools)
 
     async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
