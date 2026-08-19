@@ -89,9 +89,12 @@ hr {
   /* size MUST be declared. These templates were ported from Marked 2, where the
      page size came from the app's print dialog rather than the CSS. Under
      weasyprint the stylesheet is solely responsible, and omitting size silently
-     fell back to A4 — every legal export rendered 210x297mm instead of US
-     Letter. Caught 2026-08-19 by comparing embedded page geometry against
-     default.css, which had it right. */
+     fell back to A4. SCOPE, stated precisely because the first version of this
+     comment overstated it: this affected md2pdf exports using THIS template
+     before 2026-08-19. PDFs produced through Marked 2's own print dialog, or
+     any other path, took their page size from elsewhere and are outside the
+     finding. Caught by comparing embedded page geometry against default.css,
+     which had it right. */
   size: letter;
   margin: 0.8in;
 }
