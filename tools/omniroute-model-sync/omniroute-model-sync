@@ -85,9 +85,18 @@ ADDED_QW=0
 ADDED_OC=0
 NEEDS_ENABLE=0
 
+# The key comes from the environment first. Falling back to qwen's own settings is what lets
+# this run unattended from a scheduler: a launchd job gets a bare environment with no exported
+# OMNIROUTE_API_KEY, so an env-only lookup meant the tool could never be put on a timer and new
+# models only ever landed when someone remembered to run it by hand. The fallback reads the same
+# key qwen already uses to reach OmniRoute, so it introduces no new secret and no new location.
 OMNIROUTE_KEY="${OMNIROUTE_API_KEY:-}"
+if [ -z "$OMNIROUTE_KEY" ] && [ -f "$QW" ]; then
+  OMNIROUTE_KEY="$(jq -r '.security.auth.apiKey // empty' "$QW" 2>/dev/null)"
+  [ -n "$OMNIROUTE_KEY" ] && echo "omniroute-model-sync: OMNIROUTE_API_KEY not in the environment; using the key qwen already has at .security.auth.apiKey"
+fi
 if [ -z "$OMNIROUTE_KEY" ]; then
-  echo "omniroute-model-sync: OMNIROUTE_API_KEY not set in this shell's environment — can't live-verify routing, aborting rather than write unverified entries" >&2
+  echo "omniroute-model-sync: no OmniRoute key in OMNIROUTE_API_KEY or in $QW at .security.auth.apiKey — can't live-verify routing, aborting rather than write unverified entries" >&2
   exit 1
 fi
 
@@ -188,7 +197,9 @@ while IFS=$'\t' read -r route_id display_name available; do
   echo "  NEW: '$display_name' -> verified live route '$route_id'${ctx:+ (real context: $ctx tokens)}"
 
   if [ "$already_qw" != "true" ]; then
-    echo "    -> would add to qwen ($QW) as id '$route_id'"
+    # Say what actually happened. A real run that prints "would add" reads as a no-op and
+    # sent a reader looking for a bug that was not there (2026-08-19).
+    echo "    -> $([ "$DRY_RUN" -eq 1 ] && echo 'would add' || echo 'ADDING') to qwen ($QW) as id '$route_id'"
     ADDED_QW=$((ADDED_QW+1))
     if [ "$DRY_RUN" -eq 0 ]; then
       python3 - "$QW" "$route_id" "$display_name" "${ctx:-0}" <<'PYEOF'
@@ -211,7 +222,7 @@ PYEOF
   fi
 
   if [ "$already_oc" != "true" ]; then
-    echo "    -> would add to opencode ($OC) as key '$route_id'"
+    echo "    -> $([ "$DRY_RUN" -eq 1 ] && echo 'would add' || echo 'ADDING') to opencode ($OC) as key '$route_id'"
     ADDED_OC=$((ADDED_OC+1))
     if [ "$DRY_RUN" -eq 0 ]; then
       python3 - "$OC" "$route_id" "$display_name" "${ctx:-0}" <<'PYEOF'
