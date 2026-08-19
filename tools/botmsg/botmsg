@@ -23,20 +23,40 @@ tool that only sends does not solve the thing that is actually broken.
 
 HOW A REPLY GETS ROUTED
 -----------------------
-Three signals, strongest first. The first is the one that makes this work.
+ONE strong signal and two guesses. An earlier version of this file claimed the
+first of the guesses was exact; it is not, and the correction is recorded here
+because believing it is worse than not having it.
 
-  1. NATIVE REPLY. When the human uses iMessage's reply-to gesture, chat.db
-     records `reply_to_text` — the full text of the message being answered.
-     Every message botmsg sends is tagged "[bot-id]", so the tag travels back
-     inside reply_to_text and the routing is EXACT. Not a heuristic.
+  1. EXPLICIT TAG (strong). A message beginning "[bot-id]" is addressed to that
+     bot. It is the only signal the human produces deliberately, so it is the
+     only one that means what it says.
 
-  2. EXPLICIT TAG. A reply that itself begins "[bot-id]" is addressed to that
-     bot. Useful when replying from a watch, or to an older message.
+  2. REPLY CONTEXT (guess). chat.db records `reply_to_text` for inbound
+     messages, and it looks like proof of a reply gesture. On a Google Voice
+     SMS relay it is not: Messages auto-associates each inbound with whatever
+     preceded it, including the human's own messages. Measured on the real
+     thread — ten of ten inbound carried it, eight pointing at the preceding
+     outbound and two at his own earlier texts. Threading, not intent.
 
-  3. MOST RECENT SENDER. Otherwise the reply belongs to whichever bot last
-     sent. This is the only guess in the system, it is the same assumption a
-     human makes reading the thread, and it is reported as a guess so a caller
-     can decline to act on it.
+     It is still consulted FIRST among the guesses, for a reason that survives
+     the correction: auto-threading cannot point at some other bot's OLDER
+     message, so when it disagrees with recency the divergence is real
+     evidence. When it names any bot at all, recency gets no vote.
+
+  3. MOST RECENT SENDER (guess). Otherwise the message belongs to whoever spoke
+     last BEFORE it — evaluated per message, not once over the transcript. A
+     bot that merely spoke afterwards must never claim an answer to someone
+     else's earlier question.
+
+Both guesses say so in their output, so a caller can decline to act.
+
+THE GATE MATTERS MORE THAN THE ROUTING
+--------------------------------------
+Sending and `inbox` are only half of it, and for a while they were the useless
+half. Every bot here receives inbound through its own harness plugin,
+unconditionally, so tagging changed what messages looked like and nothing about
+who answered. One message, two replies. `botmsg claims` is the check a bot runs
+BEFORE it speaks; without it the rest is decoration.
 
 Anything a bot cannot claim under those rules is left for another bot to
 collect. A message is never silently consumed by the wrong reader.

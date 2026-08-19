@@ -21,7 +21,17 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "MISSING DEPENDENCY: $1"; exi
 need python3
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'cd /; rm -rf "$WORK"' EXIT
+
+# RUN FROM A NEUTRAL DIRECTORY. botmsg discovers its destination from
+# ./.astra/botmsg.json, so the suite's results depended on where it was
+# launched from: green inside astra, which has no .astra/, and red inside any
+# repo that had actually installed botmsg — test 8 asserts that a missing
+# destination is refused, and a configured consumer workspace supplies one.
+# OpenClaw hit this running the suite from its own workspace before adopting,
+# and it is a real portability bug rather than a cosmetic one: a test whose
+# outcome depends on the caller's working directory is testing the caller.
+cd "$WORK"
 export BOTMSG_STATE="$WORK/state"
 export BOTMSG_TO="+15555550100"
 export BOTMSG_IMSG_BIN="$WORK/fake-imsg"
@@ -143,11 +153,25 @@ else
 fi
 
 echo "== 8. No destination must refuse, not default to someone =="
+# cwd is $WORK, which has no .astra/ — asserted below rather than assumed,
+# because the whole point of this test is that nothing supplies a destination.
+[ -e "$PWD/.astra/botmsg.json" ] && bad "test isolation broken: a config exists in $PWD"
 out="$(env -u BOTMSG_TO "$BOTMSG" send --as x --text hi 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && echo "$out" | grep -q "no destination"; then
   ok "refused without a destination"
 else
   bad "sent, or failed unclearly, with no destination configured (rc=$rc)"
+fi
+
+# The other half: discovery must actually WORK. Isolating cwd would otherwise
+# be indistinguishable from breaking config lookup entirely.
+mkdir -p "$WORK/cfgtest/.astra"
+echo '{"to": "+15555550199"}' > "$WORK/cfgtest/.astra/botmsg.json"
+out="$(cd "$WORK/cfgtest" && env -u BOTMSG_TO "$BOTMSG" whoami --as x 2>&1)"
+if echo "$out" | grep -q "5555550199"; then
+  ok "a repo-local .astra/botmsg.json IS discovered when present"
+else
+  bad "config discovery is broken, not merely isolated: $out"
 fi
 
 echo "== 9. Corrupt state must refuse, not replay the whole thread =="
