@@ -34,7 +34,10 @@ Canonical home moved here 2026-08-12 (was `js-project-GhOST/todo/tech-to-try.md`
 - [ ] **tart.run** (`github.com/cirruslabs/tart`) — macOS/Linux VMs on Apple Silicon, near-native. **Tried 8/3, "amazing."** Use: isolate YOLO-mode agents, segregate GhOST from others. Watch the org-install license threshold.
 
 ## E. Mac / productivity
-- [ ] **SetApp picks** — **Paste** (clipboard history), **DevUtils** (offline JSON/base64/regex/hash/JWT), **SnippetsLab** (snippet manager), **TablePlus** (DB client), **BetterTouchTool** (trackpad/keyboard automation). All on your existing SetApp sub.
+- [ ] **BoltAI** (SetApp) ⭐ — native Mac AI chat pointed at **your own OmniRoute**, not SetApp's token pool. Its "Custom OpenAI-compatible Server" field wants the **full path** — `http://localhost:20128/v1/chat/completions`, not `/v1`. Also speaks Ollama/LM Studio/LocalAI. Runs on the **standard** SetApp sub; the "AI+" tier only buys bundled credits you won't use with your own key. Open question: whether that form has an API-key field, since OmniRoute wants a bearer token. **Elephas** is the fallback (Custom AI provider takes URL *and* key; unconfirmed on plain-http localhost). **TypingMind is out** — the Mac/SetApp build blocks plain HTTP outright, so it'd need a TLS proxy. *(researched 8/19)*
+- [ ] **DevUtils** (SetApp) — offline JSON/base64/hash/JWT decode, instead of pasting into a sketchy web tool. On the existing sub.
+
+**Ruled out, do not re-suggest** (JS, 8/18, verbatim): clipboard managers ("I have never adopted a clipboard manager and I never will"), snippet managers, TablePlus/DB clients ("I hate DB programming almost as much as I hate regex"), BetterTouchTool ("I hate trackpads almost as much as I hate DB programming"). Paste, SnippetsLab, TablePlus and BetterTouchTool were previously listed here and are struck for that reason, not because they're bad.
 - [ ] **Obsidian plugins** — **Obsidian Git** (auto-commit/push the vault — may replace `ad_astra_sync.sh`), **Dataview** (SQL-like queries over notes/frontmatter — "all @astra notes last month" as a live query). Trial on the notes-export vault Obsidian is already pointed at.
 - [ ] **Marked 3** (brettterpstra.com) — rewritten PDF export + clean DOCX; covers your legal-repo md→PDF/DOCX. Migration + template work is a Project (see backlog).
 
