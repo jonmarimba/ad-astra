@@ -29,6 +29,7 @@ export BOTMSG_IMSG_BIN="$WORK/fake-imsg"
 # Fake imsg. Reads a transcript fixture and mimics the real tool's contract:
 # newest-first JSON lines, is_from_me for outbound, reply_to_text when the human
 # used the native reply gesture.
+make_fake() {
 cat > "$WORK/fake-imsg" <<'FAKE'
 #!/usr/bin/env python3
 import json, os, sys
@@ -47,6 +48,8 @@ else:
     sys.exit(2)
 FAKE
 chmod +x "$WORK/fake-imsg"
+}
+make_fake
 export SENTLOG="$WORK/sent.log"
 export FIXTURE="$WORK/fixture.json"
 
@@ -63,12 +66,12 @@ cat > "$FIXTURE" <<'JSON'
 ]
 JSON
 
-echo "== 1. A native reply routes to the bot that was replied to =="
+echo "== 1. A reply whose context names a bot routes to that bot =="
 out="$("$BOTMSG" inbox --as ghost-claude --json)"
-if echo "$out" | grep -q "nice, ship it" && echo "$out" | grep -q "native-reply"; then
-  ok "native reply claimed by the right bot, by reply_to_text"
+if echo "$out" | grep -q "nice, ship it" && echo "$out" | grep -q "reply-context"; then
+  ok "reply-context claimed by the named bot"
 else
-  bad "native reply not routed (got: $(echo "$out" | tr -d '\n' | head -c 160))"
+  bad "reply-context not routed (got: $(echo "$out" | tr -d '\n' | head -c 160))"
 fi
 
 echo "== 2. That reply must NOT also be claimed by the other bot =="
@@ -171,6 +174,96 @@ if [ "$rc" -ne 0 ] && echo "$out" | grep -q "locked"; then
 else
   bad "a failed read looked like 'no replies' (rc=$rc)"
 fi
+# RESTORE the working fake. Leaving the broken one in place made every later
+# test run against a dead transport and fail for a reason that had nothing to
+# do with what it was testing — four false failures, all pointing at the wrong
+# code. A test that damages shared fixtures for the tests after it is its own
+# kind of tautology.
+make_fake
+
+echo "== 11. A reply must go to who spoke last BEFORE it, not last overall =="
+# OpenClaw's blocking review finding, 2026-08-18. Computing last_sender once
+# over the whole transcript let a bot claim a reply that was answering someone
+# else's earlier question, purely because it happened to speak afterwards.
+# Stealing a reply is the exact failure this tool exists to prevent.
+cat > "$FIXTURE" <<'JSON'
+[
+ {"id": 20, "is_from_me": true,  "text": "[ghost-openclaw] should I ship it?"},
+ {"id": 21, "is_from_me": false, "text": "yes"},
+ {"id": 22, "is_from_me": true,  "text": "[ghost-claude] unrelated status update"}
+]
+JSON
+rm -rf "$BOTMSG_STATE"
+out="$("$BOTMSG" inbox --as ghost-claude --json)"
+if echo "$out" | grep -q '"yes"'; then
+  bad "ghost-claude stole a reply meant for ghost-openclaw — spoke later, claimed earlier"
+else
+  ok "later speaker did not claim the earlier reply"
+fi
+rm -rf "$BOTMSG_STATE"
+out="$("$BOTMSG" inbox --as ghost-openclaw --json)"
+if echo "$out" | grep -q '"yes"'; then
+  ok "the bot that actually asked received the answer"
+else
+  bad "the answer reached nobody — worse than misrouting (got: $(echo "$out" | tr -d '\n'))"
+fi
+
+echo "== 12. reply_to_text is a GUESS, never reported as exact =="
+# It reads as certainty and is not. On Jonathan's Google Voice SMS thread,
+# Messages auto-associates each inbound with the preceding message — measured:
+# ten of ten inbound carried reply_to_text, two pointing at his OWN texts. So
+# it carries no more information than recency and must not outrank an explicit
+# address or claim higher confidence.
+cat > "$FIXTURE" <<'JSON'
+[
+ {"id": 30, "is_from_me": true,  "text": "[ghost-claude] here is a thing"},
+ {"id": 31, "is_from_me": false, "text": "ok do it",
+  "reply_to_text": "[ghost-claude] here is a thing"}
+]
+JSON
+rm -rf "$BOTMSG_STATE"
+out="$("$BOTMSG" inbox --as ghost-claude --json)"
+if echo "$out" | grep -q "guess"; then
+  ok "reply-context claimed but labelled a guess"
+else
+  bad "reported reply_to_text as certainty: $(echo "$out" | tr -d '\n' | head -c 140)"
+fi
+
+echo "== 13. An explicit tag still beats everything =="
+cat > "$FIXTURE" <<'JSON'
+[
+ {"id": 40, "is_from_me": true,  "text": "[ghost-claude] mine"},
+ {"id": 41, "is_from_me": false, "text": "[ghost-openclaw] this one is yours",
+  "reply_to_text": "[ghost-claude] mine"}
+]
+JSON
+rm -rf "$BOTMSG_STATE"
+out="$("$BOTMSG" inbox --as ghost-claude --json)"
+if echo "$out" | grep -q "this one is yours"; then
+  bad "reply-context overrode an explicit address to another bot"
+else
+  ok "explicit address beat both reply-context and recency"
+fi
+
+echo "== 14. A watermark behind the visible window must FAIL, not skip silently =="
+# Also OpenClaw's. Messages between the watermark and the window are invisible;
+# skipping them quietly means a real instruction is dropped while the tool
+# reports an empty inbox.
+cat > "$FIXTURE" <<'JSON'
+[
+ {"id": 900, "is_from_me": true,  "text": "[ghost-claude] recent"},
+ {"id": 901, "is_from_me": false, "text": "answer"}
+]
+JSON
+rm -rf "$BOTMSG_STATE"; mkdir -p "$BOTMSG_STATE"
+echo '{"last_seen_id": 5}' > "$BOTMSG_STATE/ghost-claude.json"
+out="$("$BOTMSG" inbox --as ghost-claude --json 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && echo "$out" | grep -q "gap"; then
+  ok "gap between watermark and window refused loudly"
+else
+  bad "silently skipped an invisible range (rc=$rc)"
+fi
+
 
 echo
 echo "passed $PASS, failed $FAIL"

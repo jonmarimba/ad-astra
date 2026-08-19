@@ -174,18 +174,51 @@ def cmd_send(args, cfg):
 
 
 def claim(msg, bot, last_sender):
-    """Does this inbound message belong to `bot`? Returns (yes, how)."""
+    """Does this inbound message belong to `bot`? Returns (yes, how).
+
+    WHAT reply_to_text IS NOT. The first version of this treated reply_to_text
+    as proof: if the human used iMessage's reply gesture, chat.db records the
+    text being answered, so a tag riding back inside it would route exactly.
+    Measured against Jonathan's actual thread, that is false, and he said so
+    before the measurement finished — "Google voice doesn't work that way dude.
+    You're going to have to make some assumptions."
+
+    His number is a Google Voice SMS relay. Messages auto-associates each
+    inbound SMS with whatever message preceded it, INCLUDING HIS OWN. Of ten
+    real inbound messages, all ten carried reply_to_text; eight pointed at the
+    immediately preceding outbound and two pointed at his own earlier texts.
+    That is threading, not intent. It therefore carries no more information
+    than "who spoke last", and calling it exact routing was a confidence lie —
+    the worst kind of bug in a router, because it reads as certainty.
+
+    So there is exactly ONE strong signal, and it is the one the human controls
+    deliberately: an explicit leading tag. Everything else is a guess, and every
+    guess says so in its label."""
     t = tag(bot)
-    if t in (msg.get("reply_to_text") or ""):
-        return True, "native-reply"
-    if (msg.get("text") or "").strip().startswith(t):
-        return True, "explicit-tag"
-    # Only claim by recency when NOBODY is named. A message naming another bot
-    # is theirs, and recency must never override an explicit address.
     body = (msg.get("text") or "").strip()
+
+    # STRONG: he addressed a bot by name. Deliberate, unambiguous.
+    if body.startswith(t):
+        return True, "explicit-tag"
     named = body.startswith("[") and "]" in body
-    replied_to_other = "[" in (msg.get("reply_to_text") or "")
-    if not named and not replied_to_other and last_sender == bot:
+    if named:
+        return False, ""          # addressed to someone else; never ours
+
+    # WEAK signals. Both are guesses, but they are not equal, and the ordering
+    # matters more than it looks.
+    #
+    # reply_to_text usually just echoes the preceding message, in which case it
+    # AGREES with recency and adds nothing. Its value is precisely when it
+    # DISAGREES: auto-threading cannot produce a pointer at some other bot's
+    # older message, so a divergence is evidence of a deliberate reply. That is
+    # why reply-context is consulted first and why, when it names any bot at
+    # all, recency does not get a vote — otherwise the bot that merely spoke
+    # last claims an answer aimed at someone else's earlier question.
+    rt = msg.get("reply_to_text") or ""
+    rt_names_a_bot = "[" in rt and "]" in rt
+    if rt_names_a_bot:
+        return (True, "reply-context (guess — SMS auto-threads)") if t in rt else (False, "")
+    if last_sender == bot:
         return True, "most-recent-sender (guess)"
     return False, ""
 
@@ -198,21 +231,42 @@ def cmd_inbox(args, cfg):
     # imsg returns newest-first; walk oldest-first so watermarks advance sanely.
     msgs = list(reversed(msgs))
 
-    # Who sent last, across all bots? Read it off the transcript rather than
-    # trusting our own state, which only knows about us.
+    st = read_state(args.as_bot)
+    seen = st.get("last_seen_id", 0)
+
+    # FAIL CLOSED ON A GAP. The window is the last --limit messages. If our
+    # watermark is older than the oldest message we can see, everything between
+    # them is invisible and would be skipped in silence — a reply asking for
+    # something, dropped, with the tool reporting an empty inbox. Say so and
+    # stop. OpenClaw raised this in review before installing.
+    ids = [m.get("id") or 0 for m in msgs]
+    if seen and ids and min(ids) > seen + 1:
+        die(f"gap: watermark is {seen} but the oldest visible message is "
+            f"{min(ids)}. Messages in between cannot be seen at --limit "
+            f"{args.limit}. Re-run with a larger --limit, or accept the loss "
+            f"explicitly by clearing {state_path(args.as_bot)}.", 75)
+
+    # LAST SENDER IS TEMPORAL. It must be whoever spoke most recently BEFORE the
+    # message being judged, not whoever spoke last overall.
+    #
+    # OpenClaw's counterexample, which reproduced exactly: [ghost-openclaw] asks
+    # at id 10, Jonathan answers bare "yes" at id 11, [ghost-claude] sends
+    # something unrelated at id 12. Computing last_sender once over the whole
+    # transcript makes it ghost-claude, so ghost-claude claims the "yes" — a
+    # reply that could only have meant OpenClaw. Stealing a reply is precisely
+    # the failure this tool was built to stop, so the bug was in the load-bearing
+    # part.
+    mine, high = [], seen
     last_sender = None
     for m in msgs:
+        mid = m.get("id") or 0
         if m.get("is_from_me"):
             body = (m.get("text") or "").strip()
             if body.startswith("[") and "]" in body:
                 last_sender = body[1:body.index("]")]
-
-    st = read_state(args.as_bot)
-    seen = st.get("last_seen_id", 0)
-    mine, high = [], seen
-    for m in msgs:
-        mid = m.get("id") or 0
-        if m.get("is_from_me") or mid <= seen:
+            high = max(high, mid)
+            continue
+        if mid <= seen:
             high = max(high, mid)
             continue
         ok, how = claim(m, args.as_bot, last_sender)
