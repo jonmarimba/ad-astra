@@ -47,6 +47,24 @@ Canonical home moved here 2026-08-12 (was `js-project-GhOST/todo/tech-to-try.md`
 - [ ] **Greptile** (greptile.com) — AI PR review w/ full-codebase context. ⚠️ *(JS: see what it says about kicker specifically.)* Caveat: indexes source on their infra — personal repo only, not Maharam/client.
 - [ ] **Meetily** (`github.com/Zackriya-Solutions/meetily`) — self-hosted AI meeting assistant, ~4x-faster Parakeet transcription.
 
+## G. Mac sync — the two-computer lifestyle (weekend project)
+
+The full inventory, goals and candidate tools live in their own tracker, `two-plus-computer-lifestyle.md`, which is canonical in @astra and symlinked into the Obsidian vault beside this file. Everything below is a pointer, not a copy — two lists of the same items drifting apart is the failure this repo spent 2026-08-18 fixing everywhere else.
+
+The north star that decides all of it, in his words: **don't make him wish he hadn't gone to Starbucks.** The only friction allowed when leaving is unmount the backup drive, throw the M5 in the bag, go. He has abandoned the multi-computer life every previous time he tried it, so anything needing per-machine babysitting is already the wrong answer.
+
+- [ ] **Dotfiles sync** — `chezmoi` is the front-runner because it handles mostly-shared-with-machine-specific-differences cleanly, which is exactly the M4/M5 case. Alternatives: GNU Stow, `yadm`, a plain git dotfiles repo. **Nothing is installed or tested yet** — pick one and it gets set up and proven to move a file both directions before anyone calls it working.
+- [ ] **brew sync** — `brew bundle dump` / `brew bundle` with a Brewfile in the dotfiles repo. Diff-and-apply, never blind auto-update.
+- [ ] **App settings** — `mackup`, selectively. Some apps should not be auto-synced; deciding which is the actual work.
+- [ ] **Xcode versions** — `xcodes` CLI plus `xcode-select`, so multiple Xcodes are reproducible across both machines.
+- [ ] **CLI agent setup sync** (Claude/Codex/Qwen/OpenCode/Pi) — the symlink approach. Ties to the standing Thursday reminder to sync and merge both laptops, which has already fired once and is scheduled again for 2026-08-20.
+- [ ] **Tailscale gaps** — the Linodes, the iMac by the drums, and the incoming Linux LLM box are all still off the tailnet.
+- [ ] **Photo library size control** — size-capped APFS volume, sparse bundle, or iCloud "Optimize Mac Storage". Compare disk behaviour before choosing.
+- [ ] **Portable VMs** — Tart is already set up on the M5 and impressed him; evaluate UTM and Lima for the Linux/Docker case. The win that matters: a UI-automation test run lives in a VM instead of hijacking the machine he is using.
+- [ ] **Contacts and calendar cleanup** — standardize on jonathansaggau.com and remove duplicates; archive the ~150 dormant time-tracking calendars.
+
+Deliberately a WEEKEND item, at his instruction, and he wants to discuss it before it gets built out — "maybe not right away" applies here more than anywhere else on this list.
+
 ## Content ideas (not "to try" — tech-adjacent, for others)
 - Suggested to Andrew Benson 8/3: **Higgsfield** (AI video-gen, aggregates Sora 2/Veo 3.1/Kling 3.0) as a possible YouTube topic. Not sent — draft pending.
 
