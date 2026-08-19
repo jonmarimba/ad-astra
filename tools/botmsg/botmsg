@@ -298,6 +298,63 @@ def cmd_inbox(args, cfg):
     return 0
 
 
+def cmd_claims(args, cfg):
+    """Should THIS bot answer the message it was just handed?
+
+    THE HOLE THIS FILLS. botmsg governed sending, and governed reading for
+    anything that read through `inbox`. Nothing did. Both GhOST-Claude and
+    GhOST-OpenClaw receive every inbound message from their own harness plugin,
+    unconditionally, before botmsg has any say — so the tags changed what
+    messages looked like and nothing about who answered. Jonathan demonstrated
+    it immediately: he sent one message, both bots got it, and OpenClaw replied
+    to a message the routing had assigned to Claude. "Except openclaw
+    responded."
+
+    A routing tool that only the sender consults is decoration. This is the
+    check that belongs at the READ side, before a bot opens its mouth:
+
+        botmsg claims --as ghost-claude --text "$INBOUND"   # exit 0 = answer it
+
+    Exit 0 means it is yours. Exit 3 means it is addressed to another bot and
+    you should stay quiet. Exit 4 means nobody is named and you were not the
+    last to speak, so answering would be a guess at someone else's expense.
+
+    Deliberately NOT consulting the watermark: this asks a question about one
+    message and must not mutate state, or a bot that checks twice gets two
+    different answers.
+    """
+    text = args.text
+    if text is None and not sys.stdin.isatty():
+        text = sys.stdin.read()
+    if not text or not text.strip():
+        die("nothing to judge; pass --text or pipe the message on stdin", 64)
+    body = text.strip()
+
+    if body.startswith(tag(args.as_bot)):
+        print("yours: explicit-tag")
+        return 0
+    if body.startswith("[") and "]" in body:
+        print(f"NOT yours: addressed to {body[1:body.index(']')]}")
+        return 3
+
+    # Nobody named. Who spoke last on the thread before now?
+    to = resolve_to(args, cfg)
+    cid = chat_id_for(to)
+    msgs = list(reversed(imsg_json([IMSG, "history", "--chat-id", str(cid),
+                                    "--limit", str(args.limit), "--json"])))
+    last_sender = None
+    for m in msgs:
+        if m.get("is_from_me"):
+            b = (m.get("text") or "").strip()
+            if b.startswith("[") and "]" in b:
+                last_sender = b[1:b.index("]")]
+    if last_sender == args.as_bot:
+        print("yours: most-recent-sender (guess)")
+        return 0
+    print(f"NOT yours: last speaker was {last_sender or 'nobody tagged'}")
+    return 4
+
+
 def cmd_whoami(args, cfg):
     to = resolve_to(args, cfg)
     st = read_state(args.as_bot)
@@ -354,11 +411,15 @@ def main():
     w.add_argument("--interval", type=int, default=20)
     w.add_argument("--limit", type=int, default=200)
 
+    c = sub.add_parser("claims"); common(c)
+    c.add_argument("--text", help="the inbound message; reads stdin when omitted")
+    c.add_argument("--limit", type=int, default=200)
+
     o = sub.add_parser("whoami"); common(o)
 
     args = ap.parse_args()
     cfg = load_config()
-    return {"send": cmd_send, "inbox": cmd_inbox,
+    return {"send": cmd_send, "inbox": cmd_inbox, "claims": cmd_claims,
             "watch": cmd_watch, "whoami": cmd_whoami}[args.cmd](args, cfg)
 
 

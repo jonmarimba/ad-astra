@@ -265,6 +265,41 @@ else
 fi
 
 
+echo "== 15. The READ-SIDE gate: should this bot answer at all? =="
+# The hole Jonathan found by demonstration. botmsg governed sending and
+# governed reading for anything that read through inbox — and nothing did, so
+# one message got two answers. "Except openclaw responded." A routing tool only
+# the sender consults is decoration; the check has to sit at the read side.
+cat > "$FIXTURE" <<'JSON'
+[
+ {"id": 50, "is_from_me": true, "text": "[ghost-claude] I spoke last"}
+]
+JSON
+"$BOTMSG" claims --as ghost-claude --text "[ghost-claude] do the thing" >/dev/null 2>&1
+[ $? -eq 0 ] && ok "explicit tag for me: answer it" || bad "refused a message addressed to me"
+
+"$BOTMSG" claims --as ghost-claude --text "[ghost-openclaw] do the thing" >/dev/null 2>&1
+[ $? -eq 3 ] && ok "explicit tag for another bot: stay quiet (exit 3)" || bad "did not stand down for a message addressed elsewhere"
+
+"$BOTMSG" claims --as ghost-claude --text "sure, go ahead" >/dev/null 2>&1
+[ $? -eq 0 ] && ok "bare message, I spoke last: answer it" || bad "refused a bare message when I was the last speaker"
+
+"$BOTMSG" claims --as ghost-openclaw --text "sure, go ahead" >/dev/null 2>&1
+[ $? -eq 4 ] && ok "bare message, someone else spoke last: stay quiet (exit 4)" || bad "would have answered a bare message aimed at another bot"
+
+echo "== 16. The gate must not mutate state =="
+# A question about one message. If asking changed the watermark, a bot that
+# checks before answering would lose the next message, or get a different
+# answer on a second check.
+rm -rf "$BOTMSG_STATE"
+"$BOTMSG" claims --as ghost-claude --text "sure" >/dev/null 2>&1
+if [ -e "$BOTMSG_STATE/ghost-claude.json" ]; then
+  bad "the gate wrote state — asking twice could give two different answers"
+else
+  ok "asking did not mutate state"
+fi
+
+
 echo
 echo "passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
