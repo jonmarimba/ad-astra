@@ -1,0 +1,7 @@
+# botmsg dependencies.
+# imsg is the only one: a standalone MIT CLI (openclaw/imsg) that sends and
+# reads iMessage/SMS from the terminal. It is what makes this tool harness
+# agnostic — any process can shell out to it, with no dependency on Claude
+# Code, OpenClaw or any other agent runtime.
+tap "steipete/tap"
+brew "steipete/tap/imsg"

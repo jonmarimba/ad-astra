@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""
+botmsg — let any bot on this Mac text a human, and read the replies meant for it.
+
+THE ASK (Jonathan, "iMessage with robots" note)
+-----------------------------------------------
+"I need you to make your messaging thing generic enough that any robot can
+message me with minimal setup on my part and I can message them back by
+replying." And: "put the tool you make into @astra complete with install
+scripts and dependency management via Brewfile."
+
+WHAT WAS ALREADY SOLVED, AND WHAT WAS NOT
+-----------------------------------------
+Outbound was never the problem. `imsg` is a standalone Homebrew package
+(openclaw/imsg, MIT) and any process can already shell out to `imsg send` with
+no dependency on any particular agent harness.
+
+The gap is INBOUND, and specifically ROUTING. Several bots text the same
+number, every one of them appears in chat.db as the same conversation, and a
+human's reply carries no indication of which bot it answers. GhOST-Claude has
+twice answered a question aimed at GhOST-OpenClaw for exactly this reason. A
+tool that only sends does not solve the thing that is actually broken.
+
+HOW A REPLY GETS ROUTED
+-----------------------
+Three signals, strongest first. The first is the one that makes this work.
+
+  1. NATIVE REPLY. When the human uses iMessage's reply-to gesture, chat.db
+     records `reply_to_text` — the full text of the message being answered.
+     Every message botmsg sends is tagged "[bot-id]", so the tag travels back
+     inside reply_to_text and the routing is EXACT. Not a heuristic.
+
+  2. EXPLICIT TAG. A reply that itself begins "[bot-id]" is addressed to that
+     bot. Useful when replying from a watch, or to an older message.
+
+  3. MOST RECENT SENDER. Otherwise the reply belongs to whichever bot last
+     sent. This is the only guess in the system, it is the same assumption a
+     human makes reading the thread, and it is reported as a guess so a caller
+     can decline to act on it.
+
+Anything a bot cannot claim under those rules is left for another bot to
+collect. A message is never silently consumed by the wrong reader.
+
+PORTABILITY
+-----------
+No identity in code. The destination and the bot id come from config or the
+environment, so a different human, number or bot needs no edit here. Resolution
+order for the destination: --to, $BOTMSG_TO, ./.astra/botmsg.json,
+~/.config/botmsg.json.
+
+    botmsg send    --as kicker-xo --text "build finished"
+    botmsg inbox   --as kicker-xo [--json]
+    botmsg watch   --as kicker-xo --exec ./handle.sh
+    botmsg whoami  --as kicker-xo
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+IMSG = os.environ.get("BOTMSG_IMSG_BIN", "imsg")   # injectable seam: tests must never text a real phone
+STATE_DIR = Path(os.environ.get(
+    "BOTMSG_STATE", Path.home() / ".botmsg")).expanduser()
+
+
+def die(msg, code=1):
+    print(f"botmsg: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def load_config():
+    """Destination and defaults, from the first place that has them."""
+    for p in (Path.cwd() / ".astra" / "botmsg.json",
+              Path.home() / ".config" / "botmsg.json"):
+        try:
+            return json.loads(p.read_text())
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            # A malformed config must not silently fall through to a default
+            # destination — that is how a message goes to the wrong person.
+            die(f"{p} is unreadable ({e}); refusing to guess a destination", 65)
+    return {}
+
+
+def resolve_to(args, cfg):
+    to = args.to or os.environ.get("BOTMSG_TO") or cfg.get("to")
+    if not to:
+        die("no destination. Pass --to, set BOTMSG_TO, or write "
+            '{"to": "+15555550100"} to .astra/botmsg.json', 64)
+    return to
+
+
+def imsg_json(cmd):
+    """Run an imsg subcommand that emits JSON lines. Errors are LOUD.
+
+    A read failure that returns an empty list is indistinguishable from a quiet
+    inbox, and a messaging tool that reports 'no replies' when it actually
+    could not look is worse than one that crashes."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        die(f"could not run {cmd[0]}: {e}", 69)
+    if r.returncode != 0:
+        die(f"{' '.join(cmd[:3])} failed: {(r.stderr or r.stdout).strip()}", 69)
+    out = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            die(f"unparseable line from {cmd[0]}: {line[:120]}", 69)
+    return out
+
+
+def chat_id_for(to):
+    for c in imsg_json([IMSG, "chats", "--limit", "200", "--json"]):
+        if c.get("identifier") == to and not c.get("is_group"):
+            return c["id"]
+    die(f"no one-to-one conversation found with {to}. Send them a message "
+        f"first, or check the number.", 66)
+
+
+def tag(bot):
+    return f"[{bot}]"
+
+
+def state_path(bot):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in bot)
+    return STATE_DIR / f"{safe}.json"
+
+
+def read_state(bot):
+    try:
+        return json.loads(state_path(bot).read_text())
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        die(f"state for {bot} is unreadable ({e}). Refusing to continue: "
+            f"reading it as empty would replay every old message as new.", 65)
+
+
+def write_state(bot, data):
+    p = state_path(bot)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, p)
+
+
+def cmd_send(args, cfg):
+    to = resolve_to(args, cfg)
+    text = args.text
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read()
+    if not text or not text.strip():
+        die("nothing to send", 64)
+    body = f"{tag(args.as_bot)} {text.strip()}"
+    r = subprocess.run([IMSG, "send", "--to", to, "--text", body],
+                       capture_output=True, text=True, timeout=90)
+    if r.returncode != 0:
+        die(f"send failed: {(r.stderr or r.stdout).strip()}", 69)
+    st = read_state(args.as_bot)
+    st["last_sent_text"] = body
+    st["last_sent_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    write_state(args.as_bot, st)
+    print(f"sent as {args.as_bot}")
+    return 0
+
+
+def claim(msg, bot, last_sender):
+    """Does this inbound message belong to `bot`? Returns (yes, how)."""
+    t = tag(bot)
+    if t in (msg.get("reply_to_text") or ""):
+        return True, "native-reply"
+    if (msg.get("text") or "").strip().startswith(t):
+        return True, "explicit-tag"
+    # Only claim by recency when NOBODY is named. A message naming another bot
+    # is theirs, and recency must never override an explicit address.
+    body = (msg.get("text") or "").strip()
+    named = body.startswith("[") and "]" in body
+    replied_to_other = "[" in (msg.get("reply_to_text") or "")
+    if not named and not replied_to_other and last_sender == bot:
+        return True, "most-recent-sender (guess)"
+    return False, ""
+
+
+def cmd_inbox(args, cfg):
+    to = resolve_to(args, cfg)
+    cid = chat_id_for(to)
+    msgs = imsg_json([IMSG, "history", "--chat-id", str(cid),
+                      "--limit", str(args.limit), "--json"])
+    # imsg returns newest-first; walk oldest-first so watermarks advance sanely.
+    msgs = list(reversed(msgs))
+
+    # Who sent last, across all bots? Read it off the transcript rather than
+    # trusting our own state, which only knows about us.
+    last_sender = None
+    for m in msgs:
+        if m.get("is_from_me"):
+            body = (m.get("text") or "").strip()
+            if body.startswith("[") and "]" in body:
+                last_sender = body[1:body.index("]")]
+
+    st = read_state(args.as_bot)
+    seen = st.get("last_seen_id", 0)
+    mine, high = [], seen
+    for m in msgs:
+        mid = m.get("id") or 0
+        if m.get("is_from_me") or mid <= seen:
+            high = max(high, mid)
+            continue
+        ok, how = claim(m, args.as_bot, last_sender)
+        if ok:
+            mine.append({"id": mid, "text": m.get("text"), "routed_by": how,
+                         "replied_to": m.get("reply_to_text")})
+            high = max(high, mid)
+        # NOT ours: leave the watermark where it is, so another bot can still
+        # collect it.
+        #
+        # This is the SECOND of two independent protections, and both were
+        # measured rather than assumed. The other is that each bot has its own
+        # state file. Mutating away either one alone leaves the suite green;
+        # mutating away BOTH loses a reply silently, which is how the pair was
+        # confirmed to be genuinely redundant rather than one of them being
+        # decoration. Keep both. If per-bot state ever becomes shared state,
+        # this line stops being redundant and becomes the only thing standing
+        # between one bot's read and another bot's mail.
+
+    if not args.peek:
+        st["last_seen_id"] = high
+        write_state(args.as_bot, st)
+
+    if args.json:
+        print(json.dumps(mine, indent=2))
+    else:
+        for m in mine:
+            print(f"[{m['routed_by']}] {m['text']}")
+    return 0
+
+
+def cmd_whoami(args, cfg):
+    to = resolve_to(args, cfg)
+    st = read_state(args.as_bot)
+    print(f"bot        : {args.as_bot}")
+    print(f"tag        : {tag(args.as_bot)}")
+    print(f"destination: {to}")
+    print(f"state      : {state_path(args.as_bot)}")
+    print(f"last seen  : {st.get('last_seen_id', 'never')}")
+    return 0
+
+
+def cmd_watch(args, cfg):
+    """Poll for replies and hand each to a command on stdin."""
+    while True:
+        args.json, args.peek = True, False
+        import io
+        buf = io.StringIO()
+        real = sys.stdout
+        sys.stdout = buf
+        try:
+            cmd_inbox(args, cfg)
+        finally:
+            sys.stdout = real
+        for m in json.loads(buf.getvalue() or "[]"):
+            if args.exec:
+                subprocess.run([args.exec], input=json.dumps(m), text=True)
+            else:
+                print(json.dumps(m))
+        time.sleep(args.interval)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="botmsg", description=__doc__.split("\n")[1])
+    ap.add_argument("--to", help="destination handle; overrides config and BOTMSG_TO")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def common(p):
+        p.add_argument("--as", dest="as_bot", required=True,
+                       help="this bot's id, e.g. kicker-xo")
+
+    s = sub.add_parser("send"); common(s)
+    s.add_argument("--text", help="message body; reads stdin when omitted")
+
+    i = sub.add_parser("inbox"); common(i)
+    i.add_argument("--json", action="store_true")
+    i.add_argument("--limit", type=int, default=200,
+                   help="transcript depth to consider (default 200 — enough to "
+                        "find the last sender across several bots' turns)")
+    i.add_argument("--peek", action="store_true",
+                   help="do not advance the watermark")
+
+    w = sub.add_parser("watch"); common(w)
+    w.add_argument("--exec", help="command to receive each reply as JSON on stdin")
+    w.add_argument("--interval", type=int, default=20)
+    w.add_argument("--limit", type=int, default=200)
+
+    o = sub.add_parser("whoami"); common(o)
+
+    args = ap.parse_args()
+    cfg = load_config()
+    return {"send": cmd_send, "inbox": cmd_inbox,
+            "watch": cmd_watch, "whoami": cmd_whoami}[args.cmd](args, cfg)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
