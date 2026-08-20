@@ -89,12 +89,15 @@ mkdir -p "$HOOKS_DIR"
 
 if [[ $has_managed -eq 1 ]]; then
   backup_hook
-  repl="$(managed_block)"
-  awk -v b="$BEGIN" -v e="$END" -v repl="$repl" '
-    $0==b {skip=1; print repl; next}
-    $0==e {skip=0; next}
-    !skip {print}
-  ' "$HOOK" > "$HOOK.tmp" && mv "$HOOK.tmp" "$HOOK"
+  # Replace the existing BEGIN..END managed block in place, preserving everything else.
+  # Guarded: a missing/misordered marker aborts loudly instead of doing arithmetic on
+  # an empty variable (set -u would kill us mid-rewrite) or splicing garbage.
+  bstart=$(grep -nF "$BEGIN" "$HOOK" | head -1 | cut -d: -f1) || true
+  bend=$(grep -nF "$END" "$HOOK" | head -1 | cut -d: -f1) || true
+  if [[ -z "$bstart" || -z "$bend" || "$bend" -le "$bstart" ]]; then
+    die "managed block markers missing or out of order in $HOOK (BEGIN@${bstart:-none}, END@${bend:-none}) — hook left untouched; fix by hand or rerun with --replace"
+  fi
+  { head -n $((bstart - 1)) "$HOOK"; managed_block; tail -n +$((bend + 1)) "$HOOK"; } > "$HOOK.tmp" && mv "$HOOK.tmp" "$HOOK"
   emit "→ refreshed the managed hook block (other content untouched)"
 elif [[ "$MODE" == "replace" ]]; then
   backup_hook
@@ -102,8 +105,17 @@ elif [[ "$MODE" == "replace" ]]; then
   emit "→ replaced hook with this kit's managed block (old hook backed up)"
 elif [[ -f "$HOOK" ]]; then
   backup_hook
-  { printf '\n'; managed_block; } >> "$HOOK"
-  emit "→ appended this kit's block to the existing hook"
+  # If the existing hook ends with a top-level `exit`, a blind append would be dead
+  # code (it runs after the exit). Insert before the LAST top-level exit so the kit's
+  # block actually runs; otherwise append at the end.
+  last_exit=$(grep -nE '^exit([[:space:]]|$)' "$HOOK" | tail -1 | cut -d: -f1 || true)
+  if [[ -n "$last_exit" ]]; then
+    { head -n $((last_exit - 1)) "$HOOK"; echo; managed_block; echo; tail -n +"$last_exit" "$HOOK"; } > "$HOOK.tmp" && mv "$HOOK.tmp" "$HOOK"
+    emit "→ inserted this kit's block before the hook's trailing exit"
+  else
+    { printf '\n'; managed_block; } >> "$HOOK"
+    emit "→ appended this kit's block to the existing hook"
+  fi
 else
   { printf '#!/bin/bash\n\n'; managed_block; } > "$HOOK"
   emit "→ created $HOOK"

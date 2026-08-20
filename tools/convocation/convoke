@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# convoke — run one round of a convocation: the same task file to N agents, isolated,
+# each writing to its own output file. Rounds 1 and 2 are both "a task file fanned out";
+# only the task file's CONTENT differs (round 2's includes the others' round-1 outputs).
+# See ../../skills/convocation/SKILL.md for the full process.
+#
+#   convoke TASK.md --out outdir [--agents claude,codex,qwen] [--tag round1]
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+TASK="${1:?usage: convoke TASK.md --out DIR [--agents claude,codex,qwen] [--tag round1]}"; shift
+OUT="convocation-out"; AGENTS="claude,codex,qwen"; TAG="round1"
+while [ $# -gt 0 ]; do case "$1" in
+  --out) OUT="$2"; shift 2;; --agents) AGENTS="$2"; shift 2;; --tag) TAG="$2"; shift 2;;
+  # a typo'd flag silently running with defaults overwrites the PREVIOUS round's outputs
+  *) echo "convoke: unknown argument '$1'" >&2; exit 64;;
+esac; done
+[ -f "$TASK" ] || { echo "no task file: $TASK"; exit 1; }
+mkdir -p "$OUT"
+PROMPT="$(cat "$TASK")"
+CLAUDE_BIN="${CLAUDE_BIN:-/opt/homebrew/bin/claude}"
+CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
+QWEN_BIN="${QWEN_BIN:-/opt/homebrew/bin/qwen}"
+# PIN THE MODEL. Without -m, qwen uses whatever `.model.name` happens to be in
+# ~/.qwen/settings.json, which on 2026-08-19 was an LM Studio model on the M5 laptop.
+# The M5 sleeps, so the third voice of every convocation silently depended on whether a
+# laptop was awake — it failed that day with "No models loaded", after the round had
+# already been dispatched. And when the M5 IS awake that model is NVIDIA-brand and local,
+# so the "brand diversity" the doctrine is built on was whatever the picker was last set
+# to rather than a deliberate choice. Pinned to an ollama-cloud route through OmniRoute,
+# verified serving the same morning. Override with QWEN_MODEL for a different third brand.
+#   -y is load-bearing too (doctrine): without it any prompt that trips qwen's tool-calling
+#   dies with "requires user approval but cannot execute in non-interactive mode".
+QWEN_MODEL="${QWEN_MODEL:-ollamacloud/glm-5.2}"
+# validate EVERY requested agent before launching ANY — a convocation missing a voice is not
+# a convocation, and a silent skip would let a two-voice round masquerade as a three-voice one
+bad=0
+for a in $(echo "$AGENTS" | tr ',' ' '); do
+  case "$a" in
+    claude) [ -x "$CLAUDE_BIN" ] || { echo "convoke: agent 'claude' requested but $CLAUDE_BIN is not executable" >&2; bad=1; } ;;
+    codex)  [ -x "$CODEX_BIN" ]  || { echo "convoke: agent 'codex' requested but $CODEX_BIN is not executable" >&2; bad=1; } ;;
+    qwen)   if [ -x "$QWEN_BIN" ]; then
+              # A binary that exists is not a voice that answers. The 2026-08-19 failure got
+              # past the executable check and died on the model, after the other two brands
+              # had already been launched and their tokens spent. One cheap round-trip here
+              # turns that into a refusal to start.
+              if ! timeout 90 "$QWEN_BIN" -m "$QWEN_MODEL" -y -p 'Reply with exactly: READY' 2>/dev/null | grep -q READY; then
+                echo "convoke: agent 'qwen' requested but model '$QWEN_MODEL' did not answer a trivial prompt." >&2
+                echo "         Check OmniRoute is up (curl -s localhost:20128/v1/models) and that the model serves." >&2
+                bad=1
+              fi
+            else
+              echo "convoke: agent 'qwen' requested but $QWEN_BIN is not executable" >&2; bad=1
+            fi ;;
+    *) echo "convoke: unknown agent '$a' (claude|codex|qwen)" >&2; bad=1 ;;
+  esac
+done
+[ "$bad" -eq 0 ] || { echo "convoke: aborting — every requested voice must be able to run" >&2; exit 1; }
+# each subshell exits with ITS AGENT'S status — an agent that crashes must fail the round,
+# not leave a 0-byte answer file behind a cheery "done" (a round missing a voice is invalid)
+run_agent(){ # run_agent <name> <outfile> <cmd...>
+  local a="$1" o="$2"; shift 2
+  if "$@" > "$o" 2>"$o.err"; then echo "done: $a"
+  else local rc=$?; echo "convoke: agent '$a' FAILED rc=$rc (stderr in $o.err)" >&2; return "$rc"; fi
+}
+pids=()
+for a in $(echo "$AGENTS" | tr ',' ' '); do
+  o="$OUT/${TAG}_${a}.md"
+  case "$a" in
+    claude) run_agent claude "$o" "$CLAUDE_BIN" -p "$PROMPT" & pids+=($!) ;;
+    codex)  run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" & pids+=($!) ;;
+    qwen)   run_agent qwen   "$o" "$QWEN_BIN" -m "$QWEN_MODEL" -y -p "$PROMPT" & pids+=($!) ;;
+  esac
+done
+failed=0
+for p in "${pids[@]}"; do wait "$p" || failed=1; done
+echo "--- $TAG outputs in $OUT/:"
+ls -la "$OUT/${TAG}_"*.md 2>/dev/null
+[ "$failed" -eq 0 ] || { echo "convoke: round INCOMPLETE — at least one voice failed" >&2; exit 1; }

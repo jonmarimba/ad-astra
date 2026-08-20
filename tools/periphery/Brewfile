@@ -1,0 +1,3 @@
+# periphery — Swift dead-code detection (peripheryapp's own tap)
+tap "peripheryapp/periphery"
+brew "peripheryapp/periphery/periphery"

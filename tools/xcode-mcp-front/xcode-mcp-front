@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+# xcode-mcp-front — start/stop/status wrapper around daemon.py.
+#
+# Why this exists: Xcode's MCP "Allow" popup is keyed per connecting PID. Every
+# separate process that execs `xcrun mcpbridge` re-triggers it. kicker runs many
+# concurrent nodes, so today that's many concurrent popups for the same tool. This
+# daemon holds ONE mcpbridge connection for its whole life and fronts it over
+# Streamable HTTP so every client connects to the daemon instead of spawning its
+# own mcpbridge. Point kicker nodes' MCP client config at http://127.0.0.1:8765/mcp
+# (an HTTP-transport server entry) instead of a stdio spawn of mcpbridge directly.
+#
+# daemon.py owns reconnecting AND clicking Xcode's approval prompt itself now (one
+# ongoing loop, not a one-shot window at spawn — see daemon.py's header) — this
+# wrapper is just process management, no click logic of its own anymore.
+#
+#   xcode-mcp-front start    # spawn the daemon in the background, write pidfile+log
+#   xcode-mcp-front stop     # stop it
+#   xcode-mcp-front restart
+#   xcode-mcp-front status   # running? since when? listening where?
+#   xcode-mcp-front logs     # tail the daemon log
+#   xcode-mcp-front spike [N]  # run spike.py in the foreground (validation, not the daemon)
+#
+# For anything meant to be left running unattended, use launchd-install below
+# instead of plain start — manual mode here does NOT recover if daemon.py dies.
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+STATE="${XCODE_MCP_FRONT_HOME:-$HOME/.xcode-mcp-front}"
+PIDFILE="$STATE/daemon.pid"
+LOGFILE="$STATE/daemon.log"
+PORT="${XCODE_MCP_FRONT_PORT:-8765}"
+mkdir -p "$STATE"
+
+running_pid() {
+  [ -f "$PIDFILE" ] || return 1
+  local pid; pid="$(cat "$PIDFILE" 2>/dev/null)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    echo "$pid"
+    return 0
+  fi
+  rm -f "$PIDFILE"  # stale pidfile from a crashed/killed daemon — self-heal, don't leave it lying around
+  return 1
+}
+
+cmd_start() {
+  local pid
+  if pid="$(running_pid)"; then
+    echo "already running (pid $pid), listening on http://127.0.0.1:$PORT/mcp"
+    return 0
+  fi
+  echo "starting xcode-mcp-front on port $PORT, log: $LOGFILE"
+  nohup uv run --script "$HERE/daemon.py" >>"$LOGFILE" 2>&1 &
+  local newpid=$!
+  echo "$newpid" > "$PIDFILE"
+  sleep 2  # let uvicorn come up and fail fast if something's badly wrong
+  if kill -0 "$newpid" 2>/dev/null; then
+    echo "started (pid $newpid) — daemon.py connects/reconnects to Xcode on its own from here"
+  else
+    echo "FAILED to start — check $LOGFILE" >&2
+    rm -f "$PIDFILE"
+    return 1
+  fi
+}
+
+cmd_stop() {
+  local pid
+  if ! pid="$(running_pid)"; then
+    echo "not running"
+    rm -f "$PIDFILE"
+    return 0
+  fi
+  echo "stopping (pid $pid)"
+  kill "$pid" 2>/dev/null
+  for _ in 1 2 3 4 5; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+  kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+  rm -f "$PIDFILE"
+  echo "stopped"
+}
+
+cmd_status() {
+  local pid
+  if pid="$(running_pid)"; then
+    local since; since="$(ps -o lstart= -p "$pid" 2>/dev/null | sed 's/^ *//')"
+    echo "running: pid $pid, since $since, listening on http://127.0.0.1:$PORT/mcp"
+  else
+    echo "not running"
+  fi
+}
+
+# --- launchd-managed mode ---
+# Manual start/stop/restart above is fine for one-off dev use, but a crashed
+# daemon.py just stays dead until someone notices. launchd's KeepAlive fixes
+# that. (Losing Xcode itself is NOT what this is for anymore — daemon.py
+# reconnects to Xcode in-process on its own now; launchd respawn is only for
+# an actual process crash.) This is the mode to actually leave running.
+#
+# A bare script launchd execs directly has no stable identity for TCC to grant
+# Accessibility/Automation permission to (osascript's System-Events UI-scripting,
+# used by daemon.py's click-Allow loop, needs exactly that) — same root cause as
+# the documented Mail/Messages background-job problem, different TCC category.
+# Fixed the same way in spirit: xcode-mcp-front-run.sh is wrapped in
+# XcodeMCPFront.app via wrap-in-app, giving TCC a stable identity to grant to.
+#
+# UNLIKE the schd Mail/Messages wrappers, launchd here points DIRECTLY at the
+# app's own executable — not `open -a` via the wrap-in-app launch shim. Found
+# live, 2026-08-14: `open -a`/`-W` is built for FINITE scripts (the schd case),
+# and breaks for a persistent one. The app's embedded script never exits, so
+# `open -a` on an already-running instance just no-ops or blocks on the SAME
+# old instance forever — `launchctl kickstart -k` was killing the launchd-
+# tracked shim/open process, which isn't even in the same process tree as the
+# actual daemon.py (open hands off to LaunchServices, decoupling it from
+# whatever called `open`), so the real work was never actually restarted.
+# Direct-exec makes the app's process launchd's own direct child, so
+# kickstart/KeepAlive genuinely own its lifecycle. The TCC grant still applies
+# either way — it's pinned to the .app's identity, not to how it's launched.
+# Label/ThrottleInterval match the convention already established by kickerd's
+# own LaunchAgent (~/Library/LaunchAgents/com.jonathansaggau.kickerd.plist) on
+# this machine. KeepAlive does NOT match it, on purpose: kickerd uses
+# {SuccessfulExit: false} (only respawn on a genuine failure exit), but this
+# daemon's most likely failure mode — the port already in use — makes uvicorn
+# shut down gracefully with exit code 0, which {SuccessfulExit: false} reads as
+# "finished on purpose, don't respawn" (confirmed live, 2026-08-14 — the daemon
+# silently stayed dead after an EADDRINUSE). Plain `true` respawns regardless
+# of exit code, which is what a persistent service that should never
+# intentionally "finish" actually needs.
+LAUNCHD_LABEL="com.jonathansaggau.xcode-mcp-front"
+LAUNCHD_OLD_LABEL="local.xcode-mcp-front"  # pre-2026-08-14 label, cleaned up below if present
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+LAUNCHD_TARGET="gui/$(id -u)/$LAUNCHD_LABEL"
+LAUNCHD_APP_BIN="$HERE/XcodeMCPFront.app/Contents/MacOS/Automator Application Stub"
+
+cmd_launchd_install() {
+  [ -x "$LAUNCHD_APP_BIN" ] || {
+    echo "launchd-install: $LAUNCHD_APP_BIN not found — run wrap-in-app first (see comment above)" >&2
+    return 1
+  }
+  # Config file, not an env var: this process is launched via a signed .app
+  # bundle rather than a plain fork/exec, and env propagation through that path
+  # isn't reliable. daemon.py reads this file directly off disk instead.
+  #
+  # Key MUST be the full XCODE_MCP_FRONT_AUTO_ALLOW name, not a bare AUTO_ALLOW
+  # (that was a real live bug, found by convocation review 2026-08-14: daemon.py
+  # only ever reads os.environ["XCODE_MCP_FRONT_AUTO_ALLOW"], so a bare
+  # AUTO_ALLOW key was silently ignored - the documented "set
+  # XCODE_MCP_FRONT_AUTO_ALLOW=0 before install" off switch did nothing under
+  # launchd, only ever mattered for the never-used manual-mode env-var path).
+  echo "XCODE_MCP_FRONT_AUTO_ALLOW=\"${XCODE_MCP_FRONT_AUTO_ALLOW:-1}\"" > "$STATE/config"
+  cat > "$LAUNCHD_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$LAUNCHD_LABEL</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$LAUNCHD_APP_BIN</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>$HERE</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>StandardOutPath</key>
+	<string>$LOGFILE</string>
+	<key>StandardErrorPath</key>
+	<string>$LOGFILE</string>
+</dict>
+</plist>
+PLIST
+  # if a manual-mode instance is running, stop it first so we don't end up with two
+  running_pid >/dev/null 2>&1 && cmd_stop
+  launchctl bootout "gui/$(id -u)/$LAUNCHD_OLD_LABEL" >/dev/null 2>&1 || true  # retire the old label if present
+  rm -f "$HOME/Library/LaunchAgents/$LAUNCHD_OLD_LABEL.plist"
+  launchctl bootout "$LAUNCHD_TARGET" >/dev/null 2>&1 || true  # ignore if not already loaded
+  launchctl bootstrap "gui/$(id -u)" "$LAUNCHD_PLIST"
+  echo "installed and loaded: $LAUNCHD_PLIST"
+  echo "auto-allow: ${XCODE_MCP_FRONT_AUTO_ALLOW:-1} (set XCODE_MCP_FRONT_AUTO_ALLOW=0 before install to require a manual click instead)"
+}
+
+cmd_launchd_uninstall() {
+  launchctl bootout "$LAUNCHD_TARGET" >/dev/null 2>&1 || true
+  rm -f "$LAUNCHD_PLIST"
+  echo "uninstalled: $LAUNCHD_PLIST"
+}
+
+cmd_launchd_status() {
+  if [ ! -f "$LAUNCHD_PLIST" ]; then
+    echo "not installed (no $LAUNCHD_PLIST)"
+    return 0
+  fi
+  launchctl print "$LAUNCHD_TARGET" 2>&1 | grep -E "state|pid" || echo "installed but not currently loaded"
+}
+
+cmd_launchd_restart() {
+  launchctl kickstart -k "$LAUNCHD_TARGET"
+  echo "restarted (launchd re-runs the app fresh; daemon.py reconnects/re-clicks on its own from there)"
+}
+
+case "${1:-status}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_stop; cmd_start ;;
+  status) cmd_status ;;
+  logs) tail -f "$LOGFILE" ;;
+  spike) shift; uv run --script "$HERE/spike.py" "$@" ;;
+  launchd-install|load) cmd_launchd_install ;;
+  launchd-uninstall|unload) cmd_launchd_uninstall ;;
+  launchd-status) cmd_launchd_status ;;
+  launchd-restart) cmd_launchd_restart ;;
+  *)
+    echo "usage: xcode-mcp-front {start|stop|restart|status|logs|spike [N]}  (manual/dev mode)" >&2
+    echo "       xcode-mcp-front {load|unload|launchd-status|launchd-restart}  (launchd-managed — the mode to leave running)" >&2
+    exit 1
+    ;;
+esac

@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+# ambrosio — named for Alessandra Ambrosio, because the job is finding JS HOT MODELS (the pun is
+# the whole point; the previous version of this comment earnestly explained Greek mythology
+# instead and that was wrong, corrected 2026-08-14). So JS never weekly-searches "what's hot":
+# watches HF trending (filtered to his frontier watchlist), auto-pulls the best-fitting NEW and
+# GENUINELY WORTH HIS TIME model onto the headroom host's LM Studio, lets OmniRoute discover it
+# (it already watches that host as a provider_node), and botline-pings JS "come play."
+# REACHABILITY-GATED: inert while the host sleeps.
+#
+# "Hot" means real signal, not just "downloaded and didn't error" (found live, 2026-08-14, after
+# delivering Nemotron-3-Nano — passed every filter, downloaded fine, and was dead weight: same
+# architecture family and size class as Nemotron-3.5-Lightning, already loaded, already the
+# active default. A tool that pings "come play" for that isn't finding hot models, it's finding
+# models that exist and fit). Two real checks now gate a pull, both below: a popularity floor
+# (HF's own `downloads` count, already in every search response, previously read and ignored) and
+# a redundancy check against what's already on the host before treating a new download as news.
+#
+#   ambrosio check [--dry-run]   # the whole loop (silent if host down or nothing new)
+#   ambrosio status              # host reachability + currently-loaded models + seen count + want-list
+# Config: $AMBROSIO_HOME/config. Notifies via botline.
+#
+# RETRY CADENCE (2026-08-14): the M5 isn't always on the tailnet — it's a laptop, not an
+# always-on host. The schd job driving `check` runs every 4 hours (was daily until Jonathan
+# flagged that as too sparse a retry window), not something this script manages itself — `check`
+# is cheap and safe to run often: the host_up gate below is a single 6s-timeout curl, so an
+# unreachable M5 costs one fast probe and exits, no wasted work. See schd job d22dacaa (or
+# `schd list | grep -i ambrosio` for whatever superseded it) for the actual cadence.
+#
+# WANT-LIST (2026-08-14): $AMBROSIO_HOME/wantlist.txt holds specific model family terms Jonathan
+# explicitly wants pulled, distinct from the reactive HF-trending scan below (which only sees
+# whatever's trending THIS run — a wanted model that isn't currently trending would never surface
+# through that path alone). Want-list terms are tried FIRST every run, using the exact same
+# resolve_mlx_url + SEEN + MAX_PER_RUN machinery as trending candidates — no separate code path,
+# so a want-list entry gets the same size-cap/quant-preference/retry treatment as anything else.
+# An entry stays in the file (edit it directly, one term per line, `#` for comments) until it
+# either pulls successfully (then it's in $SEEN like any other model and won't re-pull) or JS
+# removes it — this is what makes it "durable across down periods": it isn't a queue that drains,
+# it's a standing list that keeps getting retried every 4h run until it lands or is removed.
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+AMBROSIO_HOME="${AMBROSIO_HOME:-$HOME/.ambrosio}"
+mkdir -p "$AMBROSIO_HOME"
+CONF="$AMBROSIO_HOME/config"
+BOTLINE="${BOTLINE_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/botline/botline}"
+SEEN="$AMBROSIO_HOME/seen.txt"; touch "$SEEN"
+WANTLIST="$AMBROSIO_HOME/wantlist.txt"
+if [ ! -f "$WANTLIST" ]; then
+cat > "$WANTLIST" <<'WL'
+# ambrosio want-list — one model family search term per line (same term shape hot_candidates
+# would produce, e.g. "qwen3.6" or "glm-6"), '#' for comments, blank lines ignored. Tried FIRST
+# every run, ahead of the HF-trending scan, through the same resolve_mlx_url/SEEN/MAX_PER_RUN
+# path — no special-casing. Stays here until it pulls successfully or you remove the line.
+WL
+fi
+if [ ! -f "$CONF" ]; then
+cat > "$CONF" <<'CFG'
+# Headroom host running LM Studio (the play host). M5 now; repoint to the Strix Linux box later.
+HOST="jonathans-macbook-pro-m5-max.tail2abcb6.ts.net"
+LMS_PORT="1234"
+SSH_TARGET="jonathans-macbook-pro-m5-max.tail2abcb6.ts.net"   # ssh over Tailscale; lms must be on PATH there
+WATCHLIST="glm kimi deepseek qwen3 qwen4 minimax gpt-oss nemotron llama4 llama5 mistral-large command-a"
+SIZE_CAP_GB="80"
+OMNIROUTE_NODE="LM Studio M5"
+LMS_BIN="~/.lmstudio/bin/lms"      # lms isn't on the non-interactive ssh PATH; use the full path
+LMS_FORMAT="--mlx"                 # M5 is Apple Silicon → MLX; lms picks a hardware-fitting quant
+MAX_PER_RUN="2"                    # don't blast a dozen multi-GB downloads in one go
+MIN_PARAMS_B="7"                   # skip toy models (<7B) — JS wants frontier to play with
+CFG
+fi
+# shellcheck disable=SC1090
+. "$CONF"
+LMS_BIN="${LMS_BIN:-~/.lmstudio/bin/lms}"; LMS_FORMAT="${LMS_FORMAT:---mlx}"; MAX_PER_RUN="${MAX_PER_RUN:-2}"; MIN_PARAMS_B="${MIN_PARAMS_B:-7}"
+export WATCHLIST HOST LMS_PORT SSH_TARGET SIZE_CAP_GB OMNIROUTE_NODE LMS_BIN LMS_FORMAT MAX_PER_RUN MIN_PARAMS_B
+
+log(){ echo "ambrosio: $*" >&2; }   # stderr only — schd command-job stays silent on no-op
+# transport binaries are injectable so tests can run the real script against recorded API
+# payloads and a recording ssh — same seam pattern as BOTLINE_BIN/LMS_BIN above
+CURL="${CURL_BIN:-curl}"; SSH="${SSH_BIN:-ssh}"; OMNIROUTE="${OMNIROUTE_BIN:-omniroute}"
+host_up(){ "$CURL" -s --max-time 6 "http://$HOST:$LMS_PORT/v1/models" >/dev/null 2>&1; }
+loaded_models(){ "$CURL" -s --max-time 8 "http://$HOST:$LMS_PORT/v1/models" 2>/dev/null | python3 -c "import sys,json;[print(m.get('id','')) for m in json.load(sys.stdin).get('data',[])]" 2>/dev/null; }
+hot_candidates(){
+  # limit=80: frontier drops chart inside the top ~30 trending; 80 is 2.5x margin, and the
+  # filters below discard most rows anyway. Errors go to pull.log, never /dev/null — an HF
+  # outage must be distinguishable from "genuinely nothing new" when this runs on a timer.
+  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=80&pipeline_tag=text-generation" 2>>"$AMBROSIO_HOME/pull.log" \
+   | python3 -c "
+import sys,json,os,re
+wl=os.environ['WATCHLIST'].lower().split()
+minp=float(os.environ.get('MIN_PARAMS_B','7'))
+# official frontier labs only — skips random community quants/forks
+REPUTABLE={'deepseek-ai','nvidia','zai-org','qwen','moonshotai','meta-llama','mistralai',
+           'minimaxai','microsoft','google','ai21labs','allenai','lmstudio-community','mlx-community'}
+JUNK=('abliterated','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp','distill')
+# tokens to strip when deriving the family search term (format / quant / variant / size / date)
+DROP=re.compile(r'^(nvfp4|bf16|fp16|fp8|mxfp4|int4|int8|q[0-9].*|k_m|gguf|mlx|base|instruct|chat|it|dflash|mtp|a[0-9]+b|[0-9.]+b|[0-9]{4,}|v?[0-9]+bit)$', re.I)
+def family_term(tail):
+    toks=[t for t in re.split(r'[-_]', tail) if t]
+    core=[t for t in toks if not DROP.match(t)]
+    return '-'.join(core)
+def biggest_size_b(tail):
+    sizes=[float(m.group(1)) for t in re.split(r'[-_]', tail) for m in [re.match(r'([0-9.]+)b$', t, re.I)] if m]
+    return max(sizes) if sizes else None
+try: ms=json.load(sys.stdin)
+except Exception: ms=[]
+seen=set()
+if isinstance(ms,list):
+    for m in ms:
+        mid=(m.get('id') or m.get('modelId') or '') if isinstance(m,dict) else ''
+        if not mid: continue
+        org=mid.split('/')[0].lower(); low=mid.lower(); tail=mid.split('/')[-1]
+        if org not in REPUTABLE: continue
+        if not any(w in low for w in wl): continue
+        if any(j in low for j in JUNK): continue
+        sz=biggest_size_b(tail)
+        if sz is not None and sz < minp: continue        # skip toy models
+        term=family_term(tail)
+        if not term or term.lower() in seen: continue     # dedup by family
+        seen.add(term.lower())
+        print(term)
+" 2>>"$AMBROSIO_HOME/pull.log"
+}
+
+# resolve a family term -> full HF URL of the best MLX repo (staff-picks search misses most
+# frontier drops; lms get accepts a full HF URL for direct download). Prefers reputable quant
+# orgs and a sane quant (4bit first, then 8bit), skips bf16 (huge) unless nothing else.
+resolve_mlx_url(){
+  local term="$1"
+  # limit=30: the query is already scoped to '<family> mlx', where the relevant quant repos
+  # land in the first dozen results; 30 is margin, not a completeness cap
+  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?search=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]+' mlx'))" "$term")&limit=30" 2>>"$AMBROSIO_HOME/pull.log" \
+  | TERM_Q="$term" SIZE_CAP_GB="$SIZE_CAP_GB" python3 -c "
+import sys,json,os,re,urllib.request
+term=os.environ['TERM_Q'].lower()
+cap=float(os.environ.get('SIZE_CAP_GB','80'))
+GOOD_ORGS=['mlx-community','lmstudio-community']
+JUNK=('dspark','abliterated','uncensored','crack','jang','keys-','oq4e','oq8e','-mtp','draft','distill')
+def quant_rank(name):
+    n=name.lower()
+    if '4bit' in n or 'mxfp4' in n or 'q4' in n: return 0
+    if '6bit' in n or 'q6' in n: return 1
+    if '8bit' in n or 'mxfp8' in n or 'q8' in n: return 2
+    if 'bf16' in n or 'fp16' in n: return 9
+    return 3
+def repo_gb(mid):
+    try:
+        with urllib.request.urlopen(f'https://huggingface.co/api/models/{mid}?blobs=true', timeout=15) as r:
+            d=json.load(r)
+        return sum(f.get('size',0) for f in d.get('siblings',[]) if f.get('size'))/1e9
+    except Exception:
+        return None   # unknown size: treat as over-cap (don't gamble the disk)
+try: ms=json.load(sys.stdin)
+except Exception: ms=[]
+cands=[]
+for m in ms:
+    mid=m.get('id') or ''
+    if not mid: continue
+    org, _, tail = mid.partition('/')
+    low=mid.lower()
+    if term.replace(' ','-') not in low.replace('_','-'): continue
+    if any(j in low for j in JUNK): continue
+    org_rank = GOOD_ORGS.index(org.lower()) if org.lower() in GOOD_ORGS else 5
+    # downloads: real signal already in every search response, previously ignored entirely
+    # (found live, 2026-08-14 — the whole point is HOT models, and org-is-reputable alone says
+    # nothing about whether anyone is actually using this specific quant). Used as a tiebreaker,
+    # NOT a hard floor: a genuinely hot model that dropped this week can have a low download
+    # count purely from being new, so rejecting low-download repos outright would filter out
+    # exactly the freshest drops this tool exists to catch. Sort descending within each
+    # org/quant tier instead — among otherwise-equal options, prefer the one people are using.
+    downloads = m.get('downloads', 0) or 0
+    cands.append((org_rank, quant_rank(tail), -downloads, mid))
+cands.sort()
+# walk ALL candidates best-first; first one whose ACTUAL repo size fits the cap wins.
+# No [:N] slice — each probe is one cheap API call, and a fitting repo ranked 7th must
+# not be invisible (the no-silent-caps rule).
+for _,_,_,mid in cands:
+    gb=repo_gb(mid)
+    if gb is not None and 3<=gb<=cap:   # floor: <3GB = draft head / toy distill, not a frontier model
+        print(f'https://huggingface.co/{mid}'); break
+    print(f'skip {mid} ({\"?\" if gb is None else f\"{gb:.0f}GB\"} outside 3..{cap:.0f}GB)', file=sys.stderr)
+" 2>>"$AMBROSIO_HOME/pull.log"
+}
+
+# surface a delivered model in the CLIs so JS SEES it without hunting: top of OpenCode's
+# omniroute provider picker + qwen's default model. Idempotent. (omniroute setup-opencode is
+# broken in v16.2.10 — '@/shared' import bug — and setup-qwen writes a legacy schema, so we
+# edit the configs directly, matching the schemas the files already use.)
+expose_model(){
+  local lms_id="$1" label="$2"
+  OC="$HOME/.config/opencode/opencode.jsonc" QW="$HOME/.qwen/settings.json" \
+  LMS_ID="$lms_id" LABEL="$label" python3 - <<'PYEOF'
+import os,re,json
+lms_id=os.environ['LMS_ID']; label=os.environ['LABEL']
+oc=os.environ['OC']; qw=os.environ['QW']
+# OpenCode: insert at TOP of the omniroute provider's models map (jsonc-safe textual insert)
+try:
+    s=open(oc).read()
+    if lms_id not in s:
+        m=re.search(r'("omniroute"\s*:\s*\{.*?"models"\s*:\s*\{)', s, re.S)
+        if m:
+            e='\n        "%s": {\n          "name": "%s",\n          "limit": { "context": 131072, "output": 32768 }\n        },' % (lms_id, label)
+            open(oc,'w').write(s[:m.end()]+e+s[m.end():])
+            print(f'opencode: {lms_id} at top of picker')
+    else: print('opencode: already present')
+except Exception as ex: print('opencode edit failed:', ex)
+# qwen: set as the default model (current schema: model.name + model.baseUrl)
+try:
+    d=json.load(open(qw))
+    mdl=d.get('model')
+    if not (isinstance(mdl,dict) and mdl.get('name')==lms_id):
+        d['model']={'name':lms_id,'baseUrl':'http://localhost:20128/v1'}
+        json.dump(d,open(qw,'w'),indent=2)
+        print(f'qwen: default model -> {lms_id}')
+    else: print('qwen: already default')
+except Exception as ex: print('qwen edit failed:', ex)
+PYEOF
+}
+
+case "${1:-check}" in
+  status)
+    if host_up; then echo "host $HOST: UP"; echo "loaded:"; loaded_models | sed 's/^/  /'; else echo "host $HOST: DOWN (asleep/unreachable) — ambrosio is inert"; fi
+    echo "seen: $(wc -l <"$SEEN" | tr -d ' ')"
+    echo "want-list ($WANTLIST):"
+    grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null | sed 's/^/  /' || echo "  (empty)"
+    echo "trending-frontier candidates right now:"; hot_candidates | sed 's/^/  /' | head -10 ;;
+  check)
+    dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
+    if ! host_up; then log "host $HOST down — inert (gated)"; exit 0; fi
+    have="$(loaded_models)"; pulled=""; n=0
+    # want-list first (explicit asks outrank whatever HF happens to be trending this run), then
+    # the reactive trending scan — same loop body handles both, same SEEN/MAX_PER_RUN treatment.
+    # Each line is tagged with its source (WANT or SCAN) so the redundancy check below can tell
+    # an explicit ask (always honored, redundant or not — Jonathan asked for it on purpose) from
+    # a reactive trending hit (skipped if it's not actually adding anything new).
+    while IFS=$'\t' read -r src term; do
+      [ -z "$term" ] && continue
+      [ "$n" -ge "$MAX_PER_RUN" ] && { log "hit MAX_PER_RUN=$MAX_PER_RUN; remaining candidates wait for next run"; break; }
+      grep -qxF "$term" "$SEEN" && continue
+      printf '%s\n' "$have" | grep -qiF "$term" && { echo "$term" >>"$SEEN"; continue; }   # already on the host
+      # redundancy check (found live, 2026-08-14 — Nemotron-3-Nano passed every other filter and
+      # was dead weight: same architecture family, same size class, as the already-loaded and
+      # already-active Nemotron-3.5-Lightning). Leading alphabetic prefix of the family term
+      # (e.g. "nemotron" from "Nemotron-3-Nano") checked against what's already on the host — a
+      # blunt heuristic, not a real capability comparison, but it catches the exact failure mode
+      # that happened: same family, different version number, nothing new. Only gates the
+      # reactive scan; a want-list entry is an explicit ask and always goes through.
+      if [ "$src" = "SCAN" ]; then
+        # leading letters only, stopping at the first digit — a strip-these-characters approach
+        # (tried first, found live, 2026-08-14) leaves stray letters behind when a unit suffix
+        # sits right after a digit ("qwen3.6-35b" stripped digits/dots/dashes still left "b" from
+        # "35b" stuck onto "qwen", becoming "qwenb" — silently never matched "qwen" at all).
+        prefix="$(printf '%s' "$term" | tr '[:upper:]' '[:lower:]' | python3 -c "import sys,itertools; print(''.join(itertools.takewhile(str.isalpha, sys.stdin.read())))")"
+        if [ -n "$prefix" ] && printf '%s\n' "$have" | tr '[:upper:]' '[:lower:]' | grep -qF "$prefix"; then
+          log "skip '$term' — same family ('$prefix') already on $HOST; not obviously new, not pulling (add it to wantlist.txt to force it anyway)"
+          echo "$term" >>"$SEEN"
+          continue
+        fi
+      fi
+      url="$(resolve_mlx_url "$term")"
+      [ -z "$url" ] && { log "no MLX repo found yet for '$term' — will retry next run (quant may not exist yet)"; continue; }
+      if [ "$dry" -eq 1 ]; then log "[dry-run] would: ssh $SSH_TARGET '$LMS_BIN get \"$url\" --yes'"; echo "$term" >>"$SEEN"; pulled="$pulled $term"; n=$((n+1)); continue; fi
+      # errors go to the log, not /dev/null — silent failure is how this stuff rots.
+      # big pulls can time out mid-download (seen live: 67% then "Timed-out. Please try to
+      # resume."); lms resumes in place, so retry once immediately before deferring to next run.
+      ok=0
+      for attempt in 1 2; do
+        # -n is load-bearing: this runs inside `while read term`, and ssh without it drains
+        # the remaining candidate lines from the loop's stdin (second hot model of the day
+        # would silently never pull)
+        if "$SSH" -n -o ConnectTimeout=10 -o BatchMode=yes "$SSH_TARGET" "$LMS_BIN get \"$url\" --yes" 2>&1 | tail -c 4000 >>"$AMBROSIO_HOME/pull.log"; then ok=1; break; fi
+        log "pull attempt $attempt failed for '$term' — resuming"
+      done
+      if [ "$ok" -eq 1 ]; then
+        echo "$term" >>"$SEEN"; pulled="$pulled $term"; n=$((n+1)); log "pulled $term ($url) on $HOST"
+      else log "pull FAILED for '$term' ($url) after resume retry — see $AMBROSIO_HOME/pull.log; will resume next run"; fi
+    done < <(grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null | sed 's/^/WANT\t/'; hot_candidates | sed 's/^/SCAN\t/')
+    pulled="$(echo "$pulled" | xargs 2>/dev/null || true)"
+    [ -z "$pulled" ] && { log "no new hot models"; exit 0; }
+    command -v "$OMNIROUTE" >/dev/null && "$OMNIROUTE" models "$OMNIROUTE_NODE" >/dev/null 2>&1 || true
+    # surface each delivered model in OpenCode + qwen (find its lms id from the host)
+    for t in $pulled; do
+      lid="$(loaded_models | grep -i "$(echo "$t" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9.]/-/g')" | head -1)"
+      [ -z "$lid" ] && lid="$(loaded_models | grep -i "$(echo "$t" | cut -d- -f1-3 | tr 'A-Z' 'a-z')" | head -1)"
+      [ -n "$lid" ] && expose_model "lms/$lid" "🔥 $t (fresh via ambrosio)" >&2
+    done
+    msg="Ambrosio served: hot model(s) pulled onto $HOST LM Studio, live in OmniRoute — come play: $pulled"
+    if [ "$dry" -eq 1 ]; then log "[dry-run] would notify: $msg"
+    elif [ -x "$BOTLINE" ]; then
+      if "$BOTLINE" send --from ambrosio "$msg" >/dev/null 2>>"$AMBROSIO_HOME/pull.log"; then log "notified JS: $pulled"
+      else log "notify FAILED (botline send) — models pulled but JS was NOT told: $pulled"; fi
+    fi ;;
+  *) echo "usage: ambrosio check [--dry-run] | status"; exit 1 ;;
+esac

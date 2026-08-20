@@ -1,0 +1,2 @@
+# handlebars TCC probes — 6 of 8 use pure macOS tools; these two need ffmpeg:
+brew "ffmpeg"  # mic + camera probes (avfoundation capture)

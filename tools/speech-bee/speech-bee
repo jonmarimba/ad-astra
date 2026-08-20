@@ -47,9 +47,11 @@ case "${1:-}" in
     [ "${2:-}" = "--out" ] && out="${3:-}"
     case "$TTS_ENGINE" in say) tts_say "$text" "$out" ;; apple) die "use say (already AVSpeechSynthesizer)";; *) die "unknown TTS engine";; esac ;;
   bootstrap)
-    m="${2:-base.en}"; mkdir -p "$(dirname "$MODEL")"
+    # honors SPEECH_BEE_MODEL's directory, and downloads via tmp+rename so an interrupted
+    # fetch can't leave a truncated model that passes the -f existence gate
+    m="${2:-base.en}"; dest="$(dirname "$MODEL")/ggml-${m}.bin"; mkdir -p "$(dirname "$MODEL")"
     url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${m}.bin"
-    echo "fetching ggml-${m}.bin → $HOME/.cache/whisper/"
-    curl -L --fail -o "$HOME/.cache/whisper/ggml-${m}.bin" "$url" && echo "done: $HOME/.cache/whisper/ggml-${m}.bin" ;;
+    echo "fetching ggml-${m}.bin → $dest"
+    curl -L --fail -o "$dest.part" "$url" && mv "$dest.part" "$dest" && echo "done: $dest" || { rm -f "$dest.part"; die "bootstrap download failed"; } ;;
   *) echo "usage: speech-bee stt <audio> | tts <text>|- [--out f] | bootstrap [model]"; exit 1 ;;
 esac

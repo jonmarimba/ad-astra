@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""
+botmsg — let any bot on this Mac text a human, and read the replies meant for it.
+
+THE ASK (Jonathan, "iMessage with robots" note)
+-----------------------------------------------
+"I need you to make your messaging thing generic enough that any robot can
+message me with minimal setup on my part and I can message them back by
+replying." And: "put the tool you make into @astra complete with install
+scripts and dependency management via Brewfile."
+
+WHAT WAS ALREADY SOLVED, AND WHAT WAS NOT
+-----------------------------------------
+Outbound was never the problem. `imsg` is a standalone Homebrew package
+(openclaw/imsg, MIT) and any process can already shell out to `imsg send` with
+no dependency on any particular agent harness.
+
+The gap is INBOUND, and specifically ROUTING. Several bots text the same
+number, every one of them appears in chat.db as the same conversation, and a
+human's reply carries no indication of which bot it answers. GhOST-Claude has
+twice answered a question aimed at GhOST-OpenClaw for exactly this reason. A
+tool that only sends does not solve the thing that is actually broken.
+
+HOW A REPLY GETS ROUTED
+-----------------------
+ONE strong signal and two guesses. An earlier version of this file claimed the
+first of the guesses was exact; it is not, and the correction is recorded here
+because believing it is worse than not having it.
+
+  1. EXPLICIT TAG (strong). A message beginning "[bot-id]" is addressed to that
+     bot. It is the only signal the human produces deliberately, so it is the
+     only one that means what it says.
+
+  2. REPLY CONTEXT (guess). chat.db records `reply_to_text` for inbound
+     messages, and it looks like proof of a reply gesture. On a Google Voice
+     SMS relay it is not: Messages auto-associates each inbound with whatever
+     preceded it, including the human's own messages. Measured on the real
+     thread — ten of ten inbound carried it, eight pointing at the preceding
+     outbound and two at his own earlier texts. Threading, not intent.
+
+     It is still consulted FIRST among the guesses, for a reason that survives
+     the correction: auto-threading cannot point at some other bot's OLDER
+     message, so when it disagrees with recency the divergence is real
+     evidence. When it names any bot at all, recency gets no vote.
+
+  3. MOST RECENT SENDER (guess). Otherwise the message belongs to whoever spoke
+     last BEFORE it — evaluated per message, not once over the transcript. A
+     bot that merely spoke afterwards must never claim an answer to someone
+     else's earlier question.
+
+Both guesses say so in their output, so a caller can decline to act.
+
+THE GATE MATTERS MORE THAN THE ROUTING
+--------------------------------------
+Sending and `inbox` are only half of it, and for a while they were the useless
+half. Every bot here receives inbound through its own harness plugin,
+unconditionally, so tagging changed what messages looked like and nothing about
+who answered. One message, two replies. `botmsg claims` is the check a bot runs
+BEFORE it speaks; without it the rest is decoration.
+
+Anything a bot cannot claim under those rules is left for another bot to
+collect. A message is never silently consumed by the wrong reader.
+
+PORTABILITY
+-----------
+No identity in code. The destination and the bot id come from config or the
+environment, so a different human, number or bot needs no edit here. Resolution
+order for the destination: --to, $BOTMSG_TO, ./.astra/botmsg.json,
+~/.config/botmsg.json.
+
+    botmsg send    --as kicker-xo --text "build finished"
+    botmsg inbox   --as kicker-xo [--json]
+    botmsg watch   --as kicker-xo --exec ./handle.sh
+    botmsg whoami  --as kicker-xo
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+IMSG = os.environ.get("BOTMSG_IMSG_BIN", "imsg")   # injectable seam: tests must never text a real phone
+STATE_DIR = Path(os.environ.get(
+    "BOTMSG_STATE", Path.home() / ".botmsg")).expanduser()
+
+
+def die(msg, code=1):
+    print(f"botmsg: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def load_config():
+    """Destination and defaults, from the first place that has them."""
+    for p in (Path.cwd() / ".astra" / "botmsg.json",
+              Path.home() / ".config" / "botmsg.json"):
+        try:
+            return json.loads(p.read_text())
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            # A malformed config must not silently fall through to a default
+            # destination — that is how a message goes to the wrong person.
+            die(f"{p} is unreadable ({e}); refusing to guess a destination", 65)
+    return {}
+
+
+def resolve_to(args, cfg):
+    to = args.to or os.environ.get("BOTMSG_TO") or cfg.get("to")
+    if not to:
+        die("no destination. Pass --to, set BOTMSG_TO, or write "
+            '{"to": "+15555550100"} to .astra/botmsg.json', 64)
+    return to
+
+
+def imsg_json(cmd):
+    """Run an imsg subcommand that emits JSON lines. Errors are LOUD.
+
+    A read failure that returns an empty list is indistinguishable from a quiet
+    inbox, and a messaging tool that reports 'no replies' when it actually
+    could not look is worse than one that crashes."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        die(f"could not run {cmd[0]}: {e}", 69)
+    if r.returncode != 0:
+        die(f"{' '.join(cmd[:3])} failed: {(r.stderr or r.stdout).strip()}", 69)
+    out = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            die(f"unparseable line from {cmd[0]}: {line[:120]}", 69)
+    return out
+
+
+def chat_id_for(to):
+    for c in imsg_json([IMSG, "chats", "--limit", "200", "--json"]):
+        if c.get("identifier") == to and not c.get("is_group"):
+            return c["id"]
+    die(f"no one-to-one conversation found with {to}. Send them a message "
+        f"first, or check the number.", 66)
+
+
+def tag(bot):
+    return f"[{bot}]"
+
+
+def state_path(bot):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in bot)
+    return STATE_DIR / f"{safe}.json"
+
+
+def read_state(bot):
+    try:
+        return json.loads(state_path(bot).read_text())
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        die(f"state for {bot} is unreadable ({e}). Refusing to continue: "
+            f"reading it as empty would replay every old message as new.", 65)
+
+
+def write_state(bot, data):
+    p = state_path(bot)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, p)
+
+
+def cmd_send(args, cfg):
+    to = resolve_to(args, cfg)
+    text = args.text
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read()
+    if not text or not text.strip():
+        die("nothing to send", 64)
+    body = f"{tag(args.as_bot)} {text.strip()}"
+    r = subprocess.run([IMSG, "send", "--to", to, "--text", body],
+                       capture_output=True, text=True, timeout=90)
+    if r.returncode != 0:
+        die(f"send failed: {(r.stderr or r.stdout).strip()}", 69)
+    st = read_state(args.as_bot)
+    st["last_sent_text"] = body
+    st["last_sent_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    write_state(args.as_bot, st)
+    print(f"sent as {args.as_bot}")
+    return 0
+
+
+def claim(msg, bot, last_sender):
+    """Does this inbound message belong to `bot`? Returns (yes, how).
+
+    WHAT reply_to_text IS NOT. The first version of this treated reply_to_text
+    as proof: if the human used iMessage's reply gesture, chat.db records the
+    text being answered, so a tag riding back inside it would route exactly.
+    Measured against Jonathan's actual thread, that is false, and he said so
+    before the measurement finished — "Google voice doesn't work that way dude.
+    You're going to have to make some assumptions."
+
+    His number is a Google Voice SMS relay. Messages auto-associates each
+    inbound SMS with whatever message preceded it, INCLUDING HIS OWN. Of ten
+    real inbound messages, all ten carried reply_to_text; eight pointed at the
+    immediately preceding outbound and two pointed at his own earlier texts.
+    That is threading, not intent. It therefore carries no more information
+    than "who spoke last", and calling it exact routing was a confidence lie —
+    the worst kind of bug in a router, because it reads as certainty.
+
+    So there is exactly ONE strong signal, and it is the one the human controls
+    deliberately: an explicit leading tag. Everything else is a guess, and every
+    guess says so in its label."""
+    t = tag(bot)
+    body = (msg.get("text") or "").strip()
+
+    # STRONG: he addressed a bot by name. Deliberate, unambiguous.
+    if body.startswith(t):
+        return True, "explicit-tag"
+    named = body.startswith("[") and "]" in body
+    if named:
+        return False, ""          # addressed to someone else; never ours
+
+    # WEAK signals. Both are guesses, but they are not equal, and the ordering
+    # matters more than it looks.
+    #
+    # reply_to_text usually just echoes the preceding message, in which case it
+    # AGREES with recency and adds nothing. Its value is precisely when it
+    # DISAGREES: auto-threading cannot produce a pointer at some other bot's
+    # older message, so a divergence is evidence of a deliberate reply. That is
+    # why reply-context is consulted first and why, when it names any bot at
+    # all, recency does not get a vote — otherwise the bot that merely spoke
+    # last claims an answer aimed at someone else's earlier question.
+    rt = msg.get("reply_to_text") or ""
+    rt_names_a_bot = "[" in rt and "]" in rt
+    if rt_names_a_bot:
+        return (True, "reply-context (guess — SMS auto-threads)") if t in rt else (False, "")
+    if last_sender == bot:
+        return True, "most-recent-sender (guess)"
+    return False, ""
+
+
+def cmd_inbox(args, cfg):
+    to = resolve_to(args, cfg)
+    cid = chat_id_for(to)
+    msgs = imsg_json([IMSG, "history", "--chat-id", str(cid),
+                      "--limit", str(args.limit), "--json"])
+    # imsg returns newest-first; walk oldest-first so watermarks advance sanely.
+    msgs = list(reversed(msgs))
+
+    st = read_state(args.as_bot)
+    seen = st.get("last_seen_id", 0)
+
+    # FAIL CLOSED ON A GAP. The window is the last --limit messages. If our
+    # watermark is older than the oldest message we can see, everything between
+    # them is invisible and would be skipped in silence — a reply asking for
+    # something, dropped, with the tool reporting an empty inbox. Say so and
+    # stop. OpenClaw raised this in review before installing.
+    ids = [m.get("id") or 0 for m in msgs]
+    if seen and ids and min(ids) > seen + 1:
+        die(f"gap: watermark is {seen} but the oldest visible message is "
+            f"{min(ids)}. Messages in between cannot be seen at --limit "
+            f"{args.limit}. Re-run with a larger --limit, or accept the loss "
+            f"explicitly by clearing {state_path(args.as_bot)}.", 75)
+
+    # LAST SENDER IS TEMPORAL. It must be whoever spoke most recently BEFORE the
+    # message being judged, not whoever spoke last overall.
+    #
+    # OpenClaw's counterexample, which reproduced exactly: [ghost-openclaw] asks
+    # at id 10, Jonathan answers bare "yes" at id 11, [ghost-claude] sends
+    # something unrelated at id 12. Computing last_sender once over the whole
+    # transcript makes it ghost-claude, so ghost-claude claims the "yes" — a
+    # reply that could only have meant OpenClaw. Stealing a reply is precisely
+    # the failure this tool was built to stop, so the bug was in the load-bearing
+    # part.
+    mine, high = [], seen
+    last_sender = None
+    for m in msgs:
+        mid = m.get("id") or 0
+        if m.get("is_from_me"):
+            body = (m.get("text") or "").strip()
+            if body.startswith("[") and "]" in body:
+                last_sender = body[1:body.index("]")]
+            high = max(high, mid)
+            continue
+        if mid <= seen:
+            high = max(high, mid)
+            continue
+        ok, how = claim(m, args.as_bot, last_sender)
+        if ok:
+            mine.append({"id": mid, "text": m.get("text"), "routed_by": how,
+                         "replied_to": m.get("reply_to_text")})
+            high = max(high, mid)
+        # NOT ours: leave the watermark where it is, so another bot can still
+        # collect it.
+        #
+        # This is the SECOND of two independent protections, and both were
+        # measured rather than assumed. The other is that each bot has its own
+        # state file. Mutating away either one alone leaves the suite green;
+        # mutating away BOTH loses a reply silently, which is how the pair was
+        # confirmed to be genuinely redundant rather than one of them being
+        # decoration. Keep both. If per-bot state ever becomes shared state,
+        # this line stops being redundant and becomes the only thing standing
+        # between one bot's read and another bot's mail.
+
+    if not args.peek:
+        st["last_seen_id"] = high
+        write_state(args.as_bot, st)
+
+    if args.json:
+        print(json.dumps(mine, indent=2))
+    else:
+        for m in mine:
+            print(f"[{m['routed_by']}] {m['text']}")
+    return 0
+
+
+def cmd_claims(args, cfg):
+    """Should THIS bot answer the message it was just handed?
+
+    THE HOLE THIS FILLS. botmsg governed sending, and governed reading for
+    anything that read through `inbox`. Nothing did. Both GhOST-Claude and
+    GhOST-OpenClaw receive every inbound message from their own harness plugin,
+    unconditionally, before botmsg has any say — so the tags changed what
+    messages looked like and nothing about who answered. Jonathan demonstrated
+    it immediately: he sent one message, both bots got it, and OpenClaw replied
+    to a message the routing had assigned to Claude. "Except openclaw
+    responded."
+
+    A routing tool that only the sender consults is decoration. This is the
+    check that belongs at the READ side, before a bot opens its mouth:
+
+        botmsg claims --as ghost-claude --text "$INBOUND"   # exit 0 = answer it
+
+    Exit 0 means it is yours. Exit 3 means it is addressed to another bot and
+    you should stay quiet. Exit 4 means nobody is named and you were not the
+    last to speak, so answering would be a guess at someone else's expense.
+
+    Deliberately NOT consulting the watermark: this asks a question about one
+    message and must not mutate state, or a bot that checks twice gets two
+    different answers.
+    """
+    text = args.text
+    if text is None and not sys.stdin.isatty():
+        text = sys.stdin.read()
+    if not text or not text.strip():
+        die("nothing to judge; pass --text or pipe the message on stdin", 64)
+    body = text.strip()
+
+    if body.startswith(tag(args.as_bot)):
+        print("yours: explicit-tag")
+        return 0
+    if body.startswith("[") and "]" in body:
+        print(f"NOT yours: addressed to {body[1:body.index(']')]}")
+        return 3
+
+    # Nobody named. Who spoke last on the thread before now?
+    to = resolve_to(args, cfg)
+    cid = chat_id_for(to)
+    msgs = list(reversed(imsg_json([IMSG, "history", "--chat-id", str(cid),
+                                    "--limit", str(args.limit), "--json"])))
+    last_sender = None
+    for m in msgs:
+        if m.get("is_from_me"):
+            b = (m.get("text") or "").strip()
+            if b.startswith("[") and "]" in b:
+                last_sender = b[1:b.index("]")]
+    if last_sender == args.as_bot:
+        print("yours: most-recent-sender (guess)")
+        return 0
+    print(f"NOT yours: last speaker was {last_sender or 'nobody tagged'}")
+    return 4
+
+
+def cmd_whoami(args, cfg):
+    to = resolve_to(args, cfg)
+    st = read_state(args.as_bot)
+    print(f"bot        : {args.as_bot}")
+    print(f"tag        : {tag(args.as_bot)}")
+    print(f"destination: {to}")
+    print(f"state      : {state_path(args.as_bot)}")
+    print(f"last seen  : {st.get('last_seen_id', 'never')}")
+    return 0
+
+
+def cmd_watch(args, cfg):
+    """Poll for replies and hand each to a command on stdin."""
+    while True:
+        args.json, args.peek = True, False
+        import io
+        buf = io.StringIO()
+        real = sys.stdout
+        sys.stdout = buf
+        try:
+            cmd_inbox(args, cfg)
+        finally:
+            sys.stdout = real
+        for m in json.loads(buf.getvalue() or "[]"):
+            if args.exec:
+                subprocess.run([args.exec], input=json.dumps(m), text=True)
+            else:
+                print(json.dumps(m))
+        time.sleep(args.interval)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="botmsg", description=__doc__.split("\n")[1])
+    ap.add_argument("--to", help="destination handle; overrides config and BOTMSG_TO")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def common(p):
+        p.add_argument("--as", dest="as_bot", required=True,
+                       help="this bot's id, e.g. kicker-xo")
+
+    s = sub.add_parser("send"); common(s)
+    s.add_argument("--text", help="message body; reads stdin when omitted")
+
+    i = sub.add_parser("inbox"); common(i)
+    i.add_argument("--json", action="store_true")
+    i.add_argument("--limit", type=int, default=200,
+                   help="transcript depth to consider (default 200 — enough to "
+                        "find the last sender across several bots' turns)")
+    i.add_argument("--peek", action="store_true",
+                   help="do not advance the watermark")
+
+    w = sub.add_parser("watch"); common(w)
+    w.add_argument("--exec", help="command to receive each reply as JSON on stdin")
+    w.add_argument("--interval", type=int, default=20)
+    w.add_argument("--limit", type=int, default=200)
+
+    c = sub.add_parser("claims"); common(c)
+    c.add_argument("--text", help="the inbound message; reads stdin when omitted")
+    c.add_argument("--limit", type=int, default=200)
+
+    o = sub.add_parser("whoami"); common(o)
+
+    args = ap.parse_args()
+    cfg = load_config()
+    return {"send": cmd_send, "inbox": cmd_inbox, "claims": cmd_claims,
+            "watch": cmd_watch, "whoami": cmd_whoami}[args.cmd](args, cfg)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

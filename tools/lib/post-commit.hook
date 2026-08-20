@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# astra post-commit — inventory only. Astra does NOT write into other repos.
+#
+# This hook used to push: it walked the workspace, decided which files were
+# copies of astra tools by matching FILENAMES, and overwrote them. Two things
+# were wrong with that, and Jonathan named both on 2026-08-18.
+#
+# Ownership was inferred rather than recorded, so any repo's own rules.json or
+# lib.sh could be adopted and overwritten. And the blast radius sat in the wrong
+# place: a bug here could destroy work in a legal repo, which it did — the fork
+# guard was unreachable and an edited copy was silently replaced.
+#
+# Distribution is now PULL. Each repo carries .astra/manifest.json recording
+# where its tools came from, plus .astra/astra-update and its own post-commit
+# hook that fetches newer versions. A repo asks; nothing reaches in.
+#
+# All this does now is refresh the local inventory so `registry.py status` can
+# answer "where is this tool installed" without touching a single file.
+REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+CHANGED="$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | grep -E '^tools/' || true)"
+[ -z "$CHANGED" ] && exit 0
+{
+  echo "── $(date '+%Y-%m-%d %H:%M:%S')  commit $(git rev-parse --short HEAD)  (inventory only)"
+  python3 "$REPO/tools/lib/registry.py" scan 2>&1 | sed 's/^/   /'
+} >> "$REPO/tools/lib/sync.log" 2>&1 &
+exit 0

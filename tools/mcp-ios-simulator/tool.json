@@ -1,0 +1,12 @@
+{
+  "name": "mcp-ios-simulator",
+  "server": "ios-simulator",
+  "description": "Drive the iOS Simulator.",
+  "dependencies": [
+    "node_npx",
+    "claude",
+    "npm:ios-simulator-mcp"
+  ],
+  "provides": "mcp-server",
+  "backed_by": "tools/mcp-bundle"
+}

@@ -1,0 +1,428 @@
+#!/usr/bin/env python3
+"""
+registry.py — where every astra tool is installed, and whether those copies are current.
+
+THE PROBLEM
+-----------
+Astra's model is copy-on-install: a tool is copied into a target repo, and
+re-running the installer is the update path. Nothing ever ran the installer
+again. On 2026-08-18 `generate_pdf_sidecars.sh` existed in five places at four
+different vintages — canonical from 08-10, js-utils from 08-07, grandparentLegal
+from 07-08, js-speedway from 07-03. Nobody had forked it; every copy was simply
+an old snapshot. The legal repos were generating PDF text sidecars with a
+month-old converter and no one could have known.
+
+Jonathan: "I had you make these things so they could be used everywhere."
+
+WHAT THIS IS
+------------
+A registry of tool -> installed locations, and a `status` that compares each
+installed copy's hash against canonical. Feeds an astra post-commit hook that
+pushes updates to stale copies automatically, so "installed once in June" stops
+being a silent state.
+
+THREE THINGS IT MUST GET RIGHT, each bought by a real bug today
+---------------------------------------------------------------
+1. FOLLOW SYMLINKS. js-speedway is a symlink into Dropbox, and `find` does not
+   descend symlinked directories by default. An earlier scan silently omitted an
+   entire repo — the exact class of miss this registry exists to end.
+
+2. NEVER TOUCH A GLOBAL PATH. Every target must resolve inside the workspace
+   root. A path under ~/.claude, ~/.agents, ~/.config or ~/Library is refused.
+   Those global installs were removed today; nothing here may recreate one.
+
+3. NEVER CLOBBER LOCAL EDITS. If an installed copy differs from BOTH the current
+   canonical and the version it was installed from, someone changed it in place.
+   That is a fork, not a stale copy, and updating it would destroy work. Report
+   it and skip.
+"""
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ASTRA = Path(__file__).resolve().parent.parent.parent      # js-db-ad-astra
+WORKSPACE = Path(os.environ.get("ASTRA_WORKSPACE", Path.home() / "svnCheckouts")).resolve()
+REGISTRY = ASTRA / "tools" / "lib" / "installed.json"
+
+FORBIDDEN_PREFIXES = [
+    Path.home() / ".claude",
+    Path.home() / ".agents",
+    Path.home() / ".config",
+    Path.home() / "Library",
+]
+
+
+def sha(p):
+    try:
+        return hashlib.sha256(Path(p).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def is_safe_target(p):
+    """A target must live inside the workspace and never in a global config dir.
+
+    TWO DIFFERENT PATHS ARE TESTED, deliberately:
+
+      forbidden-global  -> the RESOLVED path, so a symlink pointing at
+                           ~/.claude cannot smuggle a global install past us.
+      workspace member  -> the path AS GIVEN, because several repos are
+                           themselves symlinks out of the workspace. js-speedway
+                           and js-hoa both live in Dropbox and are linked into
+                           ~/svnCheckouts. Resolving before that test declared
+                           fourteen perfectly legitimate installs "outside the
+                           workspace" — the symlink lesson biting for the third
+                           time today, in a third place.
+    """
+    given = Path(p)
+    try:
+        rp = given.resolve()
+    except OSError:
+        rp = given
+
+    for bad in FORBIDDEN_PREFIXES:
+        for candidate in (rp, given):
+            try:
+                candidate.relative_to(bad.resolve())
+                return False, f"global location ({bad})"
+            except (ValueError, OSError):
+                pass
+
+    # Membership uses the given path so symlinked repos count as inside.
+    try:
+        given.relative_to(WORKSPACE)
+        return True, ""
+    except ValueError:
+        pass
+    try:
+        rp.relative_to(WORKSPACE)
+        return True, ""
+    except ValueError:
+        return False, f"outside workspace {WORKSPACE}"
+
+
+def load():
+    try:
+        return json.loads(REGISTRY.read_text())
+    except FileNotFoundError:
+        return {"tools": {}}
+    except Exception as e:
+        print(f"registry unreadable ({e}) — refusing to continue rather than "
+              f"overwrite it", file=sys.stderr)
+        raise
+
+
+def save(reg):
+    REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+    tmp = REGISTRY.with_suffix(".tmp")
+    tmp.write_text(json.dumps(reg, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, REGISTRY)
+
+
+def discover(names):
+    """Find installed copies of the given canonical files across the workspace.
+
+    ONE filesystem walk, not one per file. The first version ran a separate
+    `find` for every canonical file — forty full-workspace traversals for a job
+    that runs on every astra commit, which took minutes. Walk once, bucket by
+    basename, match afterwards.
+
+    Uses `find -L` to FOLLOW SYMLINKS: js-speedway is a symlink into Dropbox and
+    a plain find silently skips it, which is how an entire repo vanished from an
+    earlier scan."""
+    wanted = {Path(c).name: c for c in names}
+    buckets = {c: [] for c in names}
+    try:
+        r = subprocess.run(
+            ["find", "-L", str(WORKSPACE), "-type", "f",
+             # Track every extension a tool can ship in. An earlier version
+             # watched only .sh and .py, so check-prose.js and its rules.json —
+             # the very files whose hand-copied drift prompted this registry —
+             # would have gone untracked and drifted again in a new extension.
+             "(", "-name", "*.sh", "-o", "-name", "*.py",
+             "-o", "-name", "*.js", "-o", "-name", "rules.json", ")",
+             "-not", "-path", "*/.git/*",
+             "-not", "-path", "*/node_modules/*",
+             "-not", "-path", "*/tmp/*",
+             "-not", "-path", "*/Pods/*",
+             "-not", "-path", "*/.venv/*",
+             "-not", "-path", f"{ASTRA}/*"],
+            capture_output=True, text=True, timeout=300)
+        hits = r.stdout.splitlines()
+    except Exception as e:
+        print(f"  discover failed: {e}", file=sys.stderr)
+        return buckets
+
+    seen = set()
+    for h in hits:
+        h = h.strip()
+        if not h:
+            continue
+        base = os.path.basename(h)
+        canon = wanted.get(base)
+        if not canon:
+            continue
+        # -L can surface one real file through several symlinked paths.
+        try:
+            rp = str(Path(h).resolve())
+        except OSError:
+            continue
+        key = (canon, rp)
+        if key in seen:
+            continue
+        seen.add(key)
+        buckets[canon].append(h)
+    return buckets
+
+
+def cmd_scan(args):
+    """Refresh the ledger, and REPORT unregistered look-alikes without adopting them.
+
+    OWNERSHIP IS RECORDED, NOT INFERRED. This is the correction Jonathan made on
+    2026-08-18, and it dissolves a whole class of bug rather than guarding
+    against it.
+
+    The first version decided what belonged to astra by matching FILENAMES
+    across the workspace. That is a guess, and it is the guess that made
+    everything downstream dangerous: any repo with its own rules.json or lib.sh
+    was silently adopted as an astra install, and the post-commit hook then
+    overwrote it with astra's version. Two astra tools already share a basename
+    with each other, so it could confuse even its own files. Guarding a bad
+    inference with ever-cleverer fork detection was the wrong shape of fix.
+
+    Now the ledger is authoritative. sync() only ever writes to paths the ledger
+    already holds, and the ledger only grows when something is deliberately
+    adopted. A same-named file that is NOT in the ledger is reported as a
+    candidate and left completely alone.
+
+    The 36 installs present when this changed were verified current against
+    canonical and seeded once with `scan --adopt`. Every later addition should
+    come from a tool's own install.sh recording where it wrote.
+    """
+    adopt = "--adopt" in args
+    reg = load()
+    canon_files = []
+    for d in (ASTRA / "tools").iterdir() if (ASTRA / "tools").is_dir() else []:
+        if not d.is_dir():
+            continue
+        for f in d.iterdir():
+            if f.is_file() and (f.suffix in (".sh", ".py", ".js")
+                                or f.name == "rules.json") and f.name not in (
+                    "install.sh", "uninstall.sh", "setup.sh"):
+                canon_files.append(str(f))
+
+    found = discover(canon_files)
+
+    # PROVENANCE IS NOT OBSERVATION. A previous version recorded each install's
+    # CURRENT hash on every scan, and then asked sync to detect local edits by
+    # comparing against that same field. Scanning therefore erased the evidence
+    # the guard needed, and since the post-commit hook runs scan immediately
+    # before sync, the guard was unreachable in exactly the situation it
+    # existed for. Reproduced 2026-08-18: edit an installed copy, fire the
+    # hook, the edit is gone and the run reports "1 updated, 0 skipped".
+    #
+    # So scan now PRESERVES two fields it did not author and must never
+    # rewrite:
+    #   synced_sha    — the canonical content SYNC last wrote here. Only sync
+    #                   sets it. Proof of what we put there.
+    #   first_seen_sha— what the file looked like when the registry first saw
+    #                   it, for copies we adopted rather than installed. That
+    #                   is the pdf-sidecars case: month-old copies nobody had
+    #                   forked, which the registry exists to bring current.
+    prior = {}
+    for tname, t in (reg.get("tools") or {}).items():
+        for i in t.get("installs", []):
+            prior[(tname, i.get("path"))] = i
+
+    known = {p for (_, p) in prior}
+    tools = {}
+    candidates = []
+    for canon, hits in found.items():
+        tname = Path(canon).name
+        entry = {"canonical": str(Path(canon).relative_to(ASTRA)),
+                 "canonical_sha": sha(canon), "installs": []}
+        for h in hits:
+            # THE GATE. An unregistered look-alike is somebody else's file until
+            # a human says otherwise. Reporting it is useful; adopting it on
+            # sight is how the collision bug destroyed data.
+            if str(h) not in known and not adopt:
+                candidates.append((tname, str(h)))
+                continue
+            ok, why = is_safe_target(h)
+            was = prior.get((tname, str(h)), {})
+            live = sha(h)
+            rec = {
+                "path": str(h),
+                "sha": live,
+                "safe": ok,
+                "unsafe_reason": why or None,
+            }
+            if was.get("synced_sha"):
+                rec["synced_sha"] = was["synced_sha"]
+            # Only stamped the FIRST time this path is ever seen.
+            rec["first_seen_sha"] = was.get("first_seen_sha", live)
+            entry["installs"].append(rec)
+        if entry["installs"]:
+            tools[tname] = entry
+
+    # A ledger entry whose file is gone stays in the ledger and is reported by
+    # status as GONE. Dropping it here would make an uninstalled tool look like
+    # a tool that was never installed.
+    for tname, t in (reg.get("tools") or {}).items():
+        if tname in tools:
+            continue
+        surviving = [i for i in t.get("installs", []) if Path(i["path"]).exists()]
+        if surviving:
+            t["installs"] = surviving
+            tools[tname] = t
+
+    reg["tools"] = tools
+    save(reg)
+    n = sum(len(t["installs"]) for t in tools.values())
+    print(f"registry: {len(tools)} tool(s), {n} recorded cop(y|ies) -> {REGISTRY}")
+    if candidates:
+        print(f"\n{len(candidates)} same-named file(s) NOT in the ledger — "
+              f"left untouched. These may be other projects' own files:")
+        for tname, p in sorted(candidates):
+            print(f"     {tname:28} {p.replace(str(Path.home()) + '/', '~/')}")
+        print("  Adopt deliberately with `registry.py scan --adopt` if they really are ours.")
+    return 0
+
+
+def cmd_status(_):
+    reg = load()
+    stale = current = unsafe = 0
+    for name, t in sorted(reg.get("tools", {}).items()):
+        csha = sha(ASTRA / t["canonical"])
+        lines = []
+        for i in t["installs"]:
+            live = sha(i["path"])
+            if live is None:
+                lines.append(("GONE   ", i["path"])); continue
+            if not i.get("safe", True):
+                lines.append(("UNSAFE ", f"{i['path']}  ({i.get('unsafe_reason')})"))
+                unsafe += 1
+            elif live == csha:
+                lines.append(("current", i["path"])); current += 1
+            else:
+                lines.append(("STALE  ", i["path"])); stale += 1
+        if lines:
+            print(f"── {name}  (canonical {csha})")
+            for st, p in lines:
+                print(f"     {st}  {p.replace(str(Path.home()) + '/', '~/')}")
+    print(f"\n{current} current, {stale} STALE, {unsafe} unsafe")
+    return 1 if (stale or unsafe) else 0
+
+
+def cmd_sync(args):
+    """RETIRED. Astra does not write into other repos.
+
+    This pushed canonical files out across the workspace and was the whole
+    reason ownership had to be guessed at. Distribution is now pull: each repo
+    carries .astra/manifest.json plus .astra/astra-update and fetches on its own
+    post-commit hook. Nothing reaches in from here.
+
+    Left in place as a loud refusal rather than deleted, because a script or a
+    habit may still call it, and a silently missing command is how the old
+    behaviour would quietly come back.
+    """
+    if "--i-know-this-is-retired" not in args:
+        print("registry sync is RETIRED — astra no longer writes into other repos.",
+              file=sys.stderr)
+        print("  Update a repo from inside it:  <repo>/.astra/astra-update --pull",
+              file=sys.stderr)
+        print("  Install or reinstall a tool:   tools/<tool>/install.sh --into <repo>",
+              file=sys.stderr)
+        return 78
+    dry = "--dry-run" in args
+    only = [a for a in args if not a.startswith("-")]
+    reg = load()
+    updated, skipped = 0, 0
+    for name, t in sorted(reg.get("tools", {}).items()):
+        if only and name not in only:
+            continue
+        canon = ASTRA / t["canonical"]
+        csha = sha(canon)
+        recorded = t.get("canonical_sha")
+        for i in t["installs"]:
+            live = sha(i["path"])
+            if live is None or live == csha:
+                continue
+            ok, why = is_safe_target(i["path"])
+            if not ok:
+                print(f"  REFUSED  {i['path']}  ({why})")
+                skipped += 1
+                continue
+
+            # A DESTINATION SYMLINK is a write to somewhere else. is_safe_target
+            # judged the path we were given; copy2 would follow the link and
+            # land wherever it points, including outside the workspace. We do
+            # not install through symlinks, so seeing one means something we do
+            # not understand — refuse rather than guess.
+            if Path(i["path"]).is_symlink():
+                print(f"  REFUSED  {i['path']}  (destination is a symlink)")
+                skipped += 1
+                continue
+
+            # WHAT COUNTS AS SAFE TO OVERWRITE. We may replace a copy only when
+            # we can account for its current contents:
+            #   - it is exactly what sync last wrote here (nobody touched it), or
+            #   - it is exactly what it looked like when we first found it, and
+            #     we have never written to it (the adopted-stale case: the
+            #     month-old pdf-sidecars copies this registry was built for).
+            # Anything else changed after we last had eyes on it. That is a
+            # fork, and overwriting it destroys work.
+            synced = i.get("synced_sha")
+            first_seen = i.get("first_seen_sha")
+            accounted = (live == synced) if synced else (live == first_seen)
+            if not accounted:
+                print(f"  LOCAL EDITS, skipping  {i['path']}")
+                print(f"     content is neither what we last wrote nor what we "
+                      f"first found — someone changed it, resolve by hand")
+                skipped += 1
+                continue
+
+            if dry:
+                print(f"  would update  {i['path']}")
+            else:
+                # ATOMIC. copy2 opens the destination 'wb', truncating it before
+                # a single byte is copied, so an interrupted sync leaves a
+                # zero-length tool behind. Write beside it and rename, which is
+                # atomic within a filesystem: the target is either the old file
+                # or the new one, never a fragment.
+                dest = Path(i["path"])
+                tmp = dest.with_name(dest.name + ".astra-sync.tmp")
+                try:
+                    shutil.copy2(canon, tmp)
+                    os.replace(tmp, dest)
+                except Exception as e:
+                    if tmp.exists():
+                        tmp.unlink()
+                    print(f"  FAILED   {i['path']}  ({e})")
+                    skipped += 1
+                    continue
+                i["sha"] = csha
+                i["synced_sha"] = csha     # only sync ever writes this
+                print(f"  updated  {i['path']}")
+            updated += 1
+        t["canonical_sha"] = csha
+    if not dry:
+        save(reg)
+    print(f"\n{updated} updated, {skipped} skipped")
+    return 0
+
+
+def main():
+    cmds = {"scan": cmd_scan, "status": cmd_status, "sync": cmd_sync}
+    if len(sys.argv) < 2 or sys.argv[1] not in cmds:
+        print(f"usage: registry.py {{{'|'.join(cmds)}}} [--dry-run] [tool...]")
+        return 64
+    return cmds[sys.argv[1]](sys.argv[2:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

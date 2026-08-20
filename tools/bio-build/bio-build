@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# bio-build — assemble a single document from a directory of ordered markdown section files.
+# Sections are files named NN_*.md (sorted by the numeric prefix); the tool prepends a title
+# block + auto-generated table of contents (from each section's first-level heading) and
+# concatenates the bodies. Built so "shoot me the big bio again" is one command over maintained
+# parts, not a re-derivation — and so it's the single source of truth (edit a section, rebuild).
+#
+#   bio-build <sections-dir> --out FILE [--title "..."] [--subtitle "..."] [--open]
+#
+# Portable / agent-agnostic: the sections dir is the data (anyone's bio, any collated doc),
+# the tool is just the assembler. No identity or paths baked in.
+#
+# Discipline (no silent data loss): a section file that is EMPTY, or has no top-level heading,
+# is a loud FAILURE, not a silently-dropped section — because a bio missing a chunk with no
+# error looks complete when it isn't.
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+SUBL="${SUBL_BIN:-subl}"
+
+DIR=""; OUT=""; TITLE=""; SUBTITLE=""; OPEN=0; DATE_STR="${BIO_BUILD_DATE:-}"
+while [ $# -gt 0 ]; do case "$1" in
+  --out) OUT="$2"; shift 2;;
+  --title) TITLE="$2"; shift 2;;
+  --subtitle) SUBTITLE="$2"; shift 2;;
+  --open) OPEN=1; shift;;
+  --*) echo "bio-build: unknown flag '$1'" >&2; exit 64;;
+  *) [ -z "$DIR" ] && DIR="$1" || { echo "bio-build: one sections dir only (got '$1' too)" >&2; exit 64; }; shift;;
+esac; done
+[ -n "$DIR" ] || { echo "usage: bio-build <sections-dir> --out FILE [--title ..] [--subtitle ..] [--open]" >&2; exit 64; }
+[ -d "$DIR" ] || { echo "bio-build: no such sections dir: $DIR" >&2; exit 1; }
+[ -n "$OUT" ] || { echo "bio-build: --out FILE is required" >&2; exit 64; }
+
+# ordered section files: NN_*.md, sorted by filename (== numeric prefix for same-width NN).
+# Portable array fill (no mapfile — macOS system bash is 3.2).
+SECTIONS=()
+while IFS= read -r f; do [ -n "$f" ] && SECTIONS+=("$f"); done < <(ls "$DIR"/[0-9]*_*.md 2>/dev/null | sort)
+[ "${#SECTIONS[@]}" -gt 0 ] || { echo "bio-build: no NN_*.md section files in $DIR" >&2; exit 1; }
+
+# validate every section BEFORE writing anything: non-empty + has a top-level '# ' heading
+headings=()
+for f in "${SECTIONS[@]}"; do
+  [ -s "$f" ] || { echo "bio-build: section $f is EMPTY — refusing to build a bio with a hole in it" >&2; exit 1; }
+  h="$(grep -m1 '^# ' "$f" | sed 's/^# //')"
+  [ -n "$h" ] || { echo "bio-build: section $f has no top-level '# Heading' — can't index it" >&2; exit 1; }
+  headings+=("$h")
+done
+
+mkdir -p "$(dirname "$OUT")"
+{
+  [ -n "$TITLE" ] && echo "# $TITLE" && echo ""
+  [ -n "$SUBTITLE" ] && echo "*$SUBTITLE*" && echo ""
+  [ -n "$DATE_STR" ] && echo "_Assembled $DATE_STR by bio-build from $(basename "$DIR")/_" && echo ""
+  echo "## Contents"
+  echo ""
+  for h in "${headings[@]}"; do echo "- $h"; done
+  echo ""
+  echo "---"
+  echo ""
+  first=1
+  for f in "${SECTIONS[@]}"; do
+    [ "$first" -eq 1 ] || { echo ""; echo "---"; echo ""; }
+    first=0
+    cat "$f"
+  done
+} > "$OUT"
+
+words="$(wc -w < "$OUT" | tr -d ' ')"
+echo "bio-build: wrote $OUT — ${#SECTIONS[@]} sections, $words words"
+[ "$OPEN" -eq 1 ] && { command -v "$SUBL" >/dev/null && "$SUBL" "$OUT" && echo "opened in Sublime" || echo "bio-build: subl not found; open $OUT yourself" >&2; }
+exit 0

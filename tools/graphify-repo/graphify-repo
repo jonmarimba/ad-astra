@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# graphify-repo — run graphify's LOCAL-ONLY pipeline (tree-sitter extract + cluster, NO LLM)
+# on any repo, keep the output out of the repo's git (via .git/info/exclude, never touching
+# the project's .gitignore — safe for client repos), and surface the report in the Obsidian
+# chokepoint vault. Portable: repo path is the argument; vault dir via GRAPHIFY_VAULT.
+#   graphify-repo <repo-path> [--label-backend ollama --label-model <m>]  # labeling optional+explicit
+set -euo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+REPO="${1:?usage: graphify-repo <repo-path> [--label-backend B --label-model M]}"; shift || true
+VAULT="${GRAPHIFY_VAULT:-$HOME/.notesq/vault/graphify}"
+command -v graphify >/dev/null || { echo "graphify not installed (see safishamsi/graphify)"; exit 1; }
+cd "$REPO"
+[ -d .git ] && { grep -q graphify-out .git/info/exclude 2>/dev/null || echo "graphify-out/" >> .git/info/exclude; }
+graphify update . --no-cluster
+# cluster WITHOUT LLM labels by default — nothing leaves the machine; pass --label-backend to opt in
+if [ "${1:-}" = "--label-backend" ]; then
+  graphify cluster-only . --backend="$2" ${4:+--model=$4}
+else
+  graphify cluster-only . --no-label
+fi
+mkdir -p "$VAULT"
+ln -sfn "$(pwd)/graphify-out" "$VAULT/$(basename "$REPO")"
+echo "done: $(basename "$REPO") graph in graphify-out/ (excluded from repo git), report visible in Obsidian at graphify/$(basename "$REPO")/GRAPH_REPORT.md"

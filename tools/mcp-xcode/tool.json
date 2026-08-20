@@ -1,0 +1,11 @@
+{
+  "name": "mcp-xcode",
+  "server": "xcode",
+  "description": "Apple's own Xcode MCP bridge via xcrun mcpbridge. Needs Xcode approval once.",
+  "dependencies": [
+    "xcrun",
+    "claude"
+  ],
+  "provides": "mcp-server",
+  "backed_by": "tools/mcp-bundle"
+}

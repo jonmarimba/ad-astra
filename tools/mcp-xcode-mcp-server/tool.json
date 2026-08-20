@@ -1,0 +1,11 @@
+{
+  "name": "mcp-xcode-mcp-server",
+  "server": "xcode-mcp-server",
+  "description": "Third-party Xcode server (Drew's). Runs via uvx.",
+  "dependencies": [
+    "uvx",
+    "claude"
+  ],
+  "provides": "mcp-server",
+  "backed_by": "tools/mcp-bundle"
+}

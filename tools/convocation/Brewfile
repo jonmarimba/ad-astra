@@ -1,0 +1,5 @@
+# convocation dependencies — ONLY qwen comes from brew on this machine.
+# claude + codex are npm globals (npm prefix = /opt/homebrew), NOT brew formulae:
+# install.sh handles them; do not add fake brew lines for them here.
+brew "node"       # npm, for the two npm-global agents below
+brew "qwen-code"  # /opt/homebrew/bin/qwen

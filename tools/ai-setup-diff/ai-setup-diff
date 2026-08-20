@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# ai-setup-diff — READ-ONLY comparison of the AI/CLI setup between this machine and another
+# (over Tailscale ssh). Shows what's diverged so the sync/merge decisions can be made with
+# facts. Changes NOTHING on either machine.
+#   ai-setup-diff [remote-host]     (default: the M5)
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+R="${1:-jonathans-macbook-pro-m5-max.tail2abcb6.ts.net}"
+# ssh injectable for tests: the shim evaluates remote commands against a fake remote $HOME,
+# which is what catches the quoting regression where '$HOME' never expanded remotely
+SSH="${SSH_BIN:-ssh}"
+FILES=(
+  ".claude/settings.json" ".claude/CLAUDE.md"
+  ".codex/config.toml" ".codex/AGENTS.md"
+  ".qwen/settings.json" ".qwen/QWEN.md"
+  ".config/opencode/opencode.jsonc"
+)
+"$SSH" -o ConnectTimeout=8 -o BatchMode=yes "$R" true 2>/dev/null || { echo "$R unreachable — nothing compared"; exit 0; }
+echo "=== AI setup diff: $(hostname -s) vs $R ($(date '+%Y-%m-%d %H:%M')) ==="
+for f in "${FILES[@]}"; do
+  lh=$(shasum -a 256 "$HOME/$f" 2>/dev/null | cut -d' ' -f1)
+  rh=$("$SSH" -o BatchMode=yes "$R" "shasum -a 256 \"\$HOME/$f\" 2>/dev/null | cut -d' ' -f1" 2>/dev/null)
+  if [ -z "$lh" ] && [ -z "$rh" ]; then continue
+  elif [ -z "$lh" ]; then echo "ONLY REMOTE : ~/$f"
+  elif [ -z "$rh" ]; then echo "ONLY LOCAL  : ~/$f"
+  elif [ "$lh" = "$rh" ]; then echo "same        : ~/$f"
+  else
+    echo "DIFFERS     : ~/$f"
+    diff <(cat "$HOME/$f" 2>/dev/null) <("$SSH" -o BatchMode=yes "$R" "cat \"\$HOME/$f\" 2>/dev/null") 2>/dev/null | head -12 | sed 's/^/    /'
+  fi
+done
+echo "--- hooks dirs ---"
+for d in ".claude/hooks" ".claude/skills"; do
+  l=$(ls "$HOME/$d" 2>/dev/null | sort | shasum | cut -c1-8); r=$("$SSH" -o BatchMode=yes "$R" "ls \"\$HOME/$d\" 2>/dev/null | sort | shasum | cut -c1-8" 2>/dev/null)
+  [ "$l" = "$r" ] && echo "same        : ~/$d/" || { echo "DIFFERS     : ~/$d/"; echo "    local:  $(ls "$HOME/$d" 2>/dev/null | tr '\n' ' ' | head -c 100)"; echo "    remote: $("$SSH" -o BatchMode=yes "$R" "ls \"\$HOME/$d\" 2>/dev/null" | tr '\n' ' ' | head -c 100)"; }
+done
+echo "--- brew formulae (count + diff head) ---"
+comm -3 <(brew list --formula 2>/dev/null | sort) <("$SSH" -o BatchMode=yes "$R" "/opt/homebrew/bin/brew list --formula 2>/dev/null | sort" 2>/dev/null) | head -15 | sed 's/^\t/    remote-only: /; s/^\([^ ]\)/local-only:  \1/' 

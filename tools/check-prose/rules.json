@@ -1,0 +1,57 @@
+{
+  "_comment": "THE writing rules, as DATA. One source, read by the checker and cited by the asd-ste100 skill. Before this existed the same list was hand-copied into three places \u2014 check-prose.js, the skill's prose, and Jonathan's global CLAUDE.md \u2014 and they had already drifted: the checker did not know about 'honest', 'not just X but Y', or reflexive em-dash hedging, all of which he had explicitly banned. Rules are data; the checker is mechanism. Adding a word is an edit here, not a code change.",
+  "_source_of_truth": "~/.claude/CLAUDE.md \u2014 'Banned word matters and all LLM-tell vocabulary' plus the no-candor-disclaimers rule. When those disagree with this file, HIS file wins and this one gets corrected.",
+  "banned_words": [
+    "matters",
+    "crucial",
+    "pivotal",
+    "delve",
+    "tapestry",
+    "testament",
+    "leverage",
+    "robust",
+    "seamless",
+    "holistic",
+    "footgun",
+    "delightful"
+  ],
+  "banned_phrases": [
+    "at the end of the day",
+    "it's worth noting",
+    "that said",
+    "key takeaway",
+    "in summary",
+    "to summarize",
+    "not just",
+    "let me check instead",
+    "rather than assume",
+    "with my own eyes",
+    "look before I answer",
+    "I won't make this up"
+  ],
+  "candor_disclaimers": {
+    "_why": "Jonathan: every one of these implies the default is to guess or lie. Do the check silently and state the result.",
+    "patterns": [
+      "\\bhonestly\\b",
+      "\\bto be honest\\b",
+      "\\bnot gonna lie\\b",
+      "\\bthe honest answer\\b",
+      "\\bI'll be honest\\b",
+      "\\b(instead of|rather than) (guessing|assuming|asking)\\b"
+    ]
+  },
+  "self_referential": {
+    "_why": "Never write a sentence about the document itself. 'Three asks and one question' was also stale by one question, which is what happens to a summary of a thing that changes.",
+    "patterns": [
+      "^\\s*(criteria|a list|a table|details?) rather than\\b",
+      "^\\s*\\w+ (asks?|questions?) and \\w+ (question|ask)s?\\.\\s*$",
+      "\\bwhat follows (is|are)\\b",
+      "\\bthis (document|section) (explains|covers|describes|will)\\b",
+      "\\b(read|note|notice) (this|the following) (section|carefully)\\b"
+    ]
+  },
+  "label_fragment": {
+    "_why": "No general fragment check: deciding whether an English sentence carries a finite verb needs a parser, and a word list gets it wrong \u2014 an earlier version flagged 'We recommend this option.' A checker that cries wolf gets ignored, which is worse than no checker. What IS detectable is the shape that caused the trouble: a short bold label standing in for a clause with the real sentence trailing after it.",
+    "verbish": "\\b(is|are|was|were|has|have|do|does|did|can|will|should|must|shows?|gives?|holds?|reads?|needs?|means?|stopped|works?|fails?)\\b"
+  }
+}

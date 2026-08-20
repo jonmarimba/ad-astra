@@ -1,0 +1,3 @@
+# graphify-repo dependencies
+brew "uv"      # graphify installs as a uv tool (package: graphifyy)
+# ollama optional — only for --label-backend ollama local community naming
