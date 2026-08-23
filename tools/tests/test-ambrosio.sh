@@ -9,6 +9,16 @@ AMBROSIO="$HERE/../ambrosio/ambrosio"
 need python3 "xcode-select --install"
 curl -s --max-time 15 "https://huggingface.co/api/models/mlx-community/Qwen3-30B-A3B-4bit" >/dev/null || { fail "huggingface.co unreachable — the live size-check leg cannot run"; finish; exit 1; }
 
+# This file tests the LOCAL delivery loop. Ambrosio also runs two cloud surfaces
+# (ollama-watch, omniroute-model-sync) which have their own suites and their own tests
+# here in test-ambrosio-frontdoor.sh — stub them to no-ops so the silence assertions below
+# keep meaning "the local loop said nothing" rather than accidentally covering the cloud half.
+mkdir -p "$SB/stub"
+printf '#!/bin/bash\nexit 0\n' > "$SB/stub/ollama-watch"; chmod +x "$SB/stub/ollama-watch"
+printf '#!/bin/bash\nexit 0\n' > "$SB/stub/omniroute-model-sync"; chmod +x "$SB/stub/omniroute-model-sync"
+export OLLAMA_WATCH_BIN="$SB/stub/ollama-watch"
+export OMNIROUTE_SYNC_BIN="$SB/stub/omniroute-model-sync"
+
 export AMBROSIO_HOME="$SB/ambrosio-home"; mkdir -p "$AMBROSIO_HOME"
 export HOME="$SB/home"   # expose_model edits $HOME/.config/opencode + $HOME/.qwen
 mkdir -p "$HOME/.config/opencode" "$HOME/.qwen"

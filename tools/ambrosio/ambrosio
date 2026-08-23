@@ -65,6 +65,9 @@ LMS_BIN="~/.lmstudio/bin/lms"      # lms isn't on the non-interactive ssh PATH; 
 LMS_FORMAT="--mlx"                 # M5 is Apple Silicon → MLX; lms picks a hardware-fitting quant
 MAX_PER_RUN="2"                    # don't blast a dozen multi-GB downloads in one go
 MIN_PARAMS_B="7"                   # skip toy models (<7B) — JS wants frontier to play with
+# Cloud surfaces run whether or not the M5 is awake. Set CLOUD="0" to make ambrosio
+# local-only again.
+CLOUD="1"
 CFG
 fi
 # shellcheck disable=SC1090
@@ -215,16 +218,9 @@ except Exception as ex: print('qwen edit failed:', ex)
 PYEOF
 }
 
-case "${1:-check}" in
-  status)
-    if host_up; then echo "host $HOST: UP"; echo "loaded:"; loaded_models | sed 's/^/  /'; else echo "host $HOST: DOWN (asleep/unreachable) — ambrosio is inert"; fi
-    echo "seen: $(wc -l <"$SEEN" | tr -d ' ')"
-    echo "want-list ($WANTLIST):"
-    grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null | sed 's/^/  /' || echo "  (empty)"
-    echo "trending-frontier candidates right now:"; hot_candidates | sed 's/^/  /' | head -10 ;;
-  check)
-    dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
-    if ! host_up; then log "host $HOST down — inert (gated)"; exit 0; fi
+# ---- the two halves of `check`, split so a sleeping M5 stops only the local one ----
+
+run_local() {
     have="$(loaded_models)"; pulled=""; n=0
     # want-list first (explicit asks outrank whatever HF happens to be trending this run), then
     # the reactive trending scan — same loop body handles both, same SEEN/MAX_PER_RUN treatment.
@@ -274,7 +270,7 @@ case "${1:-check}" in
       else log "pull FAILED for '$term' ($url) after resume retry — see $AMBROSIO_HOME/pull.log; will resume next run"; fi
     done < <(grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null | sed 's/^/WANT\t/'; hot_candidates | sed 's/^/SCAN\t/')
     pulled="$(echo "$pulled" | xargs 2>/dev/null || true)"
-    [ -z "$pulled" ] && { log "no new hot models"; exit 0; }
+    [ -z "$pulled" ] && { log "no new hot models"; return 0; }
     command -v "$OMNIROUTE" >/dev/null && "$OMNIROUTE" models "$OMNIROUTE_NODE" >/dev/null 2>&1 || true
     # surface each delivered model in OpenCode + qwen (find its lms id from the host)
     for t in $pulled; do
@@ -287,6 +283,67 @@ case "${1:-check}" in
     elif [ -x "$BOTLINE" ]; then
       if "$BOTLINE" send --from ambrosio "$msg" >/dev/null 2>>"$AMBROSIO_HOME/pull.log"; then log "notified JS: $pulled"
       else log "notify FAILED (botline send) — models pulled but JS was NOT told: $pulled"; fi
-    fi ;;
+    fi
+}
+
+# Cloud surfaces: the ollama subscription and OmniRoute's catalog. Neither needs the M5.
+# These are SEPARATE TOOLS and stay that way — omniroute-model-sync's own header explains
+# why (an earlier `omniroute setup-qwen` silently wiped qwen's hand-curated model list, so
+# the sync was built to never touch ambrosio and vice versa). Ambrosio calls them; it does
+# not absorb them, so neither can clobber the other's config.
+#
+# Both binaries are injectable so tests can stub them, and a missing binary is REPORTED,
+# not skipped silently — a front door that quietly stops checking a surface is worse than
+# three separate jobs.
+OLLAMA_WATCH_BIN="${OLLAMA_WATCH_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/ollama-watch/ollama-watch}"
+OMNIROUTE_SYNC_BIN="${OMNIROUTE_SYNC_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/omniroute-model-sync/omniroute-model-sync}"
+
+run_cloud() {
+  [ "${CLOUD:-1}" = "1" ] || { log "cloud surfaces disabled (CLOUD=0)"; return 0; }
+
+  if [ -x "$OLLAMA_WATCH_BIN" ]; then
+    out="$("$OLLAMA_WATCH_BIN" check 2>&1)"; rc=$?
+    # ollama-watch narrates its no-op ("no new frontier models"). On its own schd job that
+    # was harmless; behind the front door it would poke the session every run forever, and
+    # a poke that is always empty is how a real one gets skimmed past. Drop ONLY that known
+    # no-op line — everything else it says gets through, including anything unexpected.
+    printf '%s\n' "$out" | grep -v '^ollama-watch: no new frontier models$' | grep -v '^[[:space:]]*$' || true
+    [ "$rc" -ne 0 ] && log "ollama-watch exited $rc"
+  else
+    # STDOUT, not the stderr log: a missing surface must poke, or the front door quietly
+    # stops watching something and nobody finds out until it matters.
+    echo "ambrosio: ollama-watch NOT FOUND at $OLLAMA_WATCH_BIN — the library watch did NOT run"
+  fi
+
+  if [ -x "$OMNIROUTE_SYNC_BIN" ]; then
+    out="$("$OMNIROUTE_SYNC_BIN" 2>&1)"; rc=$?
+    # The sync narrates every run. Only surface the lines that mean something changed or
+    # something could not be verified; a clean "added 0" run is silence, per the schd
+    # convention that output means attention is needed.
+    printf '%s\n' "$out" | grep -Ei 'added [1-9]|timed out|skip |could NOT|unverified|FAIL' || true
+    [ "$rc" -ne 0 ] && log "omniroute-model-sync exited $rc"
+  else
+    echo "ambrosio: omniroute-model-sync NOT FOUND at $OMNIROUTE_SYNC_BIN — the cloud catalog did NOT sync"
+  fi
+  return 0
+}
+
+case "${1:-check}" in
+  status)
+    if host_up; then echo "host $HOST: UP"; echo "loaded:"; loaded_models | sed 's/^/  /'; else echo "host $HOST: DOWN (asleep/unreachable) — ambrosio is inert"; fi
+    echo "seen: $(wc -l <"$SEEN" | tr -d ' ')"
+    echo "want-list ($WANTLIST):"
+    grep -vE '^\s*(#|$)' "$WANTLIST" 2>/dev/null | sed 's/^/  /' || echo "  (empty)"
+    echo "trending-frontier candidates right now:"; hot_candidates | sed 's/^/  /' | head -10 ;;
+  check)
+    dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
+    # The M5 gate now skips only the LOCAL half. Jonathan, 2026-08-22: "Ambrosio shouldn't
+    # fail outright when the M5 isn't around — there's the whole ollama subscription to
+    # check on." The cloud surfaces below never needed the M5 and were already running as
+    # two separate schd jobs; folding them in makes ambrosio the single front door for
+    # "is there a hot model I can play with," which is one want, not three.
+    if host_up; then run_local; else log "host $HOST down — skipping local pulls (cloud surfaces still run)"; fi
+    run_cloud
+    ;;
   *) echo "usage: ambrosio check [--dry-run] | status"; exit 1 ;;
 esac
