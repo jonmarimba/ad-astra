@@ -32,3 +32,10 @@ They remain SEPARATE TOOLS with their own tests and their own state. Ambrosio ca
 Output follows the schd convention: silent when nothing happened, loud when something did. A missing or failing surface is reported rather than skipped, because a front door that quietly stops watching something is worse than the separate jobs it replaced. Set `CLOUD="0"` in the config for local-only behaviour.
 
 Tests: `tools/tests/test-ambrosio-frontdoor.sh`.
+
+### Cadence, after consolidation
+
+The two cloud surfaces used to carry their own schd jobs — `ollama-watch` every 24h and `omniroute-model-sync` every 6h. Both were removed on 2026-08-22 once `check` started driving them, so each surface runs exactly once per pass instead of twice.
+
+Ambrosio's own job runs every 4 hours, which makes both cloud surfaces MORE frequent than before rather than less: the library watch goes from daily to four-hourly, the catalog sync from six-hourly to four-hourly. There is no latency regression anywhere in the consolidation, which is why it was safe to do rather than something to weigh.
+
