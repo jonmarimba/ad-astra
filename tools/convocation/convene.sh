@@ -32,6 +32,12 @@ esac; done
 [ -n "$NAME" ] && [ -n "$REPO" ] && [ -n "$FILES" ] || { echo "usage: convene.sh --name X --repo D --files '...' [--convoq 'a|b'] [--ollama-model id]" >&2; exit 64; }
 [ -d "$REPO" ] || { echo "no such repo: $REPO" >&2; exit 1; }
 OUT="${OUT:-$REPO/.convocation}"; mkdir -p "$OUT"
+CONVOQ_BIN="${CONVOQ_BIN:-$HOME/svnCheckouts/js-project-GhOST/tools/convoq}"
+if [ -n "${CONVOQ:-}" ] && [ ! -x "$CONVOQ_BIN" ]; then
+  echo "convene: convoq wrapper not executable at $CONVOQ_BIN" >&2
+  echo "convene: convoq-first is doctrine; refusing to run a convocation blind." >&2
+  exit 3
+fi
 CTX="$OUT/$NAME.context.md"
 
 # ---- 1. convoq-FIRST: gather the cluster's known issues from the record ----
@@ -39,14 +45,20 @@ CTX="$OUT/$NAME.context.md"
   echo "# Known issues for cluster '$NAME' (from convoq — treat as ground truth, do not rediscover)"
   echo
   if [ -n "$CONVOQ" ]; then
-    if ! ( cd "$CONVOQ_DIR" && PYTHONPATH=src python3 -m session_bridge.convoq.cli update >/dev/null 2>&1 ); then
-      echo "convene[$NAME]: WARNING — convoq update failed (rc=$?); searching stale index" >&2
+    # Use the pinned-interpreter wrapper. A bare `python3` here resolves to
+    # Xcode's 3.9 on Jonathan's Mac and dies on the `str | os.PathLike` union in
+    # session_bridge/paths.py:19 — so this block used to swallow a TypeError into
+    # /dev/null and hand every panelist an empty "known issues" section while
+    # reporting success. Found by the 2026-08-24 instruction audit.
+    if ! "$CONVOQ_BIN" update >/dev/null 2>&1; then
+      echo "convene[$NAME]: WARNING — convoq update failed; searching stale index" >&2
+      "$CONVOQ_BIN" update >&2 || true   # re-run visibly so the cause is on the record
     fi
     old_ifs="$IFS"; IFS='|'
     for term in $CONVOQ; do
       IFS="$old_ifs"
       echo "## \"$term\""
-      ( cd "$CONVOQ_DIR" && PYTHONPATH=src python3 -m session_bridge.convoq.cli search "$term" 2>/dev/null ) \
+      "$CONVOQ_BIN" search "$term" 2>/dev/null \
         | grep -iE "human:|assistant:" | sed 's/^/  /'
       echo
       IFS='|'
