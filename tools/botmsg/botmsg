@@ -180,7 +180,12 @@ def cmd_send(args, cfg):
         text = sys.stdin.read()
     if not text or not text.strip():
         die("nothing to send", 64)
-    body = f"{tag(args.as_bot)} {text.strip()}"
+    # The visible [bot] prefix is OPTIONAL. Jonathan's standing rule is that texts
+    # to him are not signed — the channel already tells him which direction a
+    # message came from, and a signature is clutter he has asked not to see. The
+    # tag exists for bot-to-bot legibility, not for him. Suppress it with --no-tag
+    # and the send is still recorded below, which is what `claims` actually reads.
+    body = text.strip() if args.no_tag else f"{tag(args.as_bot)} {text.strip()}"
     r = subprocess.run([IMSG, "send", "--to", to, "--text", body],
                        capture_output=True, text=True, timeout=90)
     if r.returncode != 0:
@@ -358,20 +363,66 @@ def cmd_claims(args, cfg):
         return 3
 
     # Nobody named. Who spoke last on the thread before now?
-    to = resolve_to(args, cfg)
-    cid = chat_id_for(to)
-    msgs = list(reversed(imsg_json([IMSG, "history", "--chat-id", str(cid),
-                                    "--limit", str(args.limit), "--json"])))
-    last_sender = None
-    for m in msgs:
-        if m.get("is_from_me"):
+    #
+    # This used to scan outbound messages for a leading [something] and treat it
+    # as a bot id. Two things broke that on 2026-08-24. Untagged sends — which is
+    # every text to Jonathan, because he has asked not to be signed at — left the
+    # sender invisible, so a bot that had just texted him did not count as having
+    # spoken. Worse, schd's own reminder texts begin with a timestamp in brackets,
+    # so "[Mon 09:11] Hourly email check" parsed as a bot named "Mon 09:11" and
+    # the gate reported that a stranger had spoken last. GhOST-Claude hit exactly
+    # that: it had sent seven texts that evening, the human replied to the most
+    # recent one, and the gate told it the message was not its own.
+    #
+    # The authority is now each bot's own state file, which cmd_send writes on
+    # every send regardless of tagging. A bracket at the start of a message is
+    # not evidence of anything.
+    last_sender, last_at = None, ""
+    for f in sorted(STATE_DIR.glob("*.json")) if STATE_DIR.is_dir() else []:
+        try:
+            st = json.loads(f.read_text())
+        except Exception:
+            continue                      # a corrupt sibling must not decide this
+        sent_at = st.get("last_sent_at") or ""
+        if sent_at > last_at:
+            last_at, last_sender = sent_at, f.stem
+
+    if last_sender is None:
+        # No bot has a send record. Fall back to scanning the transcript for a
+        # leading [tag], which is all this used to do. The guard that makes the
+        # fallback safe: a bot id never contains whitespace, so "[Mon 09:11]"
+        # from a schd reminder is not a sender and never was.
+        # A missing destination or an unreadable transcript must not turn into a
+        # refusal. This question is "may I answer", and failing it for a config
+        # detail would silence a bot for a reason that has nothing to do with
+        # whose message it is.
+        try:
+            to = resolve_to(args, cfg)
+            cid = chat_id_for(to)
+            msgs = list(reversed(imsg_json([IMSG, "history", "--chat-id", str(cid),
+                                            "--limit", str(args.limit), "--json"])))
+        except SystemExit:
+            print("yours: no send records and no readable transcript")
+            return 0
+        except Exception:
+            print("yours: no send records and the transcript could not be read")
+            return 0
+        for m in msgs:
+            if not m.get("is_from_me"):
+                continue
             b = (m.get("text") or "").strip()
             if b.startswith("[") and "]" in b:
-                last_sender = b[1:b.index("]")]
+                cand = b[1:b.index("]")]
+                if cand and not any(ch.isspace() for ch in cand):
+                    last_sender = cand
+        if last_sender is None:
+            print("yours: nobody has sent anything yet")
+            return 0
+        last_at = "from transcript tag (no send record)"
     if last_sender == args.as_bot:
-        print("yours: most-recent-sender (guess)")
+        print(f"yours: most-recent-sender (you sent at {last_at})")
         return 0
-    print(f"NOT yours: last speaker was {last_sender or 'nobody tagged'}")
+    print(f"NOT yours: last speaker was {last_sender} at {last_at}")
     return 4
 
 
@@ -417,6 +468,10 @@ def main():
 
     s = sub.add_parser("send"); common(s)
     s.add_argument("--text", help="message body; reads stdin when omitted")
+    s.add_argument("--no-tag", action="store_true",
+                   help="do not prefix the visible message with [bot]. Use this for "
+                        "messages to Jonathan, who has asked not to be signed at. The "
+                        "send is still recorded, and `claims` reads the record, not the text.")
 
     i = sub.add_parser("inbox"); common(i)
     i.add_argument("--json", action="store_true")
