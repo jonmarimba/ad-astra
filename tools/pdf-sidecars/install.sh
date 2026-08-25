@@ -19,7 +19,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 
 # The kit's own files, in the order a reader should meet them.
-KIT_FILES="generate_pdf_sidecars.sh pdf_metadata.sh hook_pre_commit.sh update_sidecars.sh export_docx.py pdf_add_footer.py marked_to_pdf.sh reocr_all_pdfs.sh reocr_all_pdfs_parallel.sh"
+# md2pdf is the headless PDF path and it was MISSING from this list until
+# 2026-08-25, so every repo wired by this installer got only marked_to_pdf.sh —
+# which drives Marked 2 through the GUI and seizes the screen mid-export. The
+# headless exporter existed in the toolbox the whole time and simply never
+# shipped to a single repo. Its CSS templates ship with it; without them md2pdf
+# exits on a missing default.css.
+KIT_FILES="generate_pdf_sidecars.sh pdf_metadata.sh hook_pre_commit.sh update_sidecars.sh export_docx.py pdf_add_footer.py md2pdf marked_to_pdf.sh reocr_all_pdfs.sh reocr_all_pdfs_parallel.sh"
 
 install_deps() {
   command -v brew >/dev/null && brew bundle --file="$HERE/Brewfile" \
@@ -39,7 +45,11 @@ astra_target "$@"
 install_deps
 # shellcheck disable=SC2086
 astra_place pdf-sidecars $KIT_FILES
-chmod +x "$TARGET/.astra/pdf-sidecars/"*.sh
+# md2pdf resolves a bare --template NAME against ./templates/NAME.css relative to
+# its own directory, so the stylesheets have to travel with it.
+mkdir -p "$TARGET/.astra/pdf-sidecars/templates"
+cp -p "$HERE/templates/"*.css "$TARGET/.astra/pdf-sidecars/templates/" 2>/dev/null || true
+chmod +x "$TARGET/.astra/pdf-sidecars/"*.sh "$TARGET/.astra/pdf-sidecars/md2pdf"
 
 # ---------------------------------------------------------------------------
 # The pre-commit hook.
