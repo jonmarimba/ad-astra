@@ -110,10 +110,17 @@ case "${1:-check}" in
   # which went into seen.txt silently under "first run, no notify" and could never alert.
   # Idempotent: everything reported is written to announced.txt, so a second run is quiet.
   backfill)
+    # Say what is already in the library that he has never been told about.
+    #
+    # Needed because this watcher first ran on 12 August against a library that already
+    # held kimi-k3 (~29 July), glm-5.2, kimi-k2.7-code, qwen3.8 and more. All of them went
+    # into seen.txt under "first run, no notify" and could never alert. Idempotent:
+    # everything considered is written to announced.txt, so a second run is quiet.
     dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
     cur="$(fetch_library)"
     [ -z "$cur" ] && { echo "ollama-watch: fetch failed (empty) — nothing done"; exit 1; }
     touch "$ANNOUNCED"
+
     pending=""
     while IFS= read -r m; do
       [ -z "$m" ] && continue
@@ -124,32 +131,30 @@ case "${1:-check}" in
     pending="$(echo "$pending" | xargs 2>/dev/null || true)"
     [ -z "$pending" ] && { echo "ollama-watch: backfill — nothing unannounced"; exit 0; }
 
-    # Two piles, split on AGE rather than on cloud-vs-local.
-    #
-    # The first cut of this used the cloud tag, on the reasoning that anything without it
-    # was "a local weight family he has had for years". Jonathan caught that: qwen3.8 was
-    # updated ONE WEEK ago and qwen3.6 NINE HOURS ago, both locally-pullable, both exactly
-    # what he wants to hear about — especially with a second inference host arriving. Age
-    # is the honest signal. everythinglm really is two years old; qwen3.6 is not.
-    #
-    # Both piles are marked announced so neither returns. Only the first gets sent, because
-    # a backfill listing dolphin-mixtral beside kimi-k3 teaches him to ignore the channel,
-    # which is the failure this whole change exists to undo.
+    # Split on AGE, not on cloud-vs-local. The first cut used the cloud tag and justified
+    # itself with "a local weight family he has had for years"; Jonathan caught that —
+    # qwen3.8 was a week old and qwen3.6 nine hours. everythinglm really is two years old;
+    # qwen3.6 is not. A cloud-served model stays interesting regardless of age because it
+    # is reachable through the subscription he already pays for.
     RECENT_DAYS="${OLLAMA_WATCH_RECENT_DAYS:-90}"
+    ROWS="$(mktemp -t owrows)"
     interesting=""; quiet=""; detail=""
     for m in $pending; do
       a="$(fetch_attrs "$m")"
-      age="${a##*|}"
       case "$a" in '?|?|?|?|?|?|?') quiet="$quiet $m"; continue;; esac
+      age="${a##*|}"
       keep=0
       case "$age" in ''|*[!0-9]*) : ;; *) [ "$age" -le "$RECENT_DAYS" ] && keep=1;; esac
-      # A cloud-served model is reachable through the subscription he already pays for,
-      # so it stays interesting even when it is not fresh.
       case "$a" in *cloud*) keep=1;; esac
       if [ "$keep" -eq 1 ]; then
         interesting="$interesting $m"
         detail="$detail
   $(printf '%-22s %s' "$m" "$a")"
+        # Machine-readable twin of the display line. Re-parsing $detail with awk was the
+        # first attempt and it was wrong: attribute values contain spaces ("extra high",
+        # "4 weeks ago"), so whitespace splitting tore them apart and every model read as
+        # older than the cutoff. Never re-parse something formatted for a human.
+        printf '%s\t%s\n' "$m" "$a" >> "$ROWS"
       else
         quiet="$quiet $m"
       fi
@@ -159,6 +164,7 @@ case "${1:-check}" in
     nq=$(echo "$quiet" | wc -w | tr -d ' ')
 
     if [ -z "$interesting" ]; then
+      rm -f "$ROWS"
       echo "ollama-watch: backfill — nothing recent or cloud-served was unannounced ($nq older marked quietly)"
       [ "${dry:-0}" -eq 1 ] || mark_announced $quiet
       exit 0
@@ -167,19 +173,26 @@ case "${1:-check}" in
     echo "ollama-watch: $n model(s) he has never been told about (recent or cloud-served):$detail"
     echo "ollama-watch: $nq older/unparseable frontier names marked announced without a message"
 
-    # The TEXT carries the freshest few; stdout above carries all of them. This is a
-    # deliberate cap with a stated reason, not a reflexive limit: the message lands on a
-    # phone, and eighteen model names in one SMS is a wall he will not read — which is the
-    # same failure as saying nothing. Everything is still marked announced, so the ones
-    # not named here do not reappear; they are in the session output he is reading now.
-    HEADLINE_N="${OLLAMA_WATCH_HEADLINE_N:-6}"
-    headline="$(printf '%s\n' "$detail" | grep -v '^$' \
-      | awk '{n=split($0,f,"|"); print f[n]"\t"$1}' \
-      | sort -n | head -"$HEADLINE_N" | cut -f2 | xargs)"
-    extra=$(( n - $(echo "$headline" | wc -w | tr -d ' ') ))
-    msg="Backfill — $n models on ollama you were never told about. Freshest: $headline"
-    [ "$extra" -gt 0 ] && msg="$msg (+$extra more)"
-    notify "$msg — https://ollama.com/library" "$interesting"
+    # The TEXT names models with their AGE and nothing else. Jonathan, reading the first
+    # attempt on his phone: "+12 more is meaningless." A teaser count is not information —
+    # either a model is worth naming or it is not, and a number standing in for the ones
+    # withheld tells him only that something was withheld. So name what is fresh enough to
+    # act on, say nothing about the rest, and put the age beside each name because age is
+    # the reason it is worth a look.
+    HEADLINE_DAYS="${OLLAMA_WATCH_HEADLINE_DAYS:-30}"
+    headline="$(awk -F'\t' -v cutoff="$HEADLINE_DAYS" '
+      { n = split($2, f, "|"); age = f[n]; upd = f[5]
+        if (age ~ /^[0-9]+$/ && age+0 <= cutoff) printf "%s\t%s\t%s\n", age, $1, upd }
+      ' "$ROWS" | sort -n | awk -F'\t' '{printf "%s (%s), ", $2, $3}')"
+    headline="${headline%, }"
+    rm -f "$ROWS"
+
+    if [ -z "$headline" ]; then
+      echo "ollama-watch: nothing fresher than ${HEADLINE_DAYS}d — recording $n quietly, no message"
+      [ "${dry:-0}" -eq 1 ] || mark_announced $interesting $quiet
+      exit 0
+    fi
+    notify "New on ollama: $headline — https://ollama.com/library" "$headline"
     [ "${dry:-0}" -eq 1 ] || mark_announced $interesting $quiet
     ;;
 

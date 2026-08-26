@@ -47,7 +47,21 @@ EOF
 }
 
 export FIXDIR="$FIX"
-run_watch() { OLLAMA_WATCH_HOME="$1" CURL_BIN="$STUB" BOTLINE_BIN=/nonexistent FIXDIR="$FIX" "$TOOL" "${@:2}" 2>&1; }
+# BOTLINE MUST BE A STUB THAT EXISTS, NOT A MISSING PATH.
+# notify() falls through to a REAL `imsg send` when $BOTLINE is not executable. Pointing it
+# at /nonexistent therefore did not disable sending — it routed every non-dry-run assertion
+# to Jonathan's actual phone, and he received two texts of fixture data at 01:05 on
+# 2026-08-26 because of it. A test that can reach a human is not a test.
+SENTLOG="$SB/sent.log"
+cat > "$SB/botline-stub" <<'BLEOF'
+#!/usr/bin/env bash
+echo "STUB-SEND $*" >> "$SENTLOG"
+BLEOF
+chmod +x "$SB/botline-stub"
+run_watch() {
+  OLLAMA_WATCH_HOME="$1" CURL_BIN="$STUB" BOTLINE_BIN="$SB/botline-stub" \
+  SENTLOG="$SENTLOG" FIXDIR="$FIX" JS_NUMBER="+10000000000" "$TOOL" "${@:2}" 2>&1
+}
 
 # ---------------------------------------------------------------------------
 # 1. The parser must never invent capability tags out of JavaScript.
@@ -139,5 +153,15 @@ case "$out" in
   *"no new frontier models"*) pass "RED control: unreadable page is not a change";;
   *) fail "RED control failed — empty page produced an alert: $out";;
 esac
+
+# ---------------------------------------------------------------------------
+# 8. Nothing in this file may reach the real transport. If imsg was called, the stub
+#    log will not account for the sends, and JS_NUMBER above is deliberately unroutable.
+# ---------------------------------------------------------------------------
+if [ -s "$SENTLOG" ]; then
+  pass "sends went to the stub, not to a person ($(wc -l < "$SENTLOG" | tr -d ' ') captured)"
+else
+  fail "no sends captured — the stub was not exercised, so send-safety is unproven"
+fi
 
 finish
