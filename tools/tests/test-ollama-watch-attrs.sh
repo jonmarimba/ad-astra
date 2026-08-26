@@ -164,4 +164,42 @@ else
   fail "no sends captured — the stub was not exercised, so send-safety is unproven"
 fi
 
+# ---------------------------------------------------------------------------
+# 9. A CHANGED DOWNLOAD COUNT IS NOT A CHANGE.
+#    Download counters tick constantly and "9 hours ago" becomes "13 hours ago" on its
+#    own. Diffing the whole attribute line therefore marks every model changed on every
+#    run — that fired live at 07:43 on 2026-08-26 and texted Jonathan eighteen models
+#    whose only difference was 397.1K downloads becoming 397.5K. Worse than the silence
+#    it replaced, and the fastest way to get the channel muted.
+# ---------------------------------------------------------------------------
+H3="$SB/h3"; mkdir -p "$H3"
+mk_library kimi-k3
+mk_page kimi-k3 "extra high" "1M" "2.81T" "vision tools thinking cloud" "4 weeks" "55.9K"
+run_watch "$H3" check >/dev/null 2>&1
+run_watch "$H3" backfill >/dev/null 2>&1
+mk_page kimi-k3 "extra high" "1M" "2.81T" "vision tools thinking cloud" "5 weeks" "61.2K"  # only churn
+out="$(run_watch "$H3" check --dry-run)"
+case "$out" in
+  *"no new frontier models"*) pass "download count and age churn alone do NOT alert";;
+  *) fail "churn-only change alerted — got: $out";;
+esac
+
+# ---------------------------------------------------------------------------
+# 10. A THIN ROW MUST NOT FLAP.
+#     Multi-size pages render inconsistently; `mixtral` alternated between "-" and
+#     "tools" on consecutive live fetches. With usage, context and size all unknown,
+#     tags alone are not enough to call it a change.
+# ---------------------------------------------------------------------------
+H4="$SB/h4"; mkdir -p "$H4"
+mk_library mixtral
+mk_page mixtral "?" "?" "?" "" "1 year" "1.9M"
+run_watch "$H4" check >/dev/null 2>&1
+run_watch "$H4" backfill >/dev/null 2>&1
+mk_page mixtral "?" "?" "?" "tools" "1 year" "1.9M"   # tags appear out of nowhere
+out="$(run_watch "$H4" check --dry-run)"
+case "$out" in
+  *"no new frontier models"*) pass "thin row (usage/context/size all unknown) does not flap";;
+  *) fail "thin row flapped — got: $out";;
+esac
+
 finish

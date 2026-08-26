@@ -234,7 +234,24 @@ case "${1:-check}" in
         [ -z "$old_a" ] && continue                 # new model: the name diff owns it
         [ "$a" = "?|?|?|?|?|?|?" ] && continue            # unreadable page: never a "change"
         [ "$old_a" = "?|?|?|?|?|?|?" ] && continue        # recovering from an unreadable page
-        [ "$a" != "$old_a" ] && changed="$changed $m($old_a -> $a)"
+        # COMPARE ONLY THE STABLE FIELDS: usage|context|size|tags.
+        # Downloads and the humanised "updated" string move on their own — a download
+        # counter ticks between every run and "9 hours ago" becomes "13 hours ago" — so
+        # diffing the whole line marks every model changed on every run. That fired at
+        # 07:43 on 2026-08-26 and texted Jonathan eighteen models whose only difference
+        # was 397.1K downloads becoming 397.5K. Worse than the silence it replaced.
+        # The fields that mean something are the first four; a tier change, a context
+        # revision, a new capability, a size change. Those are what he asked to hear.
+        a_key="$(printf '%s' "$a" | cut -d'|' -f1-4)"
+        old_key="$(printf '%s' "$old_a" | cut -d'|' -f1-4)"
+        # A row whose usage, context AND size are all unknown carries nothing but tags,
+        # and tags alone are not a reliable signal — ollama's multi-size pages render
+        # inconsistently between fetches. `mixtral` flapped between "-" and "tools" on
+        # consecutive requests and would have alerted on every run forever. Require at
+        # least one substantive field to be known before treating a difference as real.
+        case "$a_key" in '?|?|?|'*) continue;; esac
+        case "$old_key" in '?|?|?|'*) continue;; esac
+        [ "$a_key" != "$old_key" ] && changed="$changed $m($old_key -> $a_key)"
       done <<< "$cur_attrs"
     fi
     changed="$(echo "$changed" | xargs 2>/dev/null || true)"
