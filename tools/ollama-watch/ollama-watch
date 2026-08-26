@@ -23,6 +23,9 @@ fi
 . "$CONF"
 
 SEEN="$HOME_DIR/seen.txt"
+ATTRS="$HOME_DIR/attrs.txt"
+ANNOUNCED="$HOME_DIR/announced.txt"
+PARSER="${OLLAMA_WATCH_PARSER:-$(cd "$(dirname "$0")" && pwd)/parse_model_attrs.py}"
 # transport binary injectable for tests (same seam pattern as ambrosio's CURL_BIN)
 CURL="${CURL_BIN:-curl}"
 
@@ -30,6 +33,40 @@ fetch_library() {
   "$CURL" -s --max-time 20 -A "Mozilla/5.0" "https://ollama.com/library" 2>/dev/null \
     | grep -oE 'href="/library/[a-z0-9._-]+"' \
     | sed 's|href="/library/||; s|"||' | sort -u
+}
+
+# A model's ATTRIBUTES, not just its name. Returns "usage|context|size|tags", or the
+# literal "?|?|?|?" when the page cannot be read — never an empty string, because an
+# empty attribute line would diff against a populated one and fire a false alert every
+# time the network hiccups.
+#
+# WHY THIS EXISTS. On 2026-08-25 Jonathan found kimi-k3 himself by browsing ollama.com,
+# having heard nothing from this tool. Two separate defects produced that silence:
+#   1. kimi-k3 reached the library ~29 July. This watcher first ran 12 August and wrote
+#      every model then present into seen.txt under "first run, no notify". So k3 was
+#      born already-seen and could never alert. Same for glm-5.2, kimi-k2.7-code and
+#      nemotron-3-ultra. See the `backfill` subcommand for the remedy.
+#   2. The model later changed ACCESS TIER — it stopped being gated and started serving
+#      on his plan. Name-only diffing cannot see that, because the name never changed.
+# The model page carries "Usage <level> Context <n> Size <n>" and the capability tags,
+# which is enough to catch a tier or capability change on a model already seen.
+fetch_attrs() {
+  local name="$1"
+  "$CURL" -s --max-time 20 -A "Mozilla/5.0" "https://ollama.com/library/$name" 2>/dev/null \
+    | "$PARSER" 2>/dev/null || echo "?|?|?|?|?|?|?"
+}
+
+# Every frontier model's attribute line, as "name<TAB>usage|context|size|tags".
+# Bounded on purpose: the library is ~236 models but only ~45 match the watchlist, and
+# only those get a page fetch. Diffing attributes for all 236 would be 236 HTTP requests
+# every four hours to learn nothing about models nobody wants.
+fetch_frontier_attrs() {
+  local m
+  while IFS= read -r m; do
+    [ -z "$m" ] && continue
+    is_frontier "$m" || continue
+    printf '%s\t%s\n' "$m" "$(fetch_attrs "$m")"
+  done
 }
 
 is_frontier() {
@@ -40,35 +77,168 @@ is_frontier() {
   return 1
 }
 
+# Everything this tool has actually TOLD Jonathan about, as opposed to merely recorded.
+# seen.txt answers "was this in the library last time I looked"; announced.txt answers
+# "has he ever been told". Those are different questions and conflating them is the bug
+# that let kimi-k3 through: it was in the library before this watcher existed, so it was
+# born already-seen, and silence was indistinguishable from all-clear.
+mark_announced() {
+  local m
+  for m in "$@"; do
+    grep -qxF "$m" "$ANNOUNCED" 2>/dev/null || echo "$m" >> "$ANNOUNCED"
+  done
+}
+
+notify() {
+  local msg="$1" what="$2"
+  if [ "${dry:-0}" -eq 1 ]; then
+    echo "[dry-run] would notify JS: $msg"
+  elif [ -x "$BOTLINE" ]; then
+    "$BOTLINE" send --from ollama-watch "$msg" && echo "notified JS via botline: $what"
+  else
+    imsg send --to "${JS_NUMBER:-+17049185655}" --text "[ollama-watch] $msg" && echo "notified JS via imsg: $what"
+  fi
+}
+
 case "${1:-check}" in
   list) fetch_library ;;
+  attrs) fetch_library | fetch_frontier_attrs ;;
+
+  # backfill — say what is already in the library that he has never been told about.
+  # Needed once because this watcher started on 12 August against a library that already
+  # held kimi-k3, glm-5.2, kimi-k2.7-code, qwen3.8, mistral-large-3 and others, all of
+  # which went into seen.txt silently under "first run, no notify" and could never alert.
+  # Idempotent: everything reported is written to announced.txt, so a second run is quiet.
+  backfill)
+    dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
+    cur="$(fetch_library)"
+    [ -z "$cur" ] && { echo "ollama-watch: fetch failed (empty) — nothing done"; exit 1; }
+    touch "$ANNOUNCED"
+    pending=""
+    while IFS= read -r m; do
+      [ -z "$m" ] && continue
+      is_frontier "$m" || continue
+      grep -qxF "$m" "$ANNOUNCED" 2>/dev/null && continue
+      pending="$pending $m"
+    done <<< "$cur"
+    pending="$(echo "$pending" | xargs 2>/dev/null || true)"
+    [ -z "$pending" ] && { echo "ollama-watch: backfill — nothing unannounced"; exit 0; }
+
+    # Two piles, split on AGE rather than on cloud-vs-local.
+    #
+    # The first cut of this used the cloud tag, on the reasoning that anything without it
+    # was "a local weight family he has had for years". Jonathan caught that: qwen3.8 was
+    # updated ONE WEEK ago and qwen3.6 NINE HOURS ago, both locally-pullable, both exactly
+    # what he wants to hear about — especially with a second inference host arriving. Age
+    # is the honest signal. everythinglm really is two years old; qwen3.6 is not.
+    #
+    # Both piles are marked announced so neither returns. Only the first gets sent, because
+    # a backfill listing dolphin-mixtral beside kimi-k3 teaches him to ignore the channel,
+    # which is the failure this whole change exists to undo.
+    RECENT_DAYS="${OLLAMA_WATCH_RECENT_DAYS:-90}"
+    interesting=""; quiet=""; detail=""
+    for m in $pending; do
+      a="$(fetch_attrs "$m")"
+      age="${a##*|}"
+      case "$a" in '?|?|?|?|?|?|?') quiet="$quiet $m"; continue;; esac
+      keep=0
+      case "$age" in ''|*[!0-9]*) : ;; *) [ "$age" -le "$RECENT_DAYS" ] && keep=1;; esac
+      # A cloud-served model is reachable through the subscription he already pays for,
+      # so it stays interesting even when it is not fresh.
+      case "$a" in *cloud*) keep=1;; esac
+      if [ "$keep" -eq 1 ]; then
+        interesting="$interesting $m"
+        detail="$detail
+  $(printf '%-22s %s' "$m" "$a")"
+      else
+        quiet="$quiet $m"
+      fi
+    done
+    interesting="$(echo "$interesting" | xargs 2>/dev/null || true)"
+    quiet="$(echo "$quiet" | xargs 2>/dev/null || true)"
+    nq=$(echo "$quiet" | wc -w | tr -d ' ')
+
+    if [ -z "$interesting" ]; then
+      echo "ollama-watch: backfill — nothing recent or cloud-served was unannounced ($nq older marked quietly)"
+      [ "${dry:-0}" -eq 1 ] || mark_announced $quiet
+      exit 0
+    fi
+    n=$(echo "$interesting" | wc -w | tr -d ' ')
+    echo "ollama-watch: $n model(s) he has never been told about (recent or cloud-served):$detail"
+    echo "ollama-watch: $nq older/unparseable frontier names marked announced without a message"
+
+    # The TEXT carries the freshest few; stdout above carries all of them. This is a
+    # deliberate cap with a stated reason, not a reflexive limit: the message lands on a
+    # phone, and eighteen model names in one SMS is a wall he will not read — which is the
+    # same failure as saying nothing. Everything is still marked announced, so the ones
+    # not named here do not reappear; they are in the session output he is reading now.
+    HEADLINE_N="${OLLAMA_WATCH_HEADLINE_N:-6}"
+    headline="$(printf '%s\n' "$detail" | grep -v '^$' \
+      | awk '{n=split($0,f,"|"); print f[n]"\t"$1}' \
+      | sort -n | head -"$HEADLINE_N" | cut -f2 | xargs)"
+    extra=$(( n - $(echo "$headline" | wc -w | tr -d ' ') ))
+    msg="Backfill — $n models on ollama you were never told about. Freshest: $headline"
+    [ "$extra" -gt 0 ] && msg="$msg (+$extra more)"
+    notify "$msg — https://ollama.com/library" "$interesting"
+    [ "${dry:-0}" -eq 1 ] || mark_announced $interesting $quiet
+    ;;
+
   check)
     dry=0; [ "${2:-}" = "--dry-run" ] && dry=1
     cur="$(fetch_library)"
     [ -z "$cur" ] && { echo "ollama-watch: fetch failed (empty) — leaving state untouched"; exit 1; }
+    touch "$ANNOUNCED"
     if [ ! -f "$SEEN" ]; then
       printf '%s\n' "$cur" > "$SEEN"
+      printf '%s\n' "$cur" | fetch_frontier_attrs > "$ATTRS"
+      # Deliberately NOT marking these announced. A fresh seed means he has been told
+      # nothing, and `backfill` is how he finds out what is already there. The old
+      # behaviour — seed silently and treat everything as known — is the whole defect.
       echo "ollama-watch: seeded $(printf '%s\n' "$cur" | wc -l | tr -d ' ') models (first run, no notify)"
+      echo "ollama-watch: run 'ollama-watch backfill' to hear what is already in the library"
       exit 0
     fi
-    # new = in cur, not in seen
+
+    # --- new names -------------------------------------------------------------
     new="$(comm -13 "$SEEN" <(printf '%s\n' "$cur"))"
     hits=""
     while IFS= read -r m; do
       [ -z "$m" ] && continue
-      if is_frontier "$m"; then hits="$hits $m"; fi
+      is_frontier "$m" && hits="$hits $m"
     done <<< "$new"
-    # update snapshot regardless (so we don't re-alert)
-    printf '%s\n' "$cur" > "$SEEN"
     hits="$(echo "$hits" | xargs 2>/dev/null || true)"
-    [ -z "$hits" ] && { echo "ollama-watch: no new frontier models"; exit 0; }
-    local_msg="New frontier model(s) on ollama: $hits — https://ollama.com/library"
-    if [ "$dry" -eq 1 ]; then
-      echo "[dry-run] would notify JS: $local_msg"
-    elif [ -x "$BOTLINE" ]; then
-      "$BOTLINE" send --from ollama-watch "$local_msg" && echo "notified JS via botline: $hits"
-    else
-      imsg send --to "${JS_NUMBER:-+17049185655}" --text "[ollama-watch] $local_msg" && echo "notified JS via imsg: $hits"
-    fi ;;
-  *) echo "usage: ollama-watch check [--dry-run] | list"; exit 1 ;;
+
+    # --- changed attributes on models already seen ------------------------------
+    # This is the half that catches a model going free, gaining vision, or having its
+    # context window revised — none of which change the name, and all of which are
+    # exactly the "something new and interesting" he asked to hear about.
+    cur_attrs="$(printf '%s\n' "$cur" | fetch_frontier_attrs)"
+    changed=""
+    if [ -s "$ATTRS" ]; then
+      while IFS=$'\t' read -r m a; do
+        [ -z "$m" ] && continue
+        old_a="$(grep -F "$(printf '%s\t' "$m")" "$ATTRS" 2>/dev/null | head -1 | cut -f2-)"
+        [ -z "$old_a" ] && continue                 # new model: the name diff owns it
+        [ "$a" = "?|?|?|?|?|?|?" ] && continue            # unreadable page: never a "change"
+        [ "$old_a" = "?|?|?|?|?|?|?" ] && continue        # recovering from an unreadable page
+        [ "$a" != "$old_a" ] && changed="$changed $m($old_a -> $a)"
+      done <<< "$cur_attrs"
+    fi
+    changed="$(echo "$changed" | xargs 2>/dev/null || true)"
+
+    # snapshots update regardless, so nothing re-alerts
+    printf '%s\n' "$cur" > "$SEEN"
+    printf '%s\n' "$cur_attrs" > "$ATTRS"
+
+    if [ -z "$hits" ] && [ -z "$changed" ]; then
+      echo "ollama-watch: no new frontier models"
+      exit 0
+    fi
+    msg=""
+    [ -n "$hits" ]    && msg="New frontier model(s) on ollama: $hits."
+    [ -n "$changed" ] && msg="$msg Changed: $changed."
+    notify "$msg — https://ollama.com/library" "${hits} ${changed}"
+    [ "${dry:-0}" -eq 1 ] || { [ -n "$hits" ] && mark_announced $hits; }
+    ;;
+  *) echo "usage: ollama-watch check [--dry-run] | backfill [--dry-run] | attrs | list"; exit 1 ;;
 esac
