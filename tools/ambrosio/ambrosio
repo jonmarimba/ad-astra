@@ -46,6 +46,7 @@ mkdir -p "$AMBROSIO_HOME"
 CONF="$AMBROSIO_HOME/config"
 BOTLINE="${BOTLINE_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/botline/botline}"
 SEEN="$AMBROSIO_HOME/seen.txt"; touch "$SEEN"
+TRENDSEEN="$AMBROSIO_HOME/trending_told.txt"
 WANTLIST="$AMBROSIO_HOME/wantlist.txt"
 if [ ! -f "$WANTLIST" ]; then
 cat > "$WANTLIST" <<'WL'
@@ -68,6 +69,7 @@ LMS_BIN="~/.lmstudio/bin/lms"      # lms isn't on the non-interactive ssh PATH; 
 LMS_FORMAT="--mlx"                 # M5 is Apple Silicon → MLX; lms picks a hardware-fitting quant
 MAX_PER_RUN="2"                    # don't blast a dozen multi-GB downloads in one go
 MIN_PARAMS_B="7"                   # skip toy models (<7B) — JS wants frontier to play with
+TREND_LIMIT="${TREND_LIMIT:-80}"   # how deep into HF trending the WATCH looks (it pulls nothing)
 # Cloud surfaces run whether or not the M5 is awake. Set CLOUD="0" to make ambrosio
 # local-only again.
 CLOUD="1"
@@ -124,6 +126,85 @@ if isinstance(ms,list):
         seen.add(term.lower())
         print(term)
 " 2>>"$AMBROSIO_HOME/pull.log"
+}
+
+# ------------------------------------------------------------------------------------------
+# TRENDING WATCH — a WIDER net than the puller, on purpose.
+#
+# Jonathan, 2026-08-26: "I don't want to be the last to know about something trending."
+# hot_candidates() applies two independent narrowings before anything is pulled: the org must
+# be a known lab, and the family must be on WATCHLIST. Both are right for deciding what to put
+# on his disk and both are wrong for deciding what he hears about. A new lab's first release
+# passes neither gate by definition, which is exactly the model he would want to hear about.
+#
+# So this reports trending models regardless of org and regardless of family. It keeps only the
+# two filters that are about quality rather than familiarity: the junk-word list and the size
+# floor. It NEVER pulls. Telling him and spending his disk are different decisions and this
+# function only makes the first one.
+trending_watch(){
+  "$CURL" -s --max-time 20 "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=$TREND_LIMIT&pipeline_tag=text-generation" 2>>"$AMBROSIO_HOME/pull.log" \
+   | MIN_PARAMS_B="$MIN_PARAMS_B" WATCHLIST="$WATCHLIST" python3 -c "
+import sys,json,os,re
+minp=float(os.environ.get('MIN_PARAMS_B','7'))
+wl=os.environ['WATCHLIST'].lower().split()
+KNOWN={'deepseek-ai','nvidia','zai-org','qwen','moonshotai','meta-llama','mistralai',
+       'minimaxai','microsoft','google','ai21labs','allenai','lmstudio-community','mlx-community'}
+JUNK=('abliterated','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp')
+def biggest_size_b(tail):
+    sizes=[float(m.group(1)) for t in re.split(r'[-_]', tail) for m in [re.match(r'([0-9.]+)b\$', t, re.I)] if m]
+    return max(sizes) if sizes else None
+try: ms=json.load(sys.stdin)
+except Exception: ms=[]
+rank=0
+for m in ms if isinstance(ms,list) else []:
+    mid=(m.get('id') or m.get('modelId') or '') if isinstance(m,dict) else ''
+    if not mid: continue
+    rank+=1
+    org=mid.split('/')[0].lower(); low=mid.lower(); tail=mid.split('/')[-1]
+    if any(j in low for j in JUNK): continue
+    sz=biggest_size_b(tail)
+    if sz is not None and sz < minp: continue
+    # Why it would NOT have been pulled — the whole point of reporting it.
+    why=[]
+    if org not in KNOWN: why.append('new org')
+    if not any(w in low for w in wl): why.append('off-watchlist')
+    print('%s\t%d\t%s' % (mid, rank, ','.join(why) or 'would-pull'))
+" 2>>"$AMBROSIO_HOME/pull.log"
+}
+
+# Report anything trending that we have not already mentioned. Deliberately separate state from
+# seen.txt: seen.txt means "considered for pulling", this means "he has been told it exists".
+# Conflating the two is what made ollama-watch permanently silent about kimi-k3.
+run_trending(){
+  [ "${TREND:-1}" = "1" ] || return 0
+  touch "$TRENDSEEN"
+  # ONE model per run, the highest-trending unseen one, in a sentence. Never a list.
+  # Jonathan, 2026-08-26: "sending me laundry lists is dumb" — the same correction he made
+  # about "+12 more" on the ollama watcher. A list of ids is not information; it is a chore
+  # handed back. Everything else this run found is recorded as told and silently dropped,
+  # because a model that was only ever worth a bullet was not worth a message.
+  best_mid=""; best_why=""; best_rank=""
+  while IFS=$'\t' read -r mid rank why; do
+    [ -z "$mid" ] && continue
+    grep -qxF "$mid" "$TRENDSEEN" && continue
+    echo "$mid" >>"$TRENDSEEN"
+    [ "$why" = "would-pull" ] && continue      # the puller speaks for these
+    [ -n "$best_mid" ] && continue             # already have the top-ranked one
+    best_mid="$mid"; best_why="$why"; best_rank="$rank"
+  done <<EOF
+$(trending_watch)
+EOF
+  [ -z "$best_mid" ] && return 0
+  case "$best_why" in
+    *"new org"*) reason="an org we do not pull from" ;;
+    *) reason="a family that is not on the watchlist" ;;
+  esac
+  msg="$best_mid is #$best_rank trending on Hugging Face and ambrosio will not pull it — $reason. Say the word if you want it."
+  if [ "${dry:-0}" -eq 1 ]; then log "[dry-run] would notify: $msg"
+  elif [ -x "$BOTLINE" ]; then
+    if "$BOTLINE" send --from ambrosio "$msg" >/dev/null 2>>"$AMBROSIO_HOME/pull.log"; then log "told JS about $best_mid"
+    else log "notify FAILED (botline send) — trending model NOT reported: $best_mid"; fi
+  fi
 }
 
 # resolve a family term -> full HF URL of the best MLX repo (staff-picks search misses most
@@ -308,6 +389,10 @@ OMNIROUTE_SYNC_BIN="${OMNIROUTE_SYNC_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tool
 
 run_cloud() {
   [ "${CLOUD:-1}" = "1" ] || { log "cloud surfaces disabled (CLOUD=0)"; return 0; }
+
+  # Trending watch first: it needs no host and no subscription, and it is the half that
+  # answers "am I the last to know". Set TREND=0 to silence it.
+  run_trending
 
   if [ -x "$OLLAMA_WATCH_BIN" ]; then
     # --dry-run MUST reach the watcher. It did not until 2026-08-26, so `ambrosio check
