@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Median output tokens per second per model, from OmniRoute's call_logs.
+
+    omniroute-speed [--min-tokens 200] [--since 2026-08-01] [--model glm]
+
+WHY NOT JUST AVERAGE. Averaging `tokens_out / duration` over every row put `glm-5.2` at
+716-792 tok/s on 2026-08-26. The real sustained figure is around 114. Four calls that
+returned in under half a second carried the whole mean: a 60-token reply finishing in 80ms
+scores 750 tok/s, and a handful of those drown a hundred honest generations. So this reports
+a MEDIAN over calls that actually generated something, and prints the sample count beside it
+so a figure resting on three rows is visibly resting on three rows.
+
+WHAT THIS NUMBER IS NOT. `duration` is measured at the router and includes local queue time
+and prompt processing, and there is no time-to-first-token column, so a slow figure cannot be
+split into "the model generates slowly" versus "the request waited". For tuning MLX on a local
+host that distinction is the whole question, and this tool cannot answer it. It answers
+"what throughput did this model actually deliver end to end", which is the right number for
+choosing a model and the wrong number for tuning one.
+
+Cache hits are excluded. A response served from cache did not generate its tokens and would
+report an impossible rate.
+"""
+import argparse
+import os
+import shutil
+import sqlite3
+import statistics
+import sys
+import tempfile
+
+DEFAULT_DB = os.path.expanduser("~/.omniroute/storage.sqlite")
+
+
+def open_readonly(path):
+    """Copy the db plus its WAL before reading.
+
+    A live SQLite on this machine is always mid-write. Reading the file in place risks a
+    torn read, and opening it `immutable=1` ignores the WAL, which silently hides the newest
+    rows — exactly the rows anyone asking about throughput cares about.
+    """
+    tmp = tempfile.mkdtemp()
+    base = os.path.join(tmp, "storage.sqlite")
+    shutil.copy(path, base)
+    for ext in ("-wal", "-shm"):
+        if os.path.exists(path + ext):
+            shutil.copy(path + ext, base + ext)
+    return sqlite3.connect(base)
+
+
+def rates(db, min_tokens, since, model_filter):
+    """(model, [tok/s samples]) for calls that generated more than min_tokens."""
+    sql = [
+        "SELECT model, tokens_out, duration FROM call_logs",
+        "WHERE tokens_out > ? AND duration > 0",
+        # A cache read means the tokens were not generated on this call.
+        "AND (tokens_cache_read IS NULL OR tokens_cache_read = 0)",
+        "AND (status IS NULL OR status < 400)",
+    ]
+    args = [min_tokens]
+    if since:
+        sql.append("AND timestamp >= ?")
+        args.append(since)
+    if model_filter:
+        sql.append("AND lower(model) LIKE ?")
+        args.append("%" + model_filter.lower() + "%")
+    out = {}
+    for name, tokens, duration in db.execute(" ".join(sql), args):
+        if not name or not duration:
+            continue
+        out.setdefault(name, []).append(tokens / (duration / 1000.0))
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    # 200 is not a magic number: it is the point below which a single fast first token
+    # dominates the measurement. Raise it for a stricter sample, lower it and the medians
+    # start drifting upward for the reason in the header.
+    ap.add_argument("--min-tokens", type=int, default=200)
+    ap.add_argument("--since", default=None, help="ISO date; call_logs.timestamp is text")
+    ap.add_argument("--model", default=None, help="substring filter")
+    ap.add_argument("--db", default=os.environ.get("OMNIROUTE_DB", DEFAULT_DB))
+    args = ap.parse_args()
+
+    if not os.path.exists(args.db):
+        sys.stderr.write("omniroute-speed: no database at %s\n" % args.db)
+        return 2
+
+    db = open_readonly(args.db)
+    data = rates(db, args.min_tokens, args.since, args.model)
+    if not data:
+        # Silence would read as "everything is slow". Say which filter emptied the set.
+        print("no calls above %d output tokens%s%s" % (
+            args.min_tokens,
+            " since %s" % args.since if args.since else "",
+            " matching '%s'" % args.model if args.model else "",
+        ))
+        return 0
+
+    rows = []
+    for name, samples in data.items():
+        rows.append((statistics.median(samples), len(samples), name))
+    rows.sort(reverse=True)
+    width = max(len(r[2]) for r in rows)
+    print("%-*s  %9s  %7s" % (width, "model", "tok/s", "calls"))
+    for median, count, name in rows:
+        # A median over one or two calls is a single measurement wearing a statistic's clothes.
+        mark = "  (thin)" if count < 3 else ""
+        print("%-*s  %9.1f  %7d%s" % (width, name, median, count, mark))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
