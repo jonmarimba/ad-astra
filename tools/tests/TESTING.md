@@ -20,4 +20,4 @@ Copy the shape of `test-botline.sh`. Source `lib.sh`, sandbox via `$SB`, gate de
 
 ## Review step
 
-New tools and non-trivial changes get an adversarial review before shipping: the `code-review` skill on the diff, or a `convoke` round (skills/convocation) with the other CLIs as independent reviewers. Findings get fixed in place, not appended.
+New tools and non-trivial changes get an adversarial review before shipping: the `code-review` skill on the diff, or a `panel` round (skills/convocation) with the other CLIs as independent reviewers. Findings get fixed in place, not appended.

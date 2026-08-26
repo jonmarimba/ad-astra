@@ -17,9 +17,9 @@ Each agent gets the identical task file, a separate working directory, and NO si
     /opt/homebrew/bin/codex exec "$(cat TASK.md)" > out/codex.md
     /opt/homebrew/bin/qwen -p "$(cat TASK.md)" > out/qwen.md
 
-(Full binary paths on purpose — bare names break from launchd/cron/ssh contexts. The runner: /Users/jonathan/svnCheckouts/js-db-ad-astra/tools/convocation/convoke, binaries overridable via CLAUDE_BIN/CODEX_BIN/QWEN_BIN.)
+(Full binary paths on purpose — bare names break from launchd/cron/ssh contexts. The runner: /Users/jonathan/svnCheckouts/js-db-ad-astra/tools/convocation/panel, binaries overridable via CLAUDE_BIN/CODEX_BIN/QWEN_BIN.)
 
-(The runner at /Users/jonathan/svnCheckouts/js-db-ad-astra/tools/convocation/convoke does this round for you.) Resist the urge to peek and steer mid-round — a steered agent is a copy of you.
+(The runner at /Users/jonathan/svnCheckouts/js-db-ad-astra/tools/convocation/panel does this round for you.) Resist the urge to peek and steer mid-round — a steered agent is a copy of you.
 
 ## Round 2 — ADVERSARIAL
 Each agent receives the OTHER agents' round-1 outputs with instructions to attack, not review: "Find what is WRONG. Fact-check every checkable claim with a live probe. Being polite about an error is a failure. Produce corrections with receipts." Feed A's output to B and C, B's to A and C, etc. Same headless mechanics, new task file per agent.
@@ -38,8 +38,8 @@ Deliverable: one SYNTHESIS doc + the scorecard. The synthesis note in Apple Note
 ## Cross-fix variant (for prose and design artifacts)
 When the convocation targets an editable artifact (a document, a design, a config) rather than a codebase, replace round 2 with a cross-fix round. Model A's findings go to model B for fixing. Model B's findings go to model A. The original finder then approves or rejects each fix. The fixer has to understand the finding deeply enough to apply it, and the finder holds real veto power over fixes that changed meaning or missed the point. The cross-fix is the cross-brand verification — a different architecture both interprets and corrects the finding. Triage before cross-fixing: not every finding is worth a fix. Pick the ones that change how a reader understands the document. Leave marginal style preferences on the floor.
 
-## When to convoke vs when not
-Convoke: research with checkable claims, audits, design reviews, anything feeding a purchase or an architecture decision. Don't convoke: mechanical tasks, pure preference calls, or anything where one live probe answers the question outright — run the probe instead.
+## When to panel vs when not
+Convene a panel: research with checkable claims, audits, design reviews, anything feeding a purchase or an architecture decision. Don't panel: mechanical tasks, pure preference calls, or anything where one live probe answers the question outright — run the probe instead.
 
 ## Cost shape
 Three agents × two rounds ≈ 6 headless runs. Cheap models are fine for round 1 breadth; put the strongest model on round 2 attacks and the adjudication.
