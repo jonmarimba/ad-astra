@@ -38,6 +38,9 @@
 # it's a standing list that keeps getting retried every 4h run until it lands or is removed.
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+# Where this script and its helpers live, resolved from the script itself so a symlink on PATH,
+# a cron invocation and an interactive run all find version_gate.py.
+AMBROSIO_DIR="$(cd "$(dirname "$(readlink "$0" || echo "$0")")" && pwd)"
 AMBROSIO_HOME="${AMBROSIO_HOME:-$HOME/.ambrosio}"
 mkdir -p "$AMBROSIO_HOME"
 CONF="$AMBROSIO_HOME/config"
@@ -240,16 +243,21 @@ run_local() {
       # that happened: same family, different version number, nothing new. Only gates the
       # reactive scan; a want-list entry is an explicit ask and always goes through.
       if [ "$src" = "SCAN" ]; then
-        # leading letters only, stopping at the first digit — a strip-these-characters approach
-        # (tried first, found live, 2026-08-14) leaves stray letters behind when a unit suffix
-        # sits right after a digit ("qwen3.6-35b" stripped digits/dots/dashes still left "b" from
-        # "35b" stuck onto "qwen", becoming "qwenb" — silently never matched "qwen" at all).
-        prefix="$(printf '%s' "$term" | tr '[:upper:]' '[:lower:]' | python3 -c "import sys,itertools; print(''.join(itertools.takewhile(str.isalpha, sys.stdin.read())))")"
-        if [ -n "$prefix" ] && printf '%s\n' "$have" | tr '[:upper:]' '[:lower:]' | grep -qF "$prefix"; then
-          log "skip '$term' — same family ('$prefix') already on $HOST; not obviously new, not pulling (add it to wantlist.txt to force it anyway)"
-          echo "$term" >>"$SEEN"
-          continue
-        fi
+        # Compare VERSIONS within the family, not just the family name. A prefix-only check
+        # suppressed GLM-5.3-Flash on 2026-08-26 because glm-4.7-flash was already on the host —
+        # two major versions read as "not obviously new". version_gate.py answers one of three
+        # words and never suppresses on unknown; see its header and
+        # tools/tests/test-ambrosio-version-gate.sh, which keeps the 2026-08-14 dead-weight case
+        # (Nemotron-3-Nano beside Nemotron-3.5-Lightning) suppressed as a RED control.
+        verdict="$(printf '%s\n' "$have" | python3 "$AMBROSIO_DIR/version_gate.py" "$term")"
+        case "$verdict" in
+          redundant*)
+            log "skip '$term' — $HOST already has ${verdict#redundant }, same or newer version (add it to wantlist.txt to force it anyway)"
+            echo "$term" >>"$SEEN"
+            continue ;;
+          upgrade*)
+            log "'$term' is a version jump over ${verdict#upgrade } on $HOST — pulling" ;;
+        esac
       fi
       url="$(resolve_mlx_url "$term")"
       [ -z "$url" ] && { log "no MLX repo found yet for '$term' — will retry next run (quant may not exist yet)"; continue; }
@@ -302,7 +310,15 @@ run_cloud() {
   [ "${CLOUD:-1}" = "1" ] || { log "cloud surfaces disabled (CLOUD=0)"; return 0; }
 
   if [ -x "$OLLAMA_WATCH_BIN" ]; then
-    out="$("$OLLAMA_WATCH_BIN" check 2>&1)"; rc=$?
+    # --dry-run MUST reach the watcher. It did not until 2026-08-26, so `ambrosio check
+    # --dry-run` sent Jonathan a real text about glm-5.3-flash while the operator believed
+    # nothing would leave the machine. A dry run that can reach a human is not a dry run,
+    # and the same defect in a test file had already texted him fixture data the night before.
+    if [ "${dry:-0}" -eq 1 ]; then
+      out="$("$OLLAMA_WATCH_BIN" check --dry-run 2>&1)"; rc=$?
+    else
+      out="$("$OLLAMA_WATCH_BIN" check 2>&1)"; rc=$?
+    fi
     # ollama-watch narrates its no-op ("no new frontier models"). On its own schd job that
     # was harmless; behind the front door it would poke the session every run forever, and
     # a poke that is always empty is how a real one gets skimmed past. Drop ONLY that known
