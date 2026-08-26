@@ -16,6 +16,8 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; done
 [ -f "$TASK" ] || { echo "no task file: $TASK"; exit 1; }
 mkdir -p "$OUT"
+STATUS="$OUT/${TAG}_STATUS"
+: > "$STATUS"
 PROMPT="$(cat "$TASK")"
 CLAUDE_BIN="${CLAUDE_BIN:-/opt/homebrew/bin/claude}"
 CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
@@ -59,8 +61,16 @@ done
 # not leave a 0-byte answer file behind a cheery "done" (a round missing a voice is invalid)
 run_agent(){ # run_agent <name> <outfile> <cmd...>
   local a="$1" o="$2"; shift 2
-  if "$@" > "$o" 2>"$o.err"; then echo "done: $a"
-  else local rc=$?; echo "panel: agent '$a' FAILED rc=$rc (stderr in $o.err)" >&2; return "$rc"; fi
+  if "$@" > "$o" 2>"$o.err"; then
+    echo "done: $a"
+    printf 'ok    %s  %s bytes\n' "$a" "$(wc -c < "$o")" >> "$STATUS"
+  else
+    local rc=$?
+    printf '\n\nFAIL: %s exited %s; stderr is in %s.err\n' "$a" "$rc" "$o" >> "$o"
+    printf 'FAIL  %s  exit %s\n' "$a" "$rc" >> "$STATUS"
+    echo "panel: agent '$a' FAILED rc=$rc (stderr in $o.err)" >&2
+    return "$rc"
+  fi
 }
 pids=()
 for a in $(echo "$AGENTS" | tr ',' ' '); do
@@ -75,4 +85,5 @@ failed=0
 for p in "${pids[@]}"; do wait "$p" || failed=1; done
 echo "--- $TAG outputs in $OUT/:"
 ls -la "$OUT/${TAG}_"*.md 2>/dev/null
+sort "$STATUS"
 [ "$failed" -eq 0 ] || { echo "panel: round INCOMPLETE — at least one voice failed" >&2; exit 1; }
