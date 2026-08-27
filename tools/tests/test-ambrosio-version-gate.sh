@@ -83,4 +83,40 @@ case "$out" in
   *) fail "unversioned candidate was suppressed — got: $out";;
 esac
 
+# ---------------------------------------------------------------------------
+# AN OLD CONFIG FILE MUST NOT KILL A NEW SETTING.
+# ambrosio writes its config once, on first run, and every later run just sources it. A setting
+# added only to that heredoc is invisible to existing installations, and under `set -u` the
+# first use aborts. TREND_LIMIT shipped that way on 2026-08-26: the 23:43 scheduled run died
+# with "TREND_LIMIT: unbound variable" while ambrosio still exited 0 and reported healthy.
+#
+# This runs the real script against a config written the way an OLD installation's would be —
+# the settings that existed before tonight, and nothing since. Checking behaviour rather than
+# grepping for a pattern, because the pattern cannot tell a setting added last week from one
+# that has always been there.
+# ---------------------------------------------------------------------------
+AMB="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
+OLDHOME="$SB/oldhome"; mkdir -p "$OLDHOME"
+cat > "$OLDHOME/config" <<'CFG'
+HOST="unreachable.invalid"
+LMS_PORT="1234"
+SSH_TARGET="unreachable.invalid"
+WATCHLIST="glm kimi"
+SIZE_CAP_GB="80"
+OMNIROUTE_NODE="LM Studio M5"
+LMS_BIN="/nonexistent/lms"
+LMS_FORMAT="--mlx"
+MAX_PER_RUN="2"
+MIN_PARAMS_B="7"
+CLOUD="1"
+CFG
+# CURL points at a stub so no assertion touches the network; the host is unreachable so the
+# local half is a no-op. What is under test is only whether the script survives its own config.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SB/bin-curl"; chmod +x "$SB/bin-curl" 2>/dev/null || { mkdir -p "$SB"; printf '#!/usr/bin/env bash\nexit 0\n' > "$SB/bin-curl"; chmod +x "$SB/bin-curl"; }
+out="$(AMBROSIO_HOME="$OLDHOME" CURL="$SB/bin-curl" BOTLINE_BIN=/nonexistent timeout 120 bash "$AMB" check --dry-run 2>&1)"
+case "$out" in
+  *"unbound variable"*) fail "a config predating tonight's settings aborts the run: $out";;
+  *) pass "a config written before the newest settings does not abort the run";;
+esac
+
 finish

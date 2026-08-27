@@ -78,6 +78,13 @@ fi
 # shellcheck disable=SC1090
 . "$CONF"
 LMS_BIN="${LMS_BIN:-~/.lmstudio/bin/lms}"; LMS_FORMAT="${LMS_FORMAT:---mlx}"; MAX_PER_RUN="${MAX_PER_RUN:-2}"; MIN_PARAMS_B="${MIN_PARAMS_B:-7}"
+# EVERY new setting needs a default HERE, not only in the heredoc above. That heredoc writes the
+# config file once, on first run; an existing installation never sees anything added to it later.
+# TREND_LIMIT was added to the heredoc alone on 2026-08-26 and the 23:43 scheduled run died with
+# "TREND_LIMIT: unbound variable" under set -u, while ambrosio still exited 0 and reported
+# healthy. Both halves of that are the same disease: a new knob invisible to existing installs,
+# and a failure that did not surface.
+TREND_LIMIT="${TREND_LIMIT:-80}"; TREND="${TREND:-1}"; CLOUD="${CLOUD:-1}"
 export WATCHLIST HOST LMS_PORT SSH_TARGET SIZE_CAP_GB OMNIROUTE_NODE LMS_BIN LMS_FORMAT MAX_PER_RUN MIN_PARAMS_B
 
 log(){ echo "ambrosio: $*" >&2; }   # stderr only — schd command-job stays silent on no-op
@@ -392,7 +399,13 @@ run_cloud() {
 
   # Trending watch first: it needs no host and no subscription, and it is the half that
   # answers "am I the last to know". Set TREND=0 to silence it.
-  run_trending
+  #
+  # Its failure must SPEAK. On 2026-08-26 it died on an unbound variable and ambrosio exited 0,
+  # so the front door reported healthy while the half that tells him about new models was doing
+  # nothing at all. stdout, not the log, because the scheduler pokes on non-empty stdout.
+  if ! run_trending; then
+    echo "ambrosio: trending watch FAILED (rc=$?) — new models outside the watchlist went unreported this run"
+  fi
 
   if [ -x "$OLLAMA_WATCH_BIN" ]; then
     # --dry-run MUST reach the watcher. It did not until 2026-08-26, so `ambrosio check
