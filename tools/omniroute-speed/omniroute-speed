@@ -21,6 +21,7 @@ Cache hits are excluded. A response served from cache did not generate its token
 report an impossible rate.
 """
 import argparse
+import atexit
 import os
 import shutil
 import sqlite3
@@ -39,6 +40,10 @@ def open_readonly(path):
     rows — exactly the rows anyone asking about throughput cares about.
     """
     tmp = tempfile.mkdtemp()
+    # The copy is read once. Left behind, a scheduled caller accumulates copies of a large
+    # SQLite file in $TMPDIR forever — same defect a panel found in lms-prune on 2026-08-26,
+    # and it was in both files because the second was written from the first.
+    atexit.register(shutil.rmtree, tmp, True)
     base = os.path.join(tmp, "storage.sqlite")
     shutil.copy(path, base)
     for ext in ("-wal", "-shm"):
