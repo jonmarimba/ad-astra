@@ -1,4 +1,22 @@
-#!/usr/bin/env bash
+    body="$(printf '%s' "$out" | python3 -c "
+import json,sys
+# The real shape, confirmed against the live binary on 2026-08-27:
+#   {'status':'ok','result':{'payloads':[{'text':...}]}}
+# An earlier version guessed at top-level text/reply/message/content keys and would have
+# found none of them, turning every review into an empty body — which this script treats as
+# 'nothing found'. A parser that cannot find the answer must say so, not report silence.
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('PARSE-ERROR: reviewer output was not JSON'); raise SystemExit
+if d.get('status') not in (None, 'ok'):
+    print('REVIEWER-STATUS: %s' % d.get('status')); raise SystemExit
+texts = [p.get('text','') for p in (d.get('result',{}).get('payloads') or []) if p.get('text')]
+if texts:
+    print('\\n'.join(t.strip() for t in texts))
+else:
+    print('PARSE-ERROR: no result.payloads[].text in reviewer output')
+" 2>/dev/null)"#!/usr/bin/env bash
 # peer-review — hand each new commit to the OTHER assistant for review, and surface what it finds.
 #
 # WHY THIS SHAPE. A cross-brand panel on 2026-08-27 was asked how to make an idle second
@@ -24,6 +42,9 @@ set -uo pipefail
 
 REVIEWER_BIN="${REVIEWER_BIN:-/opt/homebrew/bin/openclaw}"
 REVIEWER_NAME="${REVIEWER_NAME:-ghost-openclaw}"
+# --agent is REQUIRED: without it the CLI exits with "No target session selected" and, worse,
+# exits 0 while doing so. Verified by probing the live binary rather than by reading the help.
+REVIEWER_AGENT="${REVIEWER_AGENT:-main}"
 SELF_NAME="${SELF_NAME:-ghost-claude}"
 WORKLOG="${WORKLOG_BIN:-$HOME/svnCheckouts/js-project-GhOST/tools/worklog}"
 # The ref is per-repo and lives in the repo. Nothing here remembers anything between runs.
@@ -88,7 +109,7 @@ for repo in "${REPOS[@]}"; do
       rm -f "$task"; continue
     fi
 
-    out="$(timeout 600 "$REVIEWER_BIN" agent --message-file "$task" --json 2>/dev/null)"
+    out="$(timeout 600 "$REVIEWER_BIN" agent --agent "$REVIEWER_AGENT" --message-file "$task" --json 2>/dev/null)"
     rc=$?
     rm -f "$task"
 
@@ -116,6 +137,11 @@ else:
     git update-ref "$REF" "$sha"
 
     case "$body" in
+      # A parse failure is NOT a clean review. Report it and do not pretend the commit was
+      # checked — the ref has already advanced, so say plainly that this one went unreviewed.
+      PARSE-ERROR*|REVIEWER-STATUS*)
+        echo "peer-review: could not read $REVIEWER_NAME's answer for $(basename "$repo") ${sha:0:8} — $body. That commit is NOT reviewed."
+        ;;
       *"NO DEFECTS FOUND"*|"") : ;;
       *)
         # STDOUT on purpose: the scheduler pokes the busy assistant when this is non-empty,
