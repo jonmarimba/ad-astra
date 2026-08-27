@@ -41,6 +41,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent          # <repo>/.astra
+REPO = HERE.parent                              # the repo that owns this install
 MANIFEST = HERE / "manifest.json"
 
 
@@ -80,16 +81,27 @@ def main():
         src_dir = src_root / "tools" / tool
         dest_dir = HERE / tool
 
-        if not src_dir.is_dir():
+        # A tool whose files all carry explicit paths need not have a tools/<tool> directory.
+        if not src_dir.is_dir() and not meta.get("paths"):
             # The source is gone or this repo moved to a machine without it.
             # Say so plainly; the installed copy still works.
             print(f"  SOURCE GONE  {tool}  (looked in {src_dir})")
             missing += 1
             continue
 
+        # A tool may place files OUTSIDE .astra — doctrine installs to <repo>/.doctrine/<slug>.md.
+        # Those entries carry explicit repo-relative src and dest, because the default layout
+        # (<source>/tools/<tool>/<file> -> <repo>/.astra/<tool>/<file>) cannot express them.
+        #
+        # This gap is why four installed copies of the convocation doctrine sat stale through a
+        # rename on 2026-08-26: install-doctrine.sh never registered them, so the updater did not
+        # know they existed and reported everything current. A distribution mechanism that is
+        # silent about what it does not cover is worse than one that covers less and says so.
+        paths = meta.get("paths", {})
         for fname, installed_sha in sorted(meta.get("files", {}).items()):
-            src = src_dir / fname
-            dest = dest_dir / fname
+            override = paths.get(fname, {})
+            src = (src_root / override["src"]) if override.get("src") else (src_dir / fname)
+            dest = (REPO / override["dest"]) if override.get("dest") else (dest_dir / fname)
             upstream, live = sha(src), sha(dest)
 
             if upstream is None:

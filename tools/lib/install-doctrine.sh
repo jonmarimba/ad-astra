@@ -53,3 +53,47 @@ for target in "$REPO/CLAUDE.md" "$REPO/AGENTS.md" "$REPO/QWEN.md"; do
   wrote=$((wrote+1))
 done
 [ "$wrote" -gt 0 ] || { echo "no CLAUDE.md/AGENTS.md target written" >&2; exit 1; }
+
+# REGISTER WITH THE UPDATER, or this copy is frozen the moment it lands.
+#
+# astra-update walks .astra/manifest.json. Doctrine was never written there, so four installed
+# copies of the convocation doctrine sat stale through a rename on 2026-08-26 while the updater
+# reported everything current. Registering with an explicit src/dest pair is what makes the pull
+# half cover a file that lives outside .astra.
+#
+# The source path recorded is relative to the astra checkout, so a repo moved to another machine
+# resolves it against whatever `source` says rather than a path baked in here.
+ASTRA_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+DOC_ABS="$(cd "$(dirname "$DOC")" && pwd)/$(basename "$DOC")"
+case "$DOC_ABS" in
+  "$ASTRA_ROOT"/*) DOC_REL="${DOC_ABS#$ASTRA_ROOT/}" ;;
+  *) DOC_REL="" ;;   # doctrine from outside astra: nothing sane to record, so record nothing
+esac
+if [ -n "$DOC_REL" ]; then
+  REPO="$REPO" SLUG="$SLUG" DEST="$DEST" DOC_REL="$DOC_REL" ASTRA_ROOT="$ASTRA_ROOT" python3 - <<'PY'
+import json, os, hashlib, pathlib
+repo = pathlib.Path(os.environ["REPO"])
+slug, dest, src_rel = os.environ["SLUG"], os.environ["DEST"], os.environ["DOC_REL"]
+mpath = repo / ".astra" / "manifest.json"
+mpath.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(mpath.read_text())
+except FileNotFoundError:
+    data = {"tools": {}}
+except Exception as e:
+    # Never overwrite a manifest we could not read — that would silently unregister every
+    # other tool in the repo.
+    raise SystemExit("install-doctrine: manifest at %s unreadable (%s); doctrine NOT registered" % (mpath, e))
+tools = data.setdefault("tools", {})
+name = "doctrine-" + slug
+fname = os.path.basename(dest)
+entry = tools.setdefault(name, {})
+entry["source"] = os.environ["ASTRA_ROOT"]
+entry.setdefault("files", {})[fname] = hashlib.sha256((repo / dest).read_bytes()).hexdigest()[:16]
+entry.setdefault("paths", {})[fname] = {"src": src_rel, "dest": dest}
+tmp = mpath.with_suffix(".json.tmp")
+tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+os.replace(tmp, mpath)
+print("registered '%s' with astra-update (%s)" % (name, dest))
+PY
+fi
