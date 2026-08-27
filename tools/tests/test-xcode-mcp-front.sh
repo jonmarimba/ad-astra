@@ -16,12 +16,62 @@ need python3 "brew install python3"
 # Xcode itself is a dependency of half this file, not an optional extra: every assertion that
 # reaches mcpbridge fails identically whether the daemon is broken or Xcode is simply closed.
 # On 2026-08-26 that cost a ship-gate run four failures that read like a regression and were
-# an unopened application. A missing dependency is a loud FAIL naming the fix, never a skip.
-pgrep -x Xcode >/dev/null 2>&1 || {
-  fail "Xcode is not running — every mcpbridge assertion below will fail for that reason alone. Open Xcode with a project and approve its MCP prompt, then re-run."
-  finish
-  exit 1
-}
+# an unopened application.
+#
+# So the test opens it. Jonathan, 2026-08-26: "I don't mind that test starting with open
+# /Applications/Xcode or whatever xcselect says is current Xcode." The path comes from
+# `xcode-select -p` rather than a literal, because the current Xcode is whatever he has
+# selected and a hardcoded path would quietly test the wrong one after a beta swap.
+XCODE_APP="$(xcode-select -p 2>/dev/null | sed 's|/Contents/Developer.*||')"
+if ! pgrep -x Xcode >/dev/null 2>&1; then
+  [ -d "$XCODE_APP" ] || { fail "xcode-select points at '$XCODE_APP', which is not an app bundle. Run xcode-select --switch."; finish; exit 1; }
+  echo "  ..  opening $XCODE_APP (not running)"
+  open -g "$XCODE_APP" 2>/dev/null
+  # Xcode is slow and mcpbridge only answers once it is up. Wait, but bounded: a hang here
+  # would be indistinguishable from the failure this whole block exists to prevent.
+  waited=0
+  until pgrep -x Xcode >/dev/null 2>&1 || [ "$waited" -ge 90 ]; do sleep 3; waited=$((waited+3)); done
+  if ! pgrep -x Xcode >/dev/null 2>&1; then
+    fail "Xcode did not start within 90s of 'open $XCODE_APP' — the mcpbridge assertions below cannot mean anything."
+    finish
+    exit 1
+  fi
+  # Launching the app is not the same as the bridge being ready: it needs its MCP approval.
+  sleep 10
+fi
+
+# A RUNNING XCODE WITH NO PROJECT OPEN IS NOT ENOUGH, and this is the part that made the
+# first fix look like it worked. mcpbridge reports a workspacePath, so with zero windows the
+# assertions below fail exactly as they did with Xcode closed. Verified live 2026-08-26:
+# Xcode up, window count 0, same four failures.
+#
+# ASK XCODE, NOT SYSTEM EVENTS. `tell application "System Events" to tell process "Xcode" to
+# count windows` returns 0 for a Xcode showing two windows — it reads the Accessibility view of
+# the process, which is empty without that permission in this context. `tell application
+# "Xcode" to count windows` returns 2. Measured side by side on 2026-08-26, after the wrong one
+# had already produced a confident hard failure. The instrument was the bug, not Xcode.
+#
+# The test opens its OWN throwaway Swift package rather than one of Jonathan's workspaces.
+# A test that opens the Kicker project would make the ship gate depend on the state of real
+# work, and would put a test's fingerprints on a repo he is using.
+if [ "$(osascript -e 'tell application "Xcode" to count windows' 2>/dev/null || echo 0)" -lt 1 ]; then
+  need swift "install Xcode command line tools"
+  SCRATCH="$SB/xcode-scratch"; mkdir -p "$SCRATCH"
+  ( cd "$SCRATCH" && swift package init --name AstraProbe >/dev/null 2>&1 )
+  [ -f "$SCRATCH/Package.swift" ] || { fail "could not scaffold a Swift package to open — swift package init failed in $SCRATCH"; finish; exit 1; }
+  echo "  ..  opening a throwaway package so mcpbridge has a workspace"
+  open -g -a "$XCODE_APP" "$SCRATCH/Package.swift" 2>/dev/null
+  waited=0
+  until [ "$(osascript -e 'tell application "Xcode" to count windows' 2>/dev/null || echo 0)" -ge 1 ] || [ "$waited" -ge 90 ]; do
+    sleep 3; waited=$((waited+3))
+  done
+  if [ "$(osascript -e 'tell application "Xcode" to count windows' 2>/dev/null || echo 0)" -lt 1 ]; then
+    fail "Xcode is running but never opened a window for $SCRATCH/Package.swift — mcpbridge has no workspace to report and the assertions below cannot mean anything."
+    finish
+    exit 1
+  fi
+  sleep 15   # indexing settles; mcpbridge answers once the workspace is loaded
+fi
 
 mcp_call() { # usage: mcp_call <port> <method> <params-json>  -> prints the raw SSE response body
   local port="$1" method="$2" params="$3"
