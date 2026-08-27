@@ -157,4 +157,27 @@ for filt in $(grep -c "obliterat" "$AMB3"); do :; done
   && pass "all three junk filters catch the OBLITERAT spelling, not just ABLITERAT" \
   || fail "only $(grep -c "obliterat" "$AMB3") of 3 junk filters catch the OBLITERAT spelling"
 
+# ---------------------------------------------------------------------------
+# ONE PULL AT A TIME. On 2026-08-27 three overlapping ambrosio runs each launched `lms get` for
+# the same model. All three wrote the same directory on the M5, none finished, and a complete
+# 19.9GB download sat unregistered for two hours with three processes holding it. The lock must
+# refuse a second holder AND reclaim a lock whose owner is gone, or a killed run wedges the
+# puller permanently.
+# ---------------------------------------------------------------------------
+LT="$SB/locktest.sh"
+sed -n '/^LOCKDIR=/,/^}/p' "$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio" > "$SB/lockfns.sh"
+cat > "$LT" <<EOF
+#!/usr/bin/env bash
+AMBROSIO_HOME="$SB/lockhome"; mkdir -p "\$AMBROSIO_HOME"
+. "$SB/lockfns.sh"
+acquire_lock >/dev/null && echo ACQUIRED
+acquire_lock 2>/dev/null | grep -q "already pulling" && echo DECLINED
+echo 999999 > "\$LOCKDIR/pid"
+acquire_lock 2>/dev/null >/dev/null && echo RECLAIMED
+EOF
+out="$(bash "$LT" 2>&1)"
+case "$out" in *ACQUIRED*) pass "lock is acquired by the first caller";; *) fail "lock not acquired: $out";; esac
+case "$out" in *DECLINED*) pass "a second live caller is refused the lock";; *) fail "second caller was NOT refused: $out";; esac
+case "$out" in *RECLAIMED*) pass "a lock whose owner is gone is reclaimed, not honoured forever";; *) fail "stale lock wedges the puller: $out";; esac
+
 finish

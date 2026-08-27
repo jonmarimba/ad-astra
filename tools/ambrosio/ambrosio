@@ -348,6 +348,27 @@ PYEOF
 
 # ---- the two halves of `check`, split so a sleeping M5 stops only the local one ----
 
+# ONE PULL AT A TIME. Three ambrosio runs overlapped on 2026-08-27 (11:44, 11:48, 12:04) and each
+# launched `lms get` for the same model. All three wrote the same directory on the M5, none ever
+# finished, and the download sat complete-but-unregistered for two hours while three processes
+# held it. The scheduler fires every four hours, so overlap only happens when someone runs it by
+# hand during a scheduled pass — which is exactly what a person debugging it does.
+LOCKDIR="$AMBROSIO_HOME/run.lock"
+acquire_lock(){
+  if mkdir "$LOCKDIR" 2>/dev/null; then
+    echo $$ > "$LOCKDIR/pid"; trap 'rm -rf "$LOCKDIR"' EXIT INT TERM; return 0
+  fi
+  # A lock left behind by a killed run must not block every future run forever.
+  local old_pid; old_pid="$(cat "$LOCKDIR/pid" 2>/dev/null || echo)"
+  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+    echo "ambrosio: another run (pid $old_pid) is already pulling — skipping the local half this pass"
+    return 1
+  fi
+  echo "ambrosio: clearing a stale lock from pid ${old_pid:-unknown}" >&2
+  rm -rf "$LOCKDIR"; mkdir "$LOCKDIR" 2>/dev/null || return 1
+  echo $$ > "$LOCKDIR/pid"; trap 'rm -rf "$LOCKDIR"' EXIT INT TERM; return 0
+}
+
 run_local() {
     have="$(loaded_models)"; pulled=""; n=0
     # want-list first (explicit asks outrank whatever HF happens to be trending this run), then
@@ -493,7 +514,10 @@ case "${1:-check}" in
     # check on." The cloud surfaces below never needed the M5 and were already running as
     # two separate schd jobs; folding them in makes ambrosio the single front door for
     # "is there a hot model I can play with," which is one want, not three.
-    if host_up; then run_local; else log "host $HOST down — skipping local pulls (cloud surfaces still run)"; fi
+    if host_up; then
+      # The cloud half is read-only and safe to overlap; only the puller needs the lock.
+      if acquire_lock; then run_local; fi
+    else log "host $HOST down — skipping local pulls (cloud surfaces still run)"; fi
     run_cloud
     ;;
   *) echo "usage: ambrosio check [--dry-run] | status"; exit 1 ;;
