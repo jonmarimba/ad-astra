@@ -110,4 +110,44 @@ chmod +x "$SB/bin/ssh"
 PATH="$SB/bin:$PATH" python3 "$TOOL" --db "$DB" --keeplist "$KEEP" --host testhost >/dev/null 2>&1
 [ $? -eq 2 ] && pass "RED control: unreachable host exits 2 rather than planning" || fail "unreachable host did not refuse"
 
+# Restore the working stub. Assertion 9 replaced it with a hard failure and everything after
+# it inherited that — assertion 11 reported "ancestor path not refused" when the tool had in
+# fact refused to plan at all. A test that leaves a broken seam behind makes every later
+# assertion a measurement of the seam.
+cat > "$SB/bin/ssh" <<'SHIM'
+#!/usr/bin/env bash
+cmd="${@: -1}"
+echo "$cmd" >> "$SSHLOG"
+case "$cmd" in
+  *"ls --json"*) cat "$FIXDIR/models.json";;
+  *server-logs*) cat "$FIXDIR/serverlogs.tsv";;
+  *"rm -rf"*) exit 0;;
+  *) : ;;
+esac
+SHIM
+chmod +x "$SB/bin/ssh"
+
+# 10. SHELL INJECTION. A model path carrying a quote must never reach the remote shell as
+#     syntax. The stub records the exact command; a broken-out quote shows up as a second
+#     command in the log. Found by a convocation panel on 2026-08-26.
+cat > "$FIX/models.json" <<'JSON'
+[{"modelKey":"evil","path":"org/evil\"; touch /tmp/astra-pwned; echo \"","sizeBytes":107374182400},
+ {"modelKey":"hot-model","path":"org/hot-model","sizeBytes":107374182400}]
+JSON
+rm -f /tmp/astra-pwned
+: > "$SSHLOG"
+run --budget-gb 1 --include-unused --apply >/dev/null 2>&1
+[ -f /tmp/astra-pwned ] && fail "SHELL INJECTION: a quoted model path executed a second command" || pass "a model path containing a quote does not break out of the rm"
+
+# 11. A MODEL DIRECTORY THAT CONTAINS ANOTHER MODEL must be refused, not deleted. rm -rf on a
+#     parent takes its children silently, including protected ones.
+cat > "$FIX/models.json" <<'JSON'
+[{"modelKey":"parent","path":"org/nest","sizeBytes":107374182400},
+ {"modelKey":"child","path":"org/nest/inner","sizeBytes":1073741824}]
+JSON
+: > "$SSHLOG"
+out="$(run --budget-gb 1 --include-unused --apply)"
+case "$out" in *"REFUSED parent"*) pass "a model whose directory contains another is refused";; *) fail "ancestor path not refused: $out";; esac
+if grep -q 'rm -rf .*org/nest' "$SSHLOG"; then fail "issued rm on a directory containing another model"; else pass "no rm issued for the containing directory"; fi
+
 finish

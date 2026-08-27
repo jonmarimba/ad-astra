@@ -33,8 +33,10 @@ And the size numbers here are what LM Studio reports, which counts the repo as s
 disk should match closely and may not exactly.
 """
 import argparse
+import datetime
 import json
 import os
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -108,6 +110,10 @@ def last_used(db_path):
             shutil.copy(db_path + ext, base + ext)
     db = sqlite3.connect(base)
     seen = {}
+    # The copy is read once and finished with; leaving it behind means a copy of a large
+    # SQLite file in $TMPDIR on every scheduled run, forever.
+    import atexit
+    atexit.register(shutil.rmtree, tmp, True)
     for name, ts in db.execute("SELECT model, MAX(timestamp) FROM usage_history GROUP BY model"):
         if name:
             seen[name.lower()] = ts
@@ -128,8 +134,16 @@ def match_usage(key, usage):
     tail = k.split("/")[-1]
     if tail in usage:
         return usage[tail]
+    # NO substring fallback. `tail in name` matched `qwen3-coder` against a usage row for
+    # `qwen3-coder-next-base-mlx` and returned that model's timestamp, so an unused model
+    # inherits a newer one's recency and is silently protected. The docstring above used to
+    # claim a matching miss could only over-propose; this direction was the opposite and worse.
+    # Compare whole names only, ignoring an @quant suffix, which is the one shape difference
+    # that is real (`qwen3.6-27b-mlx@6bit` in the router, same key on disk).
+    bare = tail.split("@")[0]
     for name, ts in usage.items():
-        if name.split("/")[-1] == tail or tail in name or name in k:
+        n = name.split("/")[-1]
+        if n == tail or n.split("@")[0] == bare:
             return ts
     return None
 
@@ -179,8 +193,12 @@ def main():
         return 3
 
     keep = load_keeplist(args.keeplist)
-    cutoff = subprocess.run(["date", "-u", "-v-%dd" % args.keep_days, "+%Y-%m-%dT%H:%M:%SZ"],
-                            capture_output=True, text=True).stdout.strip()
+    # Computed in Python, not by shelling out to `date -v-Nd`, which is BSD-only. On GNU date
+    # that call fails, stdout is empty, and `ts >= ""` is True for every timestamp — so every
+    # model reads as recent and the tool silently does nothing. A different date implementation
+    # that put its error on stdout would fail the other way and make everything a candidate.
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              - datetime.timedelta(days=args.keep_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     total = sum(m[2] for m in models)
     rows = []
@@ -251,7 +269,15 @@ def main():
         if ".." in r["path"] or r["path"].startswith("/"):
             print("REFUSED %s — path escapes the models root" % r["path"])
             continue
-        res = ssh(args.host, 'rm -rf "%s"' % target)
+        # A path that is an ANCESTOR of a protected model takes that model with it. Nothing in
+        # LM Studio's schema promises every model is a leaf, and rm -rf on a parent is silent
+        # about what it took. Refuse rather than reason about it.
+        clash = [q["key"] for q in rows
+                 if q is not r and q["path"].startswith(r["path"].rstrip("/") + "/")]
+        if clash:
+            print("REFUSED %s — its directory contains %s" % (r["key"], ", ".join(clash)))
+            continue
+        res = ssh(args.host, "rm -rf %s" % shlex.quote(target))
         print("%s %s" % ("deleted" if res.returncode == 0 else "FAILED  ", r["key"]))
         if res.returncode != 0:
             sys.stderr.write(res.stderr)

@@ -151,7 +151,7 @@ KNOWN={'deepseek-ai','nvidia','zai-org','qwen','moonshotai','meta-llama','mistra
        'minimaxai','microsoft','google','ai21labs','allenai','lmstudio-community','mlx-community'}
 JUNK=('abliterated','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp')
 def biggest_size_b(tail):
-    sizes=[float(m.group(1)) for t in re.split(r'[-_]', tail) for m in [re.match(r'([0-9.]+)b\$', t, re.I)] if m]
+    sizes=[float(m.group(1)) for t in re.split(r'[-_]', tail) for m in [re.match(r'([0-9.]+)b$', t, re.I)] if m]
     return max(sizes) if sizes else None
 try: ms=json.load(sys.stdin)
 except Exception: ms=[]
