@@ -3,7 +3,15 @@
 # sandboxed $HOME), undo restores them byte-identical, and the deny/allow merge never clobbers
 # what was already there.
 HERE="$(cd "$(dirname "$0")" && pwd)"; . "$HERE/lib.sh"
-HS="$HERE/../harness-settings/harness-settings.sh"
+HS_BIN="$HERE/../harness-settings/harness-settings.sh"
+# --scope global is LOAD-BEARING. The tool's DEFAULT scope is "project", which resolves to the
+# git root of the current directory — this repo. Every fixture below is written under a
+# sandboxed $HOME and every assertion reads from there, so without this the tool edits
+# js-db-ad-astra's own .claude/settings.json while the test measures $HOME and reports
+# "want opus got sonnet". It also left .claude/, .codex/ and .qwen/ behind in the repo, which
+# is how the failure was finally traced on 2026-08-27.
+HS() { "$HS_BIN" --scope global "$@"; }
+HS="$HS_BIN"
 need jq "brew install jq"
 python3 -c "import tomlkit" 2>/dev/null || { fail "python tomlkit missing (tools/harness-settings/install.sh)"; finish; exit 1; }
 
@@ -28,7 +36,7 @@ cp "$HOME/.codex/config.toml"    "$SB/codex.orig"
 cp "$HOME/.qwen/settings.json"   "$SB/qwen.orig"
 
 # ---- apply: asserted by effect on each config ----
-assert_rc 0 "apply succeeds" "$HS" apply
+assert_rc 0 "apply succeeds" "$HS_BIN" --scope global apply
 assert_eq "opus"  "$(jq -r .model "$HOME/.claude/settings.json")"       "claude model set"
 assert_eq "xhigh" "$(jq -r .effortLevel "$HOME/.claude/settings.json")" "claude effort set"
 assert_eq "true"  "$(jq '.permissions.deny | index("Read(secrets.txt)") != null' "$HOME/.claude/settings.json")" "pre-existing deny entry SURVIVED the merge"
@@ -40,41 +48,44 @@ assert_contains "$HOME/.codex/config.toml" "# a comment tomlkit must preserve" "
 assert_eq "gpt-5.2-codex" "$(python3 -c "import tomlkit,sys;print(tomlkit.parse(open(sys.argv[1]).read())['model'])" "$HOME/.codex/config.toml")" "codex unrelated key untouched"
 
 # ---- double-apply: deny/allow lists must not grow duplicates ----
-"$HS" apply >/dev/null 2>&1
+HS apply >/dev/null 2>&1
 d1="$(jq '.permissions.deny | length' "$HOME/.claude/settings.json")"
-"$HS" apply >/dev/null 2>&1
+HS apply >/dev/null 2>&1
 d2="$(jq '.permissions.deny | length' "$HOME/.claude/settings.json")"
 assert_eq "$d1" "$d2" "third apply added no duplicate deny entries"
 
 # ---- undo: byte-identical restore of the MOST RECENT backup ----
-assert_rc 0 "undo succeeds" "$HS" undo
+assert_rc 0 "undo succeeds" "$HS_BIN" --scope global undo
 # note: undo restores the latest backup, which (after three applies) is the twice-applied state —
 # so compare against what apply itself backed up, not the pristine originals
-ts="$(cat "$HOME/.harness-settings-backups/latest")"
-cmp -s "$HOME/.harness-settings-backups/$ts/claude_settings.json" "$HOME/.claude/settings.json" && pass "undo restored claude byte-identical to its backup" || fail "undo did not restore claude byte-identical"
-cmp -s "$HOME/.harness-settings-backups/$ts/codex_config.toml" "$HOME/.codex/config.toml" && pass "undo restored codex byte-identical to its backup" || fail "undo did not restore codex byte-identical"
+# The backup root is SCOPE-AWARE: $HOME/.harness-settings-backups/<scope>. Reading it without
+# the scope segment worked only while the tests ran under the default project scope.
+BKROOT="$HOME/.harness-settings-backups/global"
+ts="$(cat "$BKROOT/latest")"
+cmp -s "$BKROOT/$ts/claude_settings.json" "$HOME/.claude/settings.json" && pass "undo restored claude byte-identical to its backup" || fail "undo did not restore claude byte-identical"
+cmp -s "$BKROOT/$ts/codex_config.toml" "$HOME/.codex/config.toml" && pass "undo restored codex byte-identical to its backup" || fail "undo did not restore codex byte-identical"
 
 # ---- full-cycle reversibility: fresh HOME, one apply, one undo -> pristine originals ----
 export HOME="$SB/home2"; mkdir -p "$HOME/.claude" "$HOME/.codex" "$HOME/.qwen"
 cp "$SB/claude.orig" "$HOME/.claude/settings.json"; cp "$SB/codex.orig" "$HOME/.codex/config.toml"; cp "$SB/qwen.orig" "$HOME/.qwen/settings.json"
 # tautology guard: the round trip only proves reversibility if apply actually CHANGED the file
 # (first run of this suite "passed" here while apply was exiting early — exactly the class)
-assert_rc 0 "round-trip apply succeeds" "$HS" apply
+assert_rc 0 "round-trip apply succeeds" "$HS_BIN" --scope global apply
 cmp -s "$SB/claude.orig" "$HOME/.claude/settings.json" && fail "apply changed nothing — round-trip would be vacuous" || pass "apply really mutated the config (round-trip is a real claim)"
-assert_rc 0 "round-trip undo succeeds" "$HS" undo
+assert_rc 0 "round-trip undo succeeds" "$HS_BIN" --scope global undo
 cmp -s "$SB/claude.orig" "$HOME/.claude/settings.json" && pass "apply+undo round-trip restored claude pristine" || fail "round-trip did not restore claude pristine"
 cmp -s "$SB/codex.orig"  "$HOME/.codex/config.toml"    && pass "apply+undo round-trip restored codex pristine"  || fail "round-trip did not restore codex pristine"
 cmp -s "$SB/qwen.orig"   "$HOME/.qwen/settings.json"   && pass "apply+undo round-trip restored qwen pristine"   || fail "round-trip did not restore qwen pristine"
 
 # ---- RED controls ----
 export HOME="$SB/home3"; mkdir -p "$HOME"
-red "undo with no backups must fail" "$HS" undo
-red "unknown subcommand must fail" "$HS" frobnicate
+red "undo with no backups must fail" "$HS_BIN" --scope global undo
+red "unknown subcommand must fail" "$HS_BIN" --scope global frobnicate
 # a config jq can't parse must FAIL the apply — not print per-config success + 'DONE.' (the
 # false-success shape: believing the safety deny-rules are live when nothing changed)
 mkdir -p "$HOME/.claude"
 printf '{"model":"sonnet",}\n' > "$HOME/.claude/settings.json"   # trailing comma = invalid JSON
-out="$("$HS" apply 2>/dev/null)"; rc=$?
+out="$("$HS_BIN" --scope global apply 2>/dev/null)"; rc=$?
 assert_eq "1" "$rc" "apply exits nonzero on an unparseable config"
 printf '%s' "$out" | grep -qF "DONE." && fail "apply printed DONE. despite a failed edit" || pass "no false DONE. on failure"
 assert_contains "$HOME/.claude/settings.json" '{"model":"sonnet",}' "broken config left byte-identical (no partial write)"
