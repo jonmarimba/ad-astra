@@ -185,6 +185,23 @@ for m in ms if isinstance(ms,list) else []:
 run_trending(){
   [ "${TREND:-1}" = "1" ] || return 0
   touch "$TRENDSEEN"
+  # Deliver anything the quiet-hours gate held overnight. Without this the gate is a silent
+  # drop wearing a delay's clothes — the model is already marked told, so nothing would ever
+  # mention it again.
+  HELD="$AMBROSIO_HOME/trending_held.tsv"
+  if [ -s "$HELD" ] && [ "$(date +%H)" -ge "${TREND_QUIET_UNTIL:-8}" ]; then
+    while IFS=$'\t' read -r h_mid h_rank h_why; do
+      [ -z "$h_mid" ] && continue
+      hmsg="$h_mid was #$h_rank trending on Hugging Face overnight and ambrosio will not pull it — a family that is not on the watchlist. Say the word if you want it."
+      if [ "${dry:-0}" -eq 1 ]; then log "[dry-run] would deliver held: $hmsg"
+      elif [ -x "$BOTLINE" ]; then
+        "$BOTLINE" send --from ambrosio "$hmsg" >/dev/null 2>>"$AMBROSIO_HOME/pull.log" \
+          && log "delivered held trending report: $h_mid" \
+          || log "notify FAILED — held trending report NOT delivered: $h_mid"
+      fi
+    done < "$HELD"
+    : > "$HELD"
+  fi
   # ONE model per run, the highest-trending unseen one, in a sentence. Never a list.
   # Jonathan, 2026-08-26: "sending me laundry lists is dumb" — the same correction he made
   # about "+12 more" on the ollama watcher. A list of ids is not information; it is a chore
@@ -195,13 +212,33 @@ run_trending(){
     [ -z "$mid" ] && continue
     grep -qxF "$mid" "$TRENDSEEN" && continue
     echo "$mid" >>"$TRENDSEEN"
-    [ "$why" = "would-pull" ] && continue      # the puller speaks for these
+    # ONLY report a model whose FAMILY is unknown to us. "New org" alone is not news: the
+    # first live run texted Jonathan at 03:47 about AtomicChat/Qwen3.8-Flash-Next-GGUF, a
+    # community requant of a family already on the watchlist and already pulled. Hugging Face
+    # trending is full of requants of models he has heard of, and a channel that reports them
+    # is the laundry list he objected to, delivered one line at a time. What he asked not to
+    # miss is a model from a family we do not track at all.
+    case "$why" in
+      *off-watchlist*) : ;;
+      *) continue ;;
+    esac
     [ -n "$best_mid" ] && continue             # already have the top-ranked one
     best_mid="$mid"; best_why="$why"; best_rank="$rank"
   done <<EOF
 $(trending_watch)
 EOF
   [ -z "$best_mid" ] && return 0
+  # This half pushes to his PHONE, and the scheduler runs every four hours around the clock.
+  # A model he cannot pull at 4am is not worth a notification at 4am; it is worth one at
+  # breakfast. The find is already recorded as told, so it is reported once, later, not lost.
+  # (The notes reindex deliberately runs overnight because he wakes and writes notes. This is
+  # the opposite case: outbound to a sleeping phone.)
+  hour="$(date +%H)"
+  if [ "$hour" -lt "${TREND_QUIET_UNTIL:-8}" ]; then
+    log "holding trending report until after ${TREND_QUIET_UNTIL:-8}:00 — $best_mid"
+    printf '%s\t%s\t%s\n' "$best_mid" "$best_rank" "$best_why" >> "$AMBROSIO_HOME/trending_held.tsv"
+    return 0
+  fi
   case "$best_why" in
     *"new org"*) reason="an org we do not pull from" ;;
     *) reason="a family that is not on the watchlist" ;;

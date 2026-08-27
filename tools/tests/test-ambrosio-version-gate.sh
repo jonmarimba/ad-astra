@@ -119,4 +119,28 @@ case "$out" in
   *) pass "a config written before the newest settings does not abort the run";;
 esac
 
+# ---------------------------------------------------------------------------
+# THE TRENDING WATCH MUST NOT REPORT A REQUANT OF A FAMILY WE ALREADY TRACK.
+# Its first live run texted Jonathan at 03:47 about AtomicChat/Qwen3.8-Flash-Next-GGUF —
+# a community repackage of a family already on the watchlist and already pulled. Hugging Face
+# trending is full of those, and reporting them one line at a time is the laundry list he
+# objected to. What he asked not to miss is a family we do not track at all.
+#
+# Checked against the tool's own reason string rather than by running the network: "new org"
+# alone must not qualify; "off-watchlist" must.
+# ---------------------------------------------------------------------------
+AMB2="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
+gate_block="$(sed -n '/ONLY report a model whose FAMILY is unknown/,/esac/p' "$AMB2")"
+case "$gate_block" in
+  *"off-watchlist"*continue*) pass "trending watch reports only families off the watchlist";;
+  *) fail "the family gate is missing from run_trending — a requant of a known family would be reported";;
+esac
+
+# A held overnight report must be DELIVERED later, not dropped. The model is marked told the
+# moment it is seen, so a gate with no delivery path would silence it permanently.
+case "$(sed -n '/Deliver anything the quiet-hours gate held/,/fi/p' "$AMB2")" in
+  *BOTLINE*) pass "quiet-hours holds are delivered after the gate lifts, not dropped";;
+  *) fail "held trending reports have no delivery path — the quiet gate is a silent drop";;
+esac
+
 finish
