@@ -13,8 +13,19 @@ echo "CLAUDE-ANSWER to: $2"
 SHIM
 cat > "$SB/bin/fake-codex" <<'SHIM'
 #!/usr/bin/env bash
-# mimics `codex exec --skip-git-repo-check "prompt"`: prompt arrives as $3
-echo "CODEX-ANSWER to: $3"
+# Mimics `codex exec --skip-git-repo-check -o <file> "prompt"`. The real codex puts its
+# transcript on STDERR and its final message only in the -o file; a stub that echoed to
+# stdout would hide exactly the bug that cost a live round on 2026-08-26.
+out=""; prompt=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2;;
+    exec|--skip-git-repo-check) shift;;
+    *) prompt="$1"; shift;;
+  esac
+done
+echo "transcript noise on stderr, as codex does" >&2
+[ -n "$out" ] && echo "CODEX-ANSWER to: $prompt" > "$out"
 SHIM
 cat > "$SB/bin/fake-qwen" <<'SHIM'
 #!/usr/bin/env bash

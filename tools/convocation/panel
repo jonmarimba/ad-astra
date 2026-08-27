@@ -70,6 +70,9 @@ run_agent(){ # run_agent <name> <outfile> <cmd...>
     # A zero exit is not an answer. `claude -p` returned the 15-byte string "Execution error"
     # in that same round and was recorded as ok, which is how a panel reports three voices and
     # carries one. Anything too short to be a review is a failure with its content quoted.
+    # An agent that answers into a sidecar file (codex -o) has its answer moved into place
+    # before the size check, or the check would reject a perfectly good review.
+    [ -s "$o.last" ] && { cat "$o.last" >> "$o"; rm -f "$o.last"; }
     local bytes; bytes="$(wc -c < "$o" | tr -d ' ')"
     if [ "$bytes" -lt "$MIN_ANSWER_BYTES" ]; then
       printf 'FAIL  %s  answered %s bytes: %s\n' "$a" "$bytes" "$(tr '\n' ' ' < "$o")" >> "$STATUS"
@@ -95,7 +98,11 @@ for a in $(echo "$AGENTS" | tr ',' ' '); do
     # waits forever, so the round does not fail, it HANGS — and every other agent's tokens are
     # already spent by then. The doctrine has said this since 2026-08-19; this dispatcher
     # simply never did it.
-    codex)  run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" </dev/null & pids+=($!) ;;
+    # -o writes the FINAL MESSAGE to a file. Without it codex exec puts its transcript on
+    # stderr and leaves stdout empty, so the 2026-08-26 22:05 round recorded codex as a
+    # zero-byte answer while its stderr held a real review — it had queried the live database
+    # and everything. Capturing stdout is simply the wrong seam for this CLI.
+    codex)  run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check -o "$o.last" "$PROMPT" </dev/null & pids+=($!) ;;
     qwen)   run_agent qwen   "$o" "$QWEN_BIN" -m "$QWEN_MODEL" -y -p "$PROMPT" & pids+=($!) ;;
   esac
 done
