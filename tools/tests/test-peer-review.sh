@@ -58,9 +58,11 @@ echo two >> a.txt && git -C "$REPO" commit -qam "second commit"
 : > "$ARGLOG"
 out="$(STUB_MODE=clean run)"
 # The token alone is not enough: `--agent --session-key ...` still contains "--agent" and is
-# exactly the regression that would break the real CLI while this assertion passed. Found by
-# the reviewer on the commit that introduced this file.
-grep -qE -- "--agent +[A-Za-z0-9_-]+" "$ARGLOG" && pass "invocation passes --agent WITH a value" || fail "--agent has no value: $(cat "$ARGLOG")"
+# exactly the regression that would break the real CLI while this assertion passed. The FIRST
+# attempt at this fix was also wrong — [A-Za-z0-9_-]+ includes the dash, so it happily read
+# "--session-key" as the agent value. The reviewer caught the broken fix on the next pass.
+# The value must not start with a dash.
+grep -qE -- "--agent +[A-Za-z0-9_][A-Za-z0-9_-]*" "$ARGLOG" && pass "invocation passes --agent WITH a value" || fail "--agent has no value: $(cat "$ARGLOG")"
 grep -q -- "--session-key" "$ARGLOG" && pass "invocation passes --session-key (keeps review out of the reviewer's own session)" || fail "--session-key missing"
 
 # 3. A CLEAN REVIEW IS SILENT and advances the ref. Silence is the healthy state; the schedule
