@@ -124,7 +124,12 @@ except Exception:
 if d.get('status') not in (None, 'ok'):
     print('REVIEWER-STATUS: ' + str(d.get('status')))
     raise SystemExit
-texts = [p.get('text','') for p in (d.get('result',{}).get('payloads') or []) if p.get('text')]
+# result may be null or a non-object on a failed run. .get('payloads') on that raises,
+# stderr is discarded, body comes back EMPTY, and an empty body reads as a clean review
+# while the ref advances — the commit is lost with no trace. Found by the reviewer itself.
+res = d.get('result')
+payloads = res.get('payloads') if isinstance(res, dict) else None
+texts = [p.get('text','') for p in (payloads or []) if isinstance(p, dict) and p.get('text')]
 print('\n'.join(t.strip() for t in texts) if texts
       else 'PARSE-ERROR: no result.payloads[].text in reviewer output')
 " 2>/dev/null)"
