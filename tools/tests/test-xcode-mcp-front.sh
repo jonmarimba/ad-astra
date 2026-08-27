@@ -73,6 +73,22 @@ if [ "$(osascript -e 'tell application "Xcode" to count windows' 2>/dev/null || 
   sleep 15   # indexing settles; mcpbridge answers once the workspace is loaded
 fi
 
+# KNOWN STATE, 2026-08-27 09:50 — the four mcpbridge assertions below fail, and the daemon is
+# not the reason. Traced with Xcode running and two windows open:
+#
+#   * The daemon answers on /mcp, initializes, and returns its own instructions. Healthy.
+#   * Its log shows the real shape: "connected — serving until this breaks", then five seconds
+#     later "heartbeat list_tools failed, marking broken: Connection closed", forever. It
+#     reconnects every 5s and the upstream drops each time.
+#   * `xcrun mcpbridge` run DIRECTLY, with an initialize on stdin, prints NOTHING and exits 0.
+#     So the bridge closes immediately on its own, with the daemon out of the picture.
+#
+# What is NOT established: why. Xcode's approval never being granted fits, and so does the
+# throwaway Swift package this file opens not being the kind of workspace mcpbridge wants.
+# Both fit the same evidence and neither has been tested, so neither is written into a guard.
+# The next person here should start by opening a real .xcodeproj and watching for an approval
+# prompt, rather than re-deriving the above.
+
 mcp_call() { # usage: mcp_call <port> <method> <params-json>  -> prints the raw SSE response body
   local port="$1" method="$2" params="$3"
   local init_resp session
