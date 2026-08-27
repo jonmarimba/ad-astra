@@ -23,7 +23,18 @@ state_case(){ # $1 tool  $2 ENVVAR  $3 relpath-or-file  $4 "is-file"?
   else mkdir -p "$home/$rel"; printf 'x\n' > "$home/$rel/config"; target="$home"; fi
   : > "$LOG"
   export "$ev=$target"
-  assert_rc 0 "$tool plain uninstall succeeds" "$T/$tool/uninstall.sh"
+  # A REPO-SCOPED tool's uninstaller needs --into; a global one must not be given it. The
+  # difference is visible in the script: repo-scoped ones call astra_target. Calling every
+  # uninstaller bare made graphify-repo exit 64 with "usage: --into <repo>", which read as a
+  # broken uninstaller and was the sweep treating a per-repo tool as a global one.
+  local scope_args=()
+  if grep -q "astra_target" "$T/$tool/uninstall.sh" 2>/dev/null; then
+    mkdir -p "$SB/$tool.repo"
+    scope_args=(--into "$SB/$tool.repo")
+  fi
+  # ${a[@]+"${a[@]}"} rather than "${a[@]}": under bash 3.2 — which is what macOS ships — an
+  # EMPTY array expanded under `set -u` is an unbound variable error, not an empty list.
+  assert_rc 0 "$tool plain uninstall succeeds" "$T/$tool/uninstall.sh" ${scope_args[@]+"${scope_args[@]}"}
   unset "$ev"
   assert_no_file "$target" "$tool plain uninstall removed its state ($ev)"
   assert_empty "$(cat "$LOG" 2>/dev/null)" "$tool plain uninstall touched NO deps"
@@ -39,7 +50,7 @@ state_case speech-bee   SPEECH_BEE_MODEL  .           file
 # ---- --deps hits the right dep at the seam ----
 : > "$LOG"; env BOTLINE_HOME="$SB/b.home" "$T/botline/uninstall.sh" --deps >/dev/null 2>&1
 assert_contains "$LOG" "uninstall imsg" "botline --deps removed imsg (brew seam)"
-: > "$LOG"; env GRAPHIFY_VAULT="$SB/g.home" "$T/graphify-repo/uninstall.sh" --deps >/dev/null 2>&1
+: > "$LOG"; mkdir -p "$SB/g.repo"; env GRAPHIFY_VAULT="$SB/g.home" "$T/graphify-repo/uninstall.sh" --into "$SB/g.repo" --deps >/dev/null 2>&1
 assert_contains "$LOG" "tool uninstall graphifyy" "graphify-repo --deps removed graphifyy (uv seam)"
 : > "$LOG"; "$T/periphery/uninstall.sh" --deps >/dev/null 2>&1
 assert_contains "$LOG" "uninstall periphery" "periphery --deps removed periphery (brew seam)"
