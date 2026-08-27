@@ -134,20 +134,24 @@ print('\n'.join(t.strip() for t in texts) if texts
       else 'PARSE-ERROR: no result.payloads[].text in reviewer output')
 " 2>/dev/null)"
 
-    git update-ref "$REF" "$sha"
-
     case "$body" in
       # A parse failure is NOT a clean review. Say so, and say the commit went unchecked —
       # the ref has already advanced, so nothing else will look at it again.
       PARSE-ERROR*|REVIEWER-STATUS*)
-        echo "peer-review: could not read $REVIEWER_NAME's answer for $(basename "$repo") ${sha:0:8} — $body. That commit is NOT reviewed."
+        # DO NOT ADVANCE. Reporting "not reviewed" while moving the ref past the commit means
+        # nothing ever looks at it again — the rule in AGENTS.md says review-after replaces
+        # ask-before, and a commit silently dropped here makes that guarantee false. The
+        # reviewer itself caught this contradiction between the rule and the code.
+        echo "peer-review: could not read $REVIEWER_NAME's answer for $(basename "$repo") ${sha:0:8} — $body. NOT advancing the ref; it will be retried."
+        break
         ;;
-      *"NO DEFECTS FOUND"*|"") : ;;
+      *"NO DEFECTS FOUND"*|"") git update-ref "$REF" "$sha" ;;
       *)
         # STDOUT on purpose: the scheduler pokes the busy assistant when this is non-empty,
         # so a finding lands in its next turn instead of in a file nobody opens.
         echo "peer-review — $REVIEWER_NAME on $(basename "$repo") ${sha:0:8} \"$subject\":"
         printf '%s\n' "$body"
+        git update-ref "$REF" "$sha"
         [ -x "$WORKLOG" ] && "$WORKLOG" append --agent "$REVIEWER_NAME" --quiet \
           --project "$(basename "$repo")" --commit "$sha" \
           "Peer review found something on ${sha:0:8}: $subject" --note "$(printf '%s' "$body" | head -c 900)" 2>/dev/null

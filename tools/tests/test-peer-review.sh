@@ -38,6 +38,12 @@ chmod +x "$STUB"; export ARGLOG
 
 run(){ REVIEWER_BIN="$STUB" WORKLOG_BIN=/nonexistent "$TOOL" --repo "$REPO" "$@" 2>&1; }
 ref(){ git -C "$REPO" rev-parse -q --verify refs/peer-review/last 2>/dev/null || echo NONE; }
+# A failure case leaves the ref parked on the commit it could not review — correctly, so it is
+# retried. Each later case therefore has to clear the parking brake, or it measures the
+# previous case's stuck commit instead of its own.
+unstick(){ git -C "$REPO" update-ref refs/peer-review/last "$(git -C "$REPO" rev-parse HEAD)"; }
+# ...and then give the next case something of its own to review, or it measures an empty run.
+fresh(){ echo "$RANDOM" >> "$REPO/a.txt"; git -C "$REPO" commit -qam "commit for $1"; }
 
 # 1. FIRST RUN SETS A BASELINE AND REVIEWS NOTHING. Otherwise installing the tool floods the
 #    reviewer with every commit in history.
@@ -51,7 +57,10 @@ case "$out" in *baseline*) pass "first run records a baseline instead of reviewi
 echo two >> a.txt && git -C "$REPO" commit -qam "second commit"
 : > "$ARGLOG"
 out="$(STUB_MODE=clean run)"
-grep -q -- "--agent" "$ARGLOG" && pass "invocation passes --agent (without it the CLI exits 0 doing nothing)" || fail "--agent missing"
+# The token alone is not enough: `--agent --session-key ...` still contains "--agent" and is
+# exactly the regression that would break the real CLI while this assertion passed. Found by
+# the reviewer on the commit that introduced this file.
+grep -qE -- "--agent +[A-Za-z0-9_-]+" "$ARGLOG" && pass "invocation passes --agent WITH a value" || fail "--agent has no value: $(cat "$ARGLOG")"
 grep -q -- "--session-key" "$ARGLOG" && pass "invocation passes --session-key (keeps review out of the reviewer's own session)" || fail "--session-key missing"
 
 # 3. A CLEAN REVIEW IS SILENT and advances the ref. Silence is the healthy state; the schedule
@@ -78,18 +87,27 @@ out="$(STUB_MODE=crash run)"
 [ "$(ref)" = "$before" ] && pass "a crashed reviewer leaves the ref alone so the commit is retried" || fail "ref advanced past a commit the reviewer never reviewed"
 case "$out" in *failed*) pass "a crashed reviewer says so out loud";; *) fail "crash was silent: $out";; esac
 
+unstick; fresh nullres
 # 7. A NULL RESULT IS NOT A CLEAN REVIEW. Found by the reviewer itself on 2026-08-27: the
 #    parse raised, stderr was discarded, and an empty body read as "nothing found".
+before="$(ref)"
 out="$(STUB_MODE=nullres run)"
-case "$out" in *"NOT reviewed"*) pass "a null result reports the commit as unreviewed";;
+case "$out" in *"NOT advancing the ref"*) pass "a null result reports the commit as unreviewed";;
   *) fail "null result passed as a clean review: $out";; esac
+# REPORTING IT IS NOT ENOUGH. The first version said "NOT reviewed" and advanced the ref
+# anyway, so nothing ever looked at that commit again — which makes the review-after guarantee
+# in AGENTS.md false. The reviewer caught the contradiction between the rule and the code.
+[ "$(ref)" = "$before" ] && pass "an unreadable answer leaves the ref alone so the commit is retried" || fail "ref advanced past a commit whose review could not be read"
 
+unstick; fresh garbage
 # 8. NON-JSON IS NOT A CLEAN REVIEW EITHER.
-echo five >> a.txt && git -C "$REPO" commit -qam "fifth commit"
+before="$(ref)"
 out="$(STUB_MODE=garbage run)"
-case "$out" in *"NOT reviewed"*) pass "non-JSON output reports the commit as unreviewed";;
+case "$out" in *"NOT advancing the ref"*) pass "non-JSON output reports the commit as unreviewed";;
   *) fail "garbage output passed as a clean review: $out";; esac
+[ "$(ref)" = "$before" ] && pass "non-JSON output leaves the ref alone too" || fail "ref advanced past unparseable output"
 
+unstick
 # 9. --limit BOUNDS A RUN, and what it leaves behind is picked up next time rather than lost.
 for n in 6 7 8; do echo $n >> a.txt; git -C "$REPO" commit -qam "commit $n"; done
 : > "$ARGLOG"
