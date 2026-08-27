@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""Propose (and only on demand, perform) eviction of stale models from an LM Studio host.
+
+    lms-prune [--budget-gb 400] [--keep-days 30] [--host H] [--apply]
+
+Prints the plan and exits. It deletes NOTHING without `--apply`, and `--apply` is the only
+irreversible thing in this file.
+
+THE POLICY, in Jonathan's words on 2026-08-26: "I just want the hot models available and any
+that are old and busted can go away. Unless I say there's one I really want to keep."
+
+So three rules, in order:
+  1. Anything in the keep-list is never a candidate, whatever the numbers say.
+  2. Anything served within --keep-days is never a candidate. Recent use is the definition
+     of hot, and it is the one signal that does not need interpreting.
+  3. Everything else is ranked oldest-served-first and proposed for eviction until the host
+     is under budget. A model that was NEVER served sorts oldest, because it is exactly what
+     the policy is aimed at.
+
+WHERE LAST-USE COMES FROM. LM Studio knows a model's size but not when it last answered
+anything; `lms ls` carries no timestamp. OmniRoute's `usage_history` does, because every
+request through the router is logged there. That join is the whole reason this can be
+automatic rather than a guess about what looks old.
+
+TWO THINGS TO KNOW BEFORE --apply.
+
+LM Studio's CLI has no delete verb — `lms` offers get/load/unload/ls/ps/import and nothing
+else. Eviction therefore means removing the model's directory under the models root and
+letting LM Studio rescan. That is how it is done by hand, and it is NOT something this tool
+has proven; the first --apply run is the experiment. Do it on one model and look.
+
+And the size numbers here are what LM Studio reports, which counts the repo as stored. Freed
+disk should match closely and may not exactly.
+"""
+import argparse
+import json
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+
+GB = 1024 ** 3
+DEFAULT_HOST = os.environ.get("LMS_HOST", "jonathans-macbook-pro-m5-max.tail2abcb6.ts.net")
+DEFAULT_KEEPLIST = os.path.expanduser("~/.ambrosio/keeplist.txt")
+OMNIROUTE_DB = os.environ.get("OMNIROUTE_DB", os.path.expanduser("~/.omniroute/storage.sqlite"))
+
+
+def ssh(host, command):
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", host, command],
+                          capture_output=True, text=True, timeout=120)
+
+
+def host_models(host, lms_bin):
+    """[(key, path, bytes)] from the host's LM Studio, or None when unreachable."""
+    r = ssh(host, "%s ls --json" % lms_bin)
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return None
+    out = []
+    for m in data:
+        key = m.get("modelKey") or m.get("indexedModelIdentifier") or ""
+        if not key:
+            continue
+        out.append((key, m.get("path") or key, int(m.get("sizeBytes") or 0)))
+    return out
+
+
+def last_used_lmstudio(host, logs_root="~/.lmstudio/server-logs"):
+    """{model-key-lowercased: YYYY-MM-DD} from LM Studio's own server logs.
+
+    This is the signal that makes the policy workable. OmniRoute only sees what routes
+    through it, and on this host 21 of 29 models had no router history at all — a model
+    served straight out of LM Studio looked identical to one never opened, which is not a
+    basis for deleting anything. LM Studio stamps every line with the model key in brackets
+    and the log files are named by date, so the newest file naming a model is its last use.
+    """
+    cmd = ("for f in $(ls -t %s/*/*.log 2>/dev/null); do "
+           "d=$(basename \"$f\" | cut -d. -f1); "
+           "grep -oh '^\\[[^]]*\\]\\[[^]]*\\]\\[[^]]*\\]' \"$f\" 2>/dev/null "
+           "| sed 's/.*\\[\\([^]]*\\)\\]$/\\1/' | sort -u | sed \"s|^|$d\\t|\"; "
+           "done") % logs_root
+    r = ssh(host, cmd)
+    seen = {}
+    for line in r.stdout.splitlines():
+        if "\t" not in line:
+            continue
+        day, model = line.split("\t", 1)
+        model = model.strip().lower()
+        if model and (model not in seen or day > seen[model]):
+            seen[model] = day
+    return seen
+
+
+def last_used(db_path):
+    """{model-name-lowercased: iso-timestamp} from OmniRoute's request log."""
+    if not os.path.exists(db_path):
+        return {}
+    tmp = tempfile.mkdtemp()
+    base = os.path.join(tmp, "storage.sqlite")
+    shutil.copy(db_path, base)
+    for ext in ("-wal", "-shm"):
+        if os.path.exists(db_path + ext):
+            shutil.copy(db_path + ext, base + ext)
+    db = sqlite3.connect(base)
+    seen = {}
+    for name, ts in db.execute("SELECT model, MAX(timestamp) FROM usage_history GROUP BY model"):
+        if name:
+            seen[name.lower()] = ts
+    return seen
+
+
+def match_usage(key, usage):
+    """Find this model's last-use timestamp, tolerating id shape differences.
+
+    The router logs `qwen/qwen3-coder-next` where LM Studio calls it `qwen3-coder-next`, and
+    logs `qwen3.6-27b-mlx@6bit` verbatim. Try exact, then the tail after any slash, then a
+    containment match in either direction. A miss returns None, which sorts as never-used —
+    so a matching bug shows up as a model proposed for eviction, never as one silently kept.
+    """
+    k = key.lower()
+    if k in usage:
+        return usage[k]
+    tail = k.split("/")[-1]
+    if tail in usage:
+        return usage[tail]
+    for name, ts in usage.items():
+        if name.split("/")[-1] == tail or tail in name or name in k:
+            return ts
+    return None
+
+
+def load_keeplist(path):
+    keep = []
+    if os.path.exists(path):
+        for line in open(path):
+            line = line.strip()
+            if line and not line.startswith("#"):
+                keep.append(line.lower())
+    return keep
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--budget-gb", type=float, default=400.0)
+    ap.add_argument("--keep-days", type=int, default=30)
+    ap.add_argument("--host", default=DEFAULT_HOST)
+    ap.add_argument("--lms-bin", default="~/.lmstudio/bin/lms")
+    ap.add_argument("--models-root", default="~/.lmstudio/models")
+    ap.add_argument("--keeplist", default=DEFAULT_KEEPLIST)
+    ap.add_argument("--db", default=OMNIROUTE_DB)
+    ap.add_argument("--include-unused", action="store_true",
+                    help="also consider models with no request history (see the note it prints)")
+    ap.add_argument("--apply", action="store_true", help="actually delete. Irreversible.")
+    args = ap.parse_args()
+
+    models = host_models(args.host, args.lms_bin)
+    if models is None:
+        # Unreachable is not empty. Reporting "nothing to prune" for a sleeping host is the
+        # same lie as a health check reading silence as death.
+        sys.stderr.write("lms-prune: %s did not answer — no plan made.\n" % args.host)
+        return 2
+
+    usage = last_used(args.db)
+    # LM Studio's own logs win where they exist: they cover local use, which the router
+    # cannot see. Merge rather than replace — a model served only through OmniRoute is
+    # still in use.
+    for model, day in last_used_lmstudio(args.host).items():
+        prior = usage.get(model, "")
+        if day > prior[:10]:
+            usage[model] = day + "T00:00:00Z"
+    if not usage:
+        sys.stderr.write("lms-prune: no usage history at %s — every model would sort as "
+                         "never-used, which is not a safe basis for deletion.\n" % args.db)
+        return 3
+
+    keep = load_keeplist(args.keeplist)
+    cutoff = subprocess.run(["date", "-u", "-v-%dd" % args.keep_days, "+%Y-%m-%dT%H:%M:%SZ"],
+                            capture_output=True, text=True).stdout.strip()
+
+    total = sum(m[2] for m in models)
+    rows = []
+    for key, path, size in models:
+        ts = match_usage(key, usage)
+        # Keep-list entries match the whole key or a slash/at-delimited component of it.
+        # A bare substring test protected `qwen3-coder-next-base-mlx` off an entry for
+        # `qwen3-coder-next`, which is a different 65GB model with no calls ever.
+        lk = key.lower()
+        parts = [lk] + lk.replace("@", "/").split("/")
+        kept_by_list = any(k == part or lk == k for k in keep for part in parts)
+        recent = bool(ts and ts >= cutoff)
+        rows.append({"key": key, "path": path, "size": size, "last": ts,
+                     "protected": kept_by_list or recent,
+                     "why": "keeplist" if kept_by_list else ("used %s" % ts[:10] if recent else "")})
+
+    print("host %s: %d models, %.1f GB stored, budget %.0f GB" % (
+        args.host, len(rows), total / GB, args.budget_gb))
+    over = total / GB - args.budget_gb
+    if over <= 0:
+        print("under budget by %.1f GB — nothing proposed." % -over)
+        return 0
+    print("over budget by %.1f GB\n" % over)
+
+    # Never-used sorts first: '' precedes any timestamp.
+    pool = [r for r in rows if not r["protected"]]
+    unused = [r for r in pool if not r["last"]]
+    if unused and not args.include_unused:
+        print("  %d model(s) have NO request history and are held back. OmniRoute only sees"
+              % len(unused))
+        print("  what routes through it, so a model used directly in LM Studio looks identical")
+        print("  to one never opened. Pass --include-unused once you have looked at the list:")
+        for r in sorted(unused, key=lambda r: -r["size"]):
+            print("      %-52s %7.1f GB" % (r["key"][:52], r["size"] / GB))
+        print("")
+        pool = [r for r in pool if r["last"]]
+    candidates = sorted(pool, key=lambda r: r["last"] or "")
+    freed = 0.0
+    plan = []
+    for r in candidates:
+        if freed >= over:
+            break
+        freed += r["size"] / GB
+        plan.append(r)
+
+    if not plan:
+        print("nothing evictable — everything is on the keep-list or used within %d days."
+              % args.keep_days)
+        return 0
+
+    for r in plan:
+        print("  EVICT  %-52s %7.1f GB  last used %s" % (
+            r["key"][:52], r["size"] / GB, r["last"][:10] if r["last"] else "NEVER"))
+    print("\n  frees %.1f GB, leaves %.1f GB" % (freed, total / GB - freed))
+    protected = [r for r in rows if r["protected"]]
+    print("  protected: %d model(s) — %s" % (
+        len(protected), ", ".join("%s (%s)" % (r["key"], r["why"]) for r in protected) or "none"))
+
+    if not args.apply:
+        print("\ndry run. Re-run with --apply to delete.")
+        return 0
+
+    for r in plan:
+        target = "%s/%s" % (args.models_root, r["path"])
+        # Refuse anything that could climb out of the models root. A model path comes from
+        # LM Studio rather than from a person, but this command is rm -rf over ssh and the
+        # cost of being wrong is not symmetric with the cost of the check.
+        if ".." in r["path"] or r["path"].startswith("/"):
+            print("REFUSED %s — path escapes the models root" % r["path"])
+            continue
+        res = ssh(args.host, 'rm -rf "%s"' % target)
+        print("%s %s" % ("deleted" if res.returncode == 0 else "FAILED  ", r["key"]))
+        if res.returncode != 0:
+            sys.stderr.write(res.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
