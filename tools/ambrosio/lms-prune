@@ -14,8 +14,15 @@ So three rules, in order:
   2. Anything served within --keep-days is never a candidate. Recent use is the definition
      of hot, and it is the one signal that does not need interpreting.
   3. Everything else is ranked oldest-served-first and proposed for eviction until the host
-     is under budget. A model that was NEVER served sorts oldest, because it is exactly what
-     the policy is aimed at.
+     is under budget.
+
+A MODEL HE HAS NEVER RUN IS NOT A TARGET. Jonathan, 2026-08-27: "I don't mind collecting
+models I never touch. Sometimes I just like looking at them." An earlier version of this file
+said a never-served model "sorts oldest, because it is exactly what the policy is aimed at" —
+which inverted his actual policy and would have proposed exactly the models he keeps on
+purpose. Unused models are held back behind --include-unused, and when they are considered at
+all they are ranked by DOWNLOAD DATE rather than treated as infinitely old. Disk pressure and
+age decide, never "he hasn't opened it".
 
 WHERE LAST-USE COMES FROM. LM Studio knows a model's size but not when it last answered
 anything; `lms ls` carries no timestamp. OmniRoute's `usage_history` does, because every
@@ -96,6 +103,25 @@ def last_used_lmstudio(host, logs_root="~/.lmstudio/server-logs"):
         if model and (model not in seen or day > seen[model]):
             seen[model] = day
     return seen
+
+
+def download_dates(host, models_root="~/.lmstudio/models"):
+    """{relative-path: YYYY-MM-DD} from each model directory's mtime.
+
+    The fallback ordering for models with no request history. Jonathan keeps models he has
+    never run — "sometimes I just like looking at them" — so "never opened" cannot be the
+    thing that condemns one. When disk pressure forces a choice among them, the honest
+    tiebreak is which arrived longest ago, not which went unread.
+    """
+    cmd = ("cd %s 2>/dev/null && for d in */*; do [ -d \"$d\" ] && "
+           "echo \"$(stat -f %%Sm -t %%Y-%%m-%%d \"$d\")|$d\"; done") % models_root
+    r = ssh(host, cmd)
+    out = {}
+    for line in r.stdout.splitlines():
+        if "|" in line:
+            day, path = line.split("|", 1)
+            out[path.strip()] = day.strip()
+    return out
 
 
 def last_used(db_path):
@@ -192,6 +218,7 @@ def main():
                          "never-used, which is not a safe basis for deletion.\n" % args.db)
         return 3
 
+    dl = download_dates(args.host, args.models_root)
     keep = load_keeplist(args.keeplist)
     # Computed in Python, not by shelling out to `date -v-Nd`, which is BSD-only. On GNU date
     # that call fails, stdout is empty, and `ts >= ""` is True for every timestamp — so every
@@ -212,6 +239,7 @@ def main():
         kept_by_list = any(k == part or lk == k for k in keep for part in parts)
         recent = bool(ts and ts >= cutoff)
         rows.append({"key": key, "path": path, "size": size, "last": ts,
+                     "arrived": dl.get(path, ""),
                      "protected": kept_by_list or recent,
                      "why": "keeplist" if kept_by_list else ("used %s" % ts[:10] if recent else "")})
 
@@ -232,10 +260,13 @@ def main():
         print("  what routes through it, so a model used directly in LM Studio looks identical")
         print("  to one never opened. Pass --include-unused once you have looked at the list:")
         for r in sorted(unused, key=lambda r: -r["size"]):
-            print("      %-52s %7.1f GB" % (r["key"][:52], r["size"] / GB))
+            print("      %-52s %7.1f GB  downloaded %s" % (
+                r["key"][:52], r["size"] / GB, r["arrived"] or "unknown"))
         print("")
         pool = [r for r in pool if r["last"]]
-    candidates = sorted(pool, key=lambda r: r["last"] or "")
+    # Sort key: last-served when known, otherwise the download date. A model with neither
+    # sorts last rather than first — unknown must never be the cheapest thing to delete.
+    candidates = sorted(pool, key=lambda r: r["last"] or r["arrived"] or "9999-99-99")
     freed = 0.0
     plan = []
     for r in candidates:
@@ -250,8 +281,8 @@ def main():
         return 0
 
     for r in plan:
-        print("  EVICT  %-52s %7.1f GB  last used %s" % (
-            r["key"][:52], r["size"] / GB, r["last"][:10] if r["last"] else "NEVER"))
+        when = r["last"][:10] if r["last"] else ("never run, downloaded %s" % (r["arrived"] or "unknown"))
+        print("  EVICT  %-52s %7.1f GB  %s" % (r["key"][:52], r["size"] / GB, when))
     print("\n  frees %.1f GB, leaves %.1f GB" % (freed, total / GB - freed))
     protected = [r for r in rows if r["protected"]]
     print("  protected: %d model(s) — %s" % (

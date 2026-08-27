@@ -26,6 +26,7 @@ echo "$cmd" >> "$SSHLOG"
 case "$cmd" in
   *"ls --json"*) cat "$FIXDIR/models.json";;
   *server-logs*) cat "$FIXDIR/serverlogs.tsv";;
+  *stat*) cat "$FIXDIR/dates.txt" 2>/dev/null;;
   *"rm -rf"*) exit 0;;
   *) : ;;
 esac
@@ -44,6 +45,8 @@ cat > "$FIX/models.json" <<'JSON'
 JSON
 # LM Studio server-log scan output: "<date>\t<model>". cold-model is old, hot-model is today.
 TODAY="$(date +%Y-%m-%d)"
+# Download dates, the fallback ordering for models with no request history.
+printf '2020-01-01|org/ancient-model\n2026-08-01|org/ghost-model\n' > "$FIX/dates.txt"
 printf '2026-01-02\tcold-model\n%s\thot-model\n2026-01-02\tqwen3-coder-next-base-mlx\n' "$TODAY" > "$FIX/serverlogs.tsv"
 
 DB="$SB/storage.sqlite"
@@ -121,6 +124,7 @@ echo "$cmd" >> "$SSHLOG"
 case "$cmd" in
   *"ls --json"*) cat "$FIXDIR/models.json";;
   *server-logs*) cat "$FIXDIR/serverlogs.tsv";;
+  *stat*) cat "$FIXDIR/dates.txt" 2>/dev/null;;
   *"rm -rf"*) exit 0;;
   *) : ;;
 esac
@@ -149,5 +153,26 @@ JSON
 out="$(run --budget-gb 1 --include-unused --apply)"
 case "$out" in *"REFUSED parent"*) pass "a model whose directory contains another is refused";; *) fail "ancestor path not refused: $out";; esac
 if grep -q 'rm -rf .*org/nest' "$SSHLOG"; then fail "issued rm on a directory containing another model"; else pass "no rm issued for the containing directory"; fi
+
+# 12. UNKNOWN HISTORY IS RANKED BY DOWNLOAD DATE, NOT TREATED AS INFINITELY OLD.
+#     Jonathan, 2026-08-27: "I don't mind collecting models I never touch. Sometimes I just
+#     like looking at them." An earlier version sorted a never-served model as the oldest
+#     thing on the host, which proposed exactly the models he keeps on purpose. With
+#     --include-unused, the older DOWNLOAD wins.
+cat > "$FIX/models.json" <<'JSON'
+[{"modelKey":"ancient-model","path":"org/ancient-model","sizeBytes":107374182400},
+ {"modelKey":"ghost-model","path":"org/ghost-model","sizeBytes":107374182400}]
+JSON
+: > "$SSHLOG"
+out="$(run --budget-gb 150 --include-unused)"
+first="$(printf '%s\n' "$out" | grep 'EVICT' | head -1)"
+case "$first" in
+  *ancient-model*) pass "among never-run models the older download is proposed first";;
+  *) fail "download date did not order the unknown-history models — first was: $first";;
+esac
+case "$out" in
+  *"never run, downloaded 2020-01-01"*) pass "the plan states the download date instead of just NEVER";;
+  *) fail "download date not shown in the plan: $out";;
+esac
 
 finish
