@@ -28,6 +28,10 @@ chmod +x "$SB/bin/"*
 echo "What is the airspeed velocity of an unladen swallow?" > "$SB/task.md"
 
 # ---- fan-out: each agent's real stdout lands in its own tagged file ----
+# The stubs answer in one line, which is legitimately shorter than any real review. The
+# floor that rejects "Execution error" is policy, so the test sets it rather than working
+# around it — and assertion 10 below proves the floor still bites at its real value.
+export MIN_ANSWER_BYTES=10
 export CLAUDE_BIN="$SB/bin/fake-claude" CODEX_BIN="$SB/bin/fake-codex" QWEN_BIN="$SB/bin/fake-qwen"
 assert_rc 0 "fan-out to three agents succeeds" "$PANEL" "$SB/task.md" --out "$SB/out" --agents claude,codex,qwen --tag r1
 assert_file "$SB/out/r1_claude.md" "claude output file written"
@@ -62,5 +66,16 @@ SHIM
 chmod +x "$SB/bin/crasher"
 red "agent that runs and crashes must fail the round" env CLAUDE_BIN="$SB/bin/crasher" "$PANEL" "$SB/task.md" --out "$SB/out7" --agents claude --tag r1
 red "typo'd flag must error, not run with defaults (would overwrite the previous round)" env CLAUDE_BIN="$SB/bin/fake-claude" "$PANEL" "$SB/task.md" --out "$SB/out8" --agents claude --tga r2
+
+# 10. A ZERO EXIT WITH A STUB ANSWER IS NOT SUCCESS. `claude -p` returned the 15-byte string
+#     "Execution error" on 2026-08-26 and panel recorded it as ok, so a three-voice round
+#     carried one voice and said nothing about it.
+cat > "$SB/bin/errorstub" <<'SHIM'
+#!/usr/bin/env bash
+echo "Execution error"
+SHIM
+chmod +x "$SB/bin/errorstub"
+red "an agent that exits 0 with a 15-byte error string must fail the round" \
+  env MIN_ANSWER_BYTES=200 CLAUDE_BIN="$SB/bin/errorstub" "$PANEL" "$SB/task.md" --out "$SB/out9" --agents claude --tag r1
 
 finish

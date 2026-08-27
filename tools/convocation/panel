@@ -33,6 +33,10 @@ QWEN_BIN="${QWEN_BIN:-/opt/homebrew/bin/qwen}"
 #   -y is load-bearing too (doctrine): without it any prompt that trips qwen's tool-calling
 #   dies with "requires user approval but cannot execute in non-interactive mode".
 QWEN_MODEL="${QWEN_MODEL:-ollamacloud/glm-5.2}"
+# Shortest thing that could be a review. 200 is a judgement, not a measurement: it is well
+# above an error string like "Execution error" (15 bytes) and well below any real answer.
+# Overridable so tests can dispatch stub agents that legitimately answer in one line.
+MIN_ANSWER_BYTES="${MIN_ANSWER_BYTES:-200}"
 # validate EVERY requested agent before launching ANY — a convocation missing a voice is not
 # a convocation, and a silent skip would let a two-voice round masquerade as a three-voice one
 bad=0
@@ -63,7 +67,16 @@ run_agent(){ # run_agent <name> <outfile> <cmd...>
   local a="$1" o="$2"; shift 2
   if "$@" > "$o" 2>"$o.err"; then
     echo "done: $a"
-    printf 'ok    %s  %s bytes\n' "$a" "$(wc -c < "$o")" >> "$STATUS"
+    # A zero exit is not an answer. `claude -p` returned the 15-byte string "Execution error"
+    # in that same round and was recorded as ok, which is how a panel reports three voices and
+    # carries one. Anything too short to be a review is a failure with its content quoted.
+    local bytes; bytes="$(wc -c < "$o" | tr -d ' ')"
+    if [ "$bytes" -lt "$MIN_ANSWER_BYTES" ]; then
+      printf 'FAIL  %s  answered %s bytes: %s\n' "$a" "$bytes" "$(tr '\n' ' ' < "$o")" >> "$STATUS"
+      echo "panel: agent '$a' returned $bytes bytes, too short to be an answer: $(tr '\n' ' ' < "$o")" >&2
+      return 1
+    fi
+    printf 'ok    %s  %s bytes\n' "$a" "$bytes" >> "$STATUS"
   else
     local rc=$?
     printf '\n\nFAIL: %s exited %s; stderr is in %s.err\n' "$a" "$rc" "$o" >> "$o"
@@ -77,7 +90,12 @@ for a in $(echo "$AGENTS" | tr ',' ' '); do
   o="$OUT/${TAG}_${a}.md"
   case "$a" in
     claude) run_agent claude "$o" "$CLAUDE_BIN" -p "$PROMPT" & pids+=($!) ;;
-    codex)  run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" & pids+=($!) ;;
+    # </dev/null is LOAD-BEARING and its absence is why the 2026-08-26 22:00 round produced
+    # three empty files. Without it codex prints "Reading additional input from stdin..." and
+    # waits forever, so the round does not fail, it HANGS — and every other agent's tokens are
+    # already spent by then. The doctrine has said this since 2026-08-19; this dispatcher
+    # simply never did it.
+    codex)  run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check "$PROMPT" </dev/null & pids+=($!) ;;
     qwen)   run_agent qwen   "$o" "$QWEN_BIN" -m "$QWEN_MODEL" -y -p "$PROMPT" & pids+=($!) ;;
   esac
 done
