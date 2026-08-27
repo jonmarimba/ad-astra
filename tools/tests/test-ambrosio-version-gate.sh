@@ -143,4 +143,18 @@ case "$(sed -n '/Deliver anything the quiet-hours gate held/,/fi/p' "$AMB2")" in
   *) fail "held trending reports have no delivery path — the quiet gate is a silent drop";;
 esac
 
+# ---------------------------------------------------------------------------
+# JUNK FILTERING MUST CATCH BOTH SPELLINGS OF THE JAILBROKEN VARIANTS.
+# Within a minute of adding "ornith" to the watchlist on 2026-08-27, the trending watch texted
+# Jonathan about OBLITERATUS/Ornith-1.5-9B-OBLITERATED. The filters listed "abliterated",
+# which is the usual spelling, and that name uses the other one. These variants are exactly
+# what the junk list exists to keep out of a channel he has already objected to as noisy.
+# ---------------------------------------------------------------------------
+AMB3="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
+missing_junk=""
+for filt in $(grep -c "obliterat" "$AMB3"); do :; done
+[ "$(grep -c "obliterat" "$AMB3")" -eq 3 ] \
+  && pass "all three junk filters catch the OBLITERAT spelling, not just ABLITERAT" \
+  || fail "only $(grep -c "obliterat" "$AMB3") of 3 junk filters catch the OBLITERAT spelling"
+
 finish

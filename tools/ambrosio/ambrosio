@@ -105,7 +105,7 @@ minp=float(os.environ.get('MIN_PARAMS_B','7'))
 # official frontier labs only — skips random community quants/forks
 REPUTABLE={'deepseek-ai','nvidia','zai-org','qwen','moonshotai','meta-llama','mistralai',
            'minimaxai','microsoft','google','ai21labs','allenai','lmstudio-community','mlx-community'}
-JUNK=('abliterated','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp','distill')
+JUNK=('abliterated','obliterat','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp','distill')
 # tokens to strip when deriving the family search term (format / quant / variant / size / date)
 DROP=re.compile(r'^(nvfp4|bf16|fp16|fp8|mxfp4|int4|int8|q[0-9].*|k_m|gguf|mlx|base|instruct|chat|it|dflash|mtp|a[0-9]+b|[0-9.]+b|[0-9]{4,}|v?[0-9]+bit)$', re.I)
 def family_term(tail):
@@ -156,7 +156,7 @@ minp=float(os.environ.get('MIN_PARAMS_B','7'))
 wl=os.environ['WATCHLIST'].lower().split()
 KNOWN={'deepseek-ai','nvidia','zai-org','qwen','moonshotai','meta-llama','mistralai',
        'minimaxai','microsoft','google','ai21labs','allenai','lmstudio-community','mlx-community'}
-JUNK=('abliterated','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp')
+JUNK=('abliterated','obliterat','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp')
 def biggest_size_b(tail):
     sizes=[float(m.group(1)) for t in re.split(r'[-_]', tail) for m in [re.match(r'([0-9.]+)b$', t, re.I)] if m]
     return max(sizes) if sizes else None
@@ -264,7 +264,7 @@ import sys,json,os,re,urllib.request
 term=os.environ['TERM_Q'].lower()
 cap=float(os.environ.get('SIZE_CAP_GB','80'))
 GOOD_ORGS=['mlx-community','lmstudio-community']
-JUNK=('dspark','abliterated','uncensored','crack','jang','keys-','oq4e','oq8e','-mtp','draft','distill')
+JUNK=('dspark','abliterated','obliterat','uncensored','crack','jang','keys-','oq4e','oq8e','-mtp','draft','distill')
 def quant_rank(name):
     n=name.lower()
     if '4bit' in n or 'mxfp4' in n or 'q4' in n: return 0
