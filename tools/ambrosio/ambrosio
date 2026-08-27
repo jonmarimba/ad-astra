@@ -62,7 +62,7 @@ cat > "$CONF" <<'CFG'
 HOST="jonathans-macbook-pro-m5-max.tail2abcb6.ts.net"
 LMS_PORT="1234"
 SSH_TARGET="jonathans-macbook-pro-m5-max.tail2abcb6.ts.net"   # ssh over Tailscale; lms must be on PATH there
-WATCHLIST="glm kimi deepseek qwen3 qwen4 minimax gpt-oss nemotron llama4 llama5 mistral-large command-a"
+WATCHLIST="glm kimi deepseek qwen3 qwen4 minimax gpt-oss nemotron llama4 llama5 mistral-large command-a ornith"
 SIZE_CAP_GB="80"
 OMNIROUTE_NODE="LM Studio M5"
 LMS_BIN="~/.lmstudio/bin/lms"      # lms isn't on the non-interactive ssh PATH; use the full path
