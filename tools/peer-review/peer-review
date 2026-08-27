@@ -1,22 +1,4 @@
-    body="$(printf '%s' "$out" | python3 -c "
-import json,sys
-# The real shape, confirmed against the live binary on 2026-08-27:
-#   {'status':'ok','result':{'payloads':[{'text':...}]}}
-# An earlier version guessed at top-level text/reply/message/content keys and would have
-# found none of them, turning every review into an empty body — which this script treats as
-# 'nothing found'. A parser that cannot find the answer must say so, not report silence.
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print('PARSE-ERROR: reviewer output was not JSON'); raise SystemExit
-if d.get('status') not in (None, 'ok'):
-    print('REVIEWER-STATUS: %s' % d.get('status')); raise SystemExit
-texts = [p.get('text','') for p in (d.get('result',{}).get('payloads') or []) if p.get('text')]
-if texts:
-    print('\\n'.join(t.strip() for t in texts))
-else:
-    print('PARSE-ERROR: no result.payloads[].text in reviewer output')
-" 2>/dev/null)"#!/usr/bin/env bash
+#!/usr/bin/env bash
 # peer-review — hand each new commit to the OTHER assistant for review, and surface what it finds.
 #
 # WHY THIS SHAPE. A cross-brand panel on 2026-08-27 was asked how to make an idle second
@@ -42,9 +24,15 @@ set -uo pipefail
 
 REVIEWER_BIN="${REVIEWER_BIN:-/opt/homebrew/bin/openclaw}"
 REVIEWER_NAME="${REVIEWER_NAME:-ghost-openclaw}"
-# --agent is REQUIRED: without it the CLI exits with "No target session selected" and, worse,
-# exits 0 while doing so. Verified by probing the live binary rather than by reading the help.
+# --agent is REQUIRED. Without it the CLI prints "No target session selected" and EXITS 0
+# while doing it, so a run would look successful and review nothing.
 REVIEWER_AGENT="${REVIEWER_AGENT:-main}"
+# --session-key is equally load-bearing, and the reviewer itself caught its absence on the
+# very first live review of this script: without it the turn lands in the reviewer's MAIN
+# session and interleaves with whatever conversation is happening there. Verified in the
+# probe output — sessionKey came back as "agent:main:main". A dedicated key keeps review
+# turns out of the reviewer's own context.
+REVIEWER_SESSION="${REVIEWER_SESSION:-agent:main:peer-review}"
 SELF_NAME="${SELF_NAME:-ghost-claude}"
 WORKLOG="${WORKLOG_BIN:-$HOME/svnCheckouts/js-project-GhOST/tools/worklog}"
 # The ref is per-repo and lives in the repo. Nothing here remembers anything between runs.
@@ -109,7 +97,8 @@ for repo in "${REPOS[@]}"; do
       rm -f "$task"; continue
     fi
 
-    out="$(timeout 600 "$REVIEWER_BIN" agent --agent "$REVIEWER_AGENT" --message-file "$task" --json 2>/dev/null)"
+    out="$(timeout 600 "$REVIEWER_BIN" agent --agent "$REVIEWER_AGENT" \
+             --session-key "$REVIEWER_SESSION" --message-file "$task" --json 2>/dev/null)"
     rc=$?
     rm -f "$task"
 
@@ -122,23 +111,29 @@ for repo in "${REPOS[@]}"; do
 
     body="$(printf '%s' "$out" | python3 -c "
 import json,sys
+# The real shape, confirmed against the live binary rather than guessed:
+#   {'status':'ok','result':{'payloads':[{'text': ...}]}}
+# The first version looked for top-level text/reply/message/content and found none of them,
+# so every review produced an empty body — which this script reads as 'nothing found'. A
+# parser that cannot find the answer has to say so; silence is a verdict here.
 try:
-    d=json.load(sys.stdin)
+    d = json.load(sys.stdin)
 except Exception:
-    print(sys.stdin.read() if False else ''); raise SystemExit
-for k in ('text','reply','message','content','output','result'):
-    v=d.get(k) if isinstance(d,dict) else None
-    if isinstance(v,str) and v.strip():
-        print(v.strip()); break
-else:
-    print(json.dumps(d)[:4000])
+    print('PARSE-ERROR: reviewer output was not JSON')
+    raise SystemExit
+if d.get('status') not in (None, 'ok'):
+    print('REVIEWER-STATUS: ' + str(d.get('status')))
+    raise SystemExit
+texts = [p.get('text','') for p in (d.get('result',{}).get('payloads') or []) if p.get('text')]
+print('\n'.join(t.strip() for t in texts) if texts
+      else 'PARSE-ERROR: no result.payloads[].text in reviewer output')
 " 2>/dev/null)"
 
     git update-ref "$REF" "$sha"
 
     case "$body" in
-      # A parse failure is NOT a clean review. Report it and do not pretend the commit was
-      # checked — the ref has already advanced, so say plainly that this one went unreviewed.
+      # A parse failure is NOT a clean review. Say so, and say the commit went unchecked —
+      # the ref has already advanced, so nothing else will look at it again.
       PARSE-ERROR*|REVIEWER-STATUS*)
         echo "peer-review: could not read $REVIEWER_NAME's answer for $(basename "$repo") ${sha:0:8} — $body. That commit is NOT reviewed."
         ;;
