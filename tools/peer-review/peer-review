@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# peer-review — hand each new commit to the OTHER assistant for review, and surface what it finds.
+#
+# WHY THIS SHAPE. A cross-brand panel on 2026-08-27 was asked how to make an idle second
+# assistant useful without the busy one having to think about it. Two brands converged:
+#
+#   * The trigger must be a SIDE EFFECT of something that already happens. Committing already
+#     happens. Nobody has to remember a convention.
+#   * State lives in the WORLD, not in an agent. A git ref survives a session death, a
+#     compaction, and a restart; an agent's memory of "I last reviewed X" survives none of them.
+#   * The reviewer must not be able to accumulate a silent backlog. Both brands predicted the
+#     same failure: the reviewer reports into a channel nobody is responsible for clearing, and
+#     a week later there are fifteen findings and three fixes. So findings go to STDOUT, which
+#     the scheduler turns into a poke at the busy assistant, rather than into a file.
+#
+# The reviewer is invoked headlessly (`openclaw agent --message-file`), so it never needs its
+# interactive session to be free, and the busy assistant never has to decide whether it is.
+#
+#   peer-review [--repo DIR]... [--dry-run] [--limit N]
+#
+# Silent when there is nothing new or nothing found. That silence is the healthy state, and it
+# is NOT an approval — a review that finds nothing says nothing, exactly like a passing test.
+set -uo pipefail
+
+REVIEWER_BIN="${REVIEWER_BIN:-/opt/homebrew/bin/openclaw}"
+REVIEWER_NAME="${REVIEWER_NAME:-ghost-openclaw}"
+SELF_NAME="${SELF_NAME:-ghost-claude}"
+WORKLOG="${WORKLOG_BIN:-$HOME/svnCheckouts/js-project-GhOST/tools/worklog}"
+# The ref is per-repo and lives in the repo. Nothing here remembers anything between runs.
+REF="${PEER_REVIEW_REF:-refs/peer-review/last}"
+LIMIT="${PEER_REVIEW_LIMIT:-3}"
+DRY=0
+REPOS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) REPOS+=("$2"); shift 2;;
+    --dry-run) DRY=1; shift;;
+    --limit) LIMIT="$2"; shift 2;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0;;
+    *) echo "peer-review: unknown argument '$1'" >&2; exit 64;;
+  esac
+done
+[ ${#REPOS[@]} -gt 0 ] || REPOS=("$HOME/svnCheckouts/js-db-ad-astra" "$HOME/svnCheckouts/js-project-GhOST")
+
+[ -x "$REVIEWER_BIN" ] || { echo "peer-review: reviewer binary $REVIEWER_BIN is not executable — no review ran" >&2; exit 2; }
+
+for repo in "${REPOS[@]}"; do
+  [ -d "$repo/.git" ] || { echo "peer-review: $repo is not a git repo — skipped" >&2; continue; }
+  cd "$repo" || continue
+  head_sha="$(git rev-parse HEAD 2>/dev/null)" || continue
+
+  # FIRST RUN RECORDS THE BASELINE AND REVIEWS NOTHING. Without this, installing the tool
+  # would dump every commit in history at the reviewer, which is the "historical flood" the
+  # panel warned about and the same shape as ollama-watch's first-run silence, inverted.
+  if ! last_sha="$(git rev-parse -q --verify "$REF" 2>/dev/null)"; then
+    git update-ref "$REF" "$head_sha"
+    echo "peer-review: baseline set for $(basename "$repo") at ${head_sha:0:8} — nothing reviewed on a first run" >&2
+    continue
+  fi
+  [ "$last_sha" = "$head_sha" ] && continue
+
+  # Oldest first, so a run that dies partway leaves the ref on a real reviewed commit rather
+  # than skipping the ones it never got to.
+  commits="$(git rev-list --reverse "$last_sha..$head_sha" | head -n "$LIMIT")"
+  [ -z "$commits" ] && continue
+
+  for sha in $commits; do
+    subject="$(git log -1 --format=%s "$sha")"
+    task="$(mktemp)"
+    {
+      echo "You are reviewing one commit written by another AI assistant on a shared machine. Find DEFECTS."
+      echo
+      echo "Report ONLY defects you can point at a specific line for, each with a concrete failure: the input or state that triggers it and what goes wrong. If you find none, reply with exactly NO DEFECTS FOUND and nothing else — silence is the expected result and is not approval."
+      echo
+      echo "Do not comment on style, naming, or comment density. Do not suggest refactors. The author has context you do not, so a design choice that looks odd is probably deliberate; a missing quote or an unchecked exit code is not."
+      echo
+      echo "Repository: $(basename "$repo")"
+      echo "Commit: $sha"
+      echo "Subject: $subject"
+      echo
+      echo "--- diff ---"
+      git show --format="" --unified=5 "$sha" | head -c 60000
+    } > "$task"
+
+    if [ "$DRY" -eq 1 ]; then
+      echo "[dry-run] would send $(basename "$repo") ${sha:0:8} ($subject) to $REVIEWER_NAME"
+      rm -f "$task"; continue
+    fi
+
+    out="$(timeout 600 "$REVIEWER_BIN" agent --message-file "$task" --json 2>/dev/null)"
+    rc=$?
+    rm -f "$task"
+
+    if [ $rc -ne 0 ] || [ -z "$out" ]; then
+      # A reviewer that could not run must NOT advance the ref, or the commit is silently
+      # never reviewed. Loud, and the ref stays put so the next run retries it.
+      echo "peer-review: $REVIEWER_NAME failed on $(basename "$repo") ${sha:0:8} (rc=$rc) — NOT advancing the ref, will retry"
+      break
+    fi
+
+    body="$(printf '%s' "$out" | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print(sys.stdin.read() if False else ''); raise SystemExit
+for k in ('text','reply','message','content','output','result'):
+    v=d.get(k) if isinstance(d,dict) else None
+    if isinstance(v,str) and v.strip():
+        print(v.strip()); break
+else:
+    print(json.dumps(d)[:4000])
+" 2>/dev/null)"
+
+    git update-ref "$REF" "$sha"
+
+    case "$body" in
+      *"NO DEFECTS FOUND"*|"") : ;;
+      *)
+        # STDOUT on purpose: the scheduler pokes the busy assistant when this is non-empty,
+        # so a finding lands in its next turn instead of in a file nobody opens.
+        echo "peer-review — $REVIEWER_NAME on $(basename "$repo") ${sha:0:8} \"$subject\":"
+        printf '%s\n' "$body"
+        [ -x "$WORKLOG" ] && "$WORKLOG" append --agent "$REVIEWER_NAME" --quiet \
+          --project "$(basename "$repo")" --commit "$sha" \
+          "Peer review found something on ${sha:0:8}: $subject" --note "$(printf '%s' "$body" | head -c 900)" 2>/dev/null
+        ;;
+    esac
+  done
+done
