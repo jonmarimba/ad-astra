@@ -13,6 +13,15 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 need curl "brew install curl (should already be system-present)"
 need python3 "brew install python3"
+# Xcode itself is a dependency of half this file, not an optional extra: every assertion that
+# reaches mcpbridge fails identically whether the daemon is broken or Xcode is simply closed.
+# On 2026-08-26 that cost a ship-gate run four failures that read like a regression and were
+# an unopened application. A missing dependency is a loud FAIL naming the fix, never a skip.
+pgrep -x Xcode >/dev/null 2>&1 || {
+  fail "Xcode is not running — every mcpbridge assertion below will fail for that reason alone. Open Xcode with a project and approve its MCP prompt, then re-run."
+  finish
+  exit 1
+}
 
 mcp_call() { # usage: mcp_call <port> <method> <params-json>  -> prints the raw SSE response body
   local port="$1" method="$2" params="$3"
