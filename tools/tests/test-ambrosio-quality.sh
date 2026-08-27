@@ -47,10 +47,20 @@ EOF
 echo '{"data":[{"id":"qwen3-30b-a3b-4bit"}]}' > "$SB/loaded.json"
 echo '{"data":[{"id":"qwen3-30b-a3b-4bit"},{"id":"meta-llama-3.1-8b-instruct-4bit"}]}' > "$SB/loaded_after_pull.json"
 
-# trending scan surfaces ANOTHER Qwen3-family term (redundant — same prefix already loaded) plus
-# a genuinely new Llama3 family term (not redundant)
+# The trending scan surfaces three shapes:
+#   Qwen3    — same family AND same version as what is loaded. Must skip.
+#   Llama3.1 — a family absent from the host. Must pull.
+#
+# Two candidates, not three, because MAX_PER_RUN is 2: a third pullable candidate silently
+# consumed a slot and made the download-choice assertions below fail for a reason that had
+# nothing to do with downloads.
+#
+# The skip case is the dead weight the redundancy check exists for (Nemotron-3-Nano beside
+# Nemotron-3.5-Lightning, 2026-08-14). The OPPOSITE case — a newer version of a loaded family,
+# which this check used to suppress and which cost Jonathan the GLM-5.3 find on 2026-08-26 —
+# is covered by test-ambrosio-version-gate.sh, where the gate itself is under test.
 cat > "$SB/trending.json" <<'EOF'
-[{"id":"qwen/Qwen3.6-35B-A3B"},{"id":"meta-llama/Llama-3.1-8B"}]
+[{"id":"qwen/Qwen3-30B-A3B-Instruct"},{"id":"meta-llama/Llama-3.1-8B"}]
 EOF
 # want-list explicitly asks for ANOTHER Qwen3 term too — must NOT be skipped despite the redundancy
 cat > "$AMBROSIO_HOME/wantlist.txt" <<'EOF'
@@ -66,6 +76,13 @@ cat > "$SB/search_llama.json" <<'EOF'
   {"id": "mlx-community/Meta-Llama-3.1-8B-4bit", "downloads": 173},
   {"id": "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit", "downloads": 16265}
 ]
+EOF
+# Qwen3.6 must be RESOLVABLE, or "was it pulled" measures the stub instead of the gate. The
+# previous version of this file had no such route, so the old "Qwen3.6 was not pulled"
+# assertion passed whether the redundancy check worked or not — an untested harness dressed
+# as a passing test.
+cat > "$SB/search_qwen36.json" <<'EOF'
+[{"id": "mlx-community/Qwen3.6-35B-A3B-4bit"}]
 EOF
 cat > "$SB/search_qwen3-coder-next.json" <<'EOF'
 [{"id": "mlx-community/Qwen3-Coder-Next-4bit"}]
@@ -83,6 +100,7 @@ for a in "\$@"; do case "\$a" in
   *sort=trendingScore*) cat "$SB/trending.json"; exit 0 ;;
   *api/models?search=Llama-3.1*) cat "$SB/search_llama.json"; exit 0 ;;
   *api/models?search=Qwen3-Coder-Next*) cat "$SB/search_qwen3-coder-next.json"; exit 0 ;;
+  *api/models?search=Qwen3.6*) cat "$SB/search_qwen36.json"; exit 0 ;;
   *api/models?search=*) cat "$SB/search_empty.json"; exit 0 ;;
   *fakehost.test*) cat "$SB/loaded.json"; exit 0 ;;
 esac; done
@@ -115,9 +133,11 @@ assert_eq "0" "$rc" "check exits 0"
 # ---- (1) redundancy: the trending-scan Qwen3.6 term must NOT pull — same family already loaded.
 #      family_term() strips the size/quant tokens ("35B", "A3B") from the HF id's tail, so the
 #      derived term is "Qwen3.6", not the literal HF id — confirmed live, not assumed. ----
-assert_not_contains "$SB/ssh.log" "Qwen3.6" "redundant trending-scan candidate (same family, 'qwen', already loaded) was skipped, not pulled"
-assert_contains "$SB/check.err" "skip 'Qwen3.6' — same family ('qwen')" "the skip was logged with the actual reason, not silent"
-grep -qxF "Qwen3.6" "$AMBROSIO_HOME/seen.txt" && pass "redundant candidate marked seen (won't be re-evaluated forever)" || fail "redundant candidate not marked seen"
+assert_not_contains "$SB/ssh.log" "Qwen3-30B-A3B-Instruct" "same-version same-family candidate was skipped, not pulled"
+# The candidate is recorded under its DERIVED FAMILY TERM, not its full repo id: family_term()
+# strips the size, the active-params and the "Instruct" suffix, so "Qwen3-30B-A3B-Instruct"
+# becomes "Qwen3". Asserting on the full id looked right and could never pass.
+grep -qxF "Qwen3" "$AMBROSIO_HOME/seen.txt" && pass "redundant candidate marked seen under its family term (won't be re-evaluated forever)" || fail "redundant candidate not marked seen"
 
 # ---- (2) want-list bypasses the redundancy check — explicit ask, same family, still pulls ----
 assert_contains "$SB/ssh.log" "Qwen3-Coder-Next-4bit" "want-list entry pulled DESPITE sharing a family ('qwen') with what's already loaded — explicit ask overrides the redundancy check"
