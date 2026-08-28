@@ -58,6 +58,47 @@ check("org/Never-Seen" not in cache,
       "weightless forever")
 check("size lookup failed" in err.getvalue(), "a failed lookup is reported on stderr, not swallowed")
 
+# --- the four peer-review findings of 2026-08-28. Each of these shipped broken.
+calls = []
+def counting(path):
+    calls.append(path)
+    return {"siblings": [{"rfilename": "model.safetensors", "size": 40_000_000_000}]}
+
+# FINDING: an empty repo was cached forever, so the ONE repo this tool exists for —
+# mlx-community/Hy4-preview-4bit, a name with no weights — would never be looked at again.
+cache = {}
+m.api = lambda p: {"siblings": [{"rfilename": ".gitattributes", "size": 100}]}
+m.weight_bytes("mlx-community/Hy4-preview-4bit", cache)
+check("mlx-community/Hy4-preview-4bit" not in cache,
+      "an EMPTY repo is not cached, so the day weights land it is seen")
+m.api = counting
+calls.clear()
+got = m.weight_bytes("mlx-community/Hy4-preview-4bit", cache)
+check(got[1] == 1 and len(calls) == 1, "RED control: the empty repo is genuinely rechecked")
+
+# FINDING: a failed lookup returned (0, 0) and was indistinguishable from a placeholder, so a
+# rate-limited real model was discarded silently.
+def failing(path): raise RuntimeError("rate limited")
+m.api = failing
+with contextlib.redirect_stderr(io.StringIO()):
+    got = m.weight_bytes("org/Real-Model", {})
+check(got == (None, None), "a FAILED lookup returns unknown, never an empty result")
+
+# FINDING: Hugging Face reports a rate limit as HTTP 200 with an error OBJECT. The exception
+# handler never fired, and iterating a dict where a list belongs walks its keys.
+m.api = lambda p: {"error": "We had to rate limit your IP (75.89.30.241)."}
+sys.argv = ["vw", "--model", "tencent/Hy4-preview", "--disk-gb", "342", "--ram-gb", "128",
+            "--state", "/tmp/vw-test-state.json"]
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+    rc = m.main()
+said = buf.getvalue()
+check(rc == 1, "a rate-limit-shaped 200 exits nonzero instead of reporting silence")
+check("NOT a report that nothing appeared" in said,
+      "and says plainly that nothing was LOOKED AT, rather than that nothing was found")
+try: os.unlink("/tmp/vw-test-state.json")
+except OSError: pass
+
 check(m.MAX_LOOKUPS <= 100, "there is a per-run ceiling on lookups (%d)" % m.MAX_LOOKUPS)
 check(m.MIN_MODEL_GB >= 1.0, "there is a floor below which a repo is not a model (%.1f GB)" % m.MIN_MODEL_GB)
 
