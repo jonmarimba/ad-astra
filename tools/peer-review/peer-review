@@ -90,6 +90,29 @@ for repo in "${REPOS[@]}"; do
       echo
       echo "--- diff ---"
       git show --format="" --unified=5 "$sha" | head -c 60000
+
+      # WHICH OF THESE FILES HAVE MOVED ON SINCE. Review necessarily runs behind the author, and
+      # on 2026-08-28 several findings landed against code that had already been fixed or a file
+      # that had been deleted hours earlier — accurate about the commit, spent on nothing. The
+      # reviewer cannot know that unless it is told, so tell it, and let it decide whether the
+      # finding is still worth raising. This does NOT ask it to review current state: the commit
+      # is still the subject, because reviewing a moving tree is how you get findings nobody can
+      # reproduce.
+      echo
+      echo "--- staleness of this commit, as of now ---"
+      any_moved=0
+      for f in $(git show --format="" --name-only "$sha"); do
+        if [ ! -e "$repo/$f" ]; then
+          echo "  $f — DELETED since this commit"
+          any_moved=1
+        elif ! git diff --quiet "$sha" HEAD -- "$f" 2>/dev/null; then
+          echo "  $f — CHANGED since this commit ($(git rev-list --count "$sha..HEAD" -- "$f") later commit(s) touch it)"
+          any_moved=1
+        fi
+      done
+      [ "$any_moved" -eq 0 ] && echo "  every file in this commit is unchanged at HEAD"
+      echo
+      echo "If a file above is deleted or changed, the defect you find may already be fixed. Say so if you believe it is, and skip it — a finding against code that no longer exists costs the author a lookup and returns nothing. If you cannot tell, raise it anyway and note the uncertainty."
     } > "$task"
 
     if [ "$DRY" -eq 1 ]; then

@@ -26,6 +26,13 @@ STUB="$SB/reviewer"; ARGLOG="$SB/argv.log"
 cat > "$STUB" <<'SHIM'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$ARGLOG"
+# Keep a copy of the task the reviewer was handed. The value of the task is in what the reviewer
+# READS, so asserting on the argv alone cannot see whether the content is right.
+prev=""
+for a in "$@"; do
+  [ "$prev" = "--message-file" ] && [ -f "$a" ] && cp "$a" "${TASKCAP:-/dev/null}"
+  prev="$a"
+done
 case "${STUB_MODE:-clean}" in
   clean)   printf '{"status":"ok","result":{"payloads":[{"text":"NO DEFECTS FOUND"}]}}';;
   finding) printf '{"status":"ok","result":{"payloads":[{"text":"- line 3: unquoted path"}]}}';;
@@ -35,6 +42,7 @@ case "${STUB_MODE:-clean}" in
 esac
 SHIM
 chmod +x "$STUB"; export ARGLOG
+TASKCAP="$SB/taskcap"; export TASKCAP
 
 run(){ REVIEWER_BIN="$STUB" WORKLOG_BIN=/nonexistent "$TOOL" --repo "$REPO" "$@" 2>&1; }
 ref(){ git -C "$REPO" rev-parse -q --verify refs/peer-review/last 2>/dev/null || echo NONE; }
@@ -69,6 +77,20 @@ grep -q -- "--session-key" "$ARGLOG" && pass "invocation passes --session-key (k
 #    pokes the author only on non-empty output.
 [ -z "$out" ] && pass "a clean review prints nothing" || fail "clean review was not silent: $out"
 [ "$(ref)" = "$(git -C "$REPO" rev-parse HEAD)" ] && pass "clean review advances the ref" || fail "ref did not advance after a clean review"
+
+# 3b. THE TASK TELLS THE REVIEWER WHAT HAS MOVED SINCE THE COMMIT. Review runs behind the author
+#     by construction, and on 2026-08-28 several findings arrived against code already fixed or a
+#     file already deleted — accurate about the commit and spent on nothing.
+if [ -f "$TASKCAP" ]; then
+  grep -q "staleness of this commit" "$TASKCAP" \
+    && pass "the task tells the reviewer which files have moved since the commit" \
+    || fail "no staleness section in the task the reviewer was handed"
+  grep -q "every file in this commit is unchanged at HEAD" "$TASKCAP" \
+    && pass "RED control: an unchanged commit says so explicitly rather than listing nothing" \
+    || fail "an unchanged commit produced no staleness verdict at all"
+else
+  fail "could not capture the task file to check it"
+fi
 
 # 4. A FINDING REACHES STDOUT. This is the whole delivery path — stdout becomes a scheduler
 #    poke at the author. A finding written only to a file is the backlog nobody clears.
