@@ -105,7 +105,13 @@ for repo in "${REPOS[@]}"; do
       # committed path containing a space into pieces, so a commit touching "docs/review notes.md"
       # would be reported as two files, both missing, and the reviewer told a confident lie about
       # what had changed. Peer review caught it on the commit that added this.
-      git show --format="" --name-only "$sha" | while IFS= read -r f; do
+      # -z, because git C-QUOTES any path containing a tab, a newline or a non-ASCII byte when
+      # it prints one per line — "docs/tab\tname" arrives with literal backslash-t and quotes,
+      # and the existence check on that display text fails, so a file that is still there is
+      # reported deleted. NUL-separated output is the raw pathname with no escaping at all.
+      # Found by peer review on the commit that fixed the whitespace splitting, which is the
+      # same bug one layer deeper.
+      git show --format="" --name-only -z "$sha" | while IFS= read -r -d "" f; do
         [ -n "$f" ] || continue
         if [ ! -e "$repo/$f" ]; then
           echo "  $f — DELETED since this commit"
