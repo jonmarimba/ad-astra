@@ -100,20 +100,26 @@ for repo in "${REPOS[@]}"; do
       # reproduce.
       echo
       echo "--- staleness of this commit, as of now ---"
-      any_moved=0
-      for f in $(git show --format="" --name-only "$sha"); do
+      moved="$(mktemp)"
+      # READ THE NAMES, DO NOT WORD-SPLIT THEM. `for f in $(git show --name-only)` breaks any
+      # committed path containing a space into pieces, so a commit touching "docs/review notes.md"
+      # would be reported as two files, both missing, and the reviewer told a confident lie about
+      # what had changed. Peer review caught it on the commit that added this.
+      git show --format="" --name-only "$sha" | while IFS= read -r f; do
+        [ -n "$f" ] || continue
         if [ ! -e "$repo/$f" ]; then
           echo "  $f — DELETED since this commit"
-          any_moved=1
         elif ! git diff --quiet "$sha" HEAD -- "$f" 2>/dev/null; then
           echo "  $f — CHANGED since this commit ($(git rev-list --count "$sha..HEAD" -- "$f") later commit(s) touch it)"
-          any_moved=1
         fi
-      done
-      [ "$any_moved" -eq 0 ] && echo "  every file in this commit is unchanged at HEAD"
+      done > "$moved"
+      # The loop above runs in a subshell because of the pipe, so a flag set inside it would be
+      # lost. Count the lines it produced instead — the file is the only thing that survives.
+      if [ -s "$moved" ]; then cat "$moved"; else echo "  every file in this commit is unchanged at HEAD"; fi
       echo
       echo "If a file above is deleted or changed, the defect you find may already be fixed. Say so if you believe it is, and skip it — a finding against code that no longer exists costs the author a lookup and returns nothing. If you cannot tell, raise it anyway and note the uncertainty."
     } > "$task"
+    rm -f "$moved"
 
     if [ "$DRY" -eq 1 ]; then
       echo "[dry-run] would send $(basename "$repo") ${sha:0:8} ($subject) to $REVIEWER_NAME"

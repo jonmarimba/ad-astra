@@ -92,6 +92,23 @@ else
   fail "could not capture the task file to check it"
 fi
 
+# 3c. A COMMITTED FILENAME WITH A SPACE IS ONE FILE. The first version word-split the output of
+#     git show --name-only, so "docs/review notes.md" became two names, both reported missing,
+#     and the reviewer was told a confident lie about what had changed.
+mkdir -p "$REPO/docs"
+printf 'x\n' > "$REPO/docs/review notes.md"
+git -C "$REPO" add "docs/review notes.md" && git -C "$REPO" commit -qm "a file with a space in its name"
+rm -f "$TASKCAP"
+STUB_MODE=clean run >/dev/null
+if [ -f "$TASKCAP" ]; then
+  grep -q "docs/review notes.md" "$TASKCAP" && pass "a filename containing a space is kept whole" \
+    || fail "the spaced filename was split or lost: $(grep -A3 staleness "$TASKCAP" | head -4)"
+  grep -q "^  docs/review\$" "$TASKCAP" && fail "the filename was word-split into pieces" \
+    || pass "RED control: no half-filename appears in the task"
+else
+  fail "could not capture the task file"
+fi
+
 # 4. A FINDING REACHES STDOUT. This is the whole delivery path — stdout becomes a scheduler
 #    poke at the author. A finding written only to a file is the backlog nobody clears.
 echo three >> a.txt && git -C "$REPO" commit -qam "third commit"
