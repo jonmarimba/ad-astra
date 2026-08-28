@@ -89,14 +89,20 @@ def weight_bytes(model_id, cache=None):
         # A rate-limited or failed lookup is UNKNOWN, not empty. Caching it as (0,0) would
         # permanently mark a real model as having no weights.
         sys.stderr.write("variant-watch: size lookup failed for %s: %s\n" % (model_id, e))
-        return (0, 0)
+        return (None, None)
     total = count = 0
     for s in d.get("siblings", []) or []:
         name = s.get("rfilename", "")
         if name.endswith(WEIGHT_SUFFIXES):
             total += s.get("size") or 0
             count += 1
-    if cache is not None:
+    # ONLY A NON-EMPTY RESULT IS CACHED, and this is the difference between the tool working
+    # and the tool being decorative. mlx-community/Hy4-preview-4bit exists TODAY as a name with
+    # no weights, and the single thing this watcher is for is noticing the day weights land in
+    # it. Caching the empty answer would mean it is never looked at again, so the one repo that
+    # motivated the tool is the one repo it would permanently ignore. Caught by peer review.
+    # An empty repo is cheap to recheck: it is a single request, and there are very few of them.
+    if cache is not None and count > 0:
         cache[model_id] = [total, count]
     return (total, count)
 
@@ -164,11 +170,22 @@ def main():
     # every preview model on the hub.
     wanted = {t for t in name_tokens(args.model) if t not in ("preview", "instruct", "chat",
                                                               "base", "it", "v1", "v2")}
-    seen, found, skipped = set(), [], 0
+    seen, found, skipped, unchecked = set(), [], 0, 0
+    searches_attempted = searches_failed = 0
     for term in family_terms(args.model):
+        searches_attempted += 1
         try:
             hits = api("/models?search=%s&limit=100" % urllib.parse.quote(term))
+            # HUGGING FACE REPORTS A RATE LIMIT AS HTTP 200 WITH AN ERROR OBJECT, not as an
+            # exception. Observed directly on 2026-08-28: the search endpoint returned
+            # {"error": "We had to rate limit your IP ..."} with a 200 status. A dict where a
+            # list belongs would otherwise be iterated as its KEYS, so the loop below would run
+            # over strings and die on .get — or, worse for a watcher, find nothing and say so.
+            if not isinstance(hits, list):
+                raise ValueError("expected a list of models, got %s: %s"
+                                 % (type(hits).__name__, str(hits)[:120]))
         except Exception as e:
+            searches_failed += 1
             # Loud, not silent. A watcher that reports nothing because the network failed is
             # indistinguishable from one reporting good news.
             sys.stderr.write("variant-watch: search for %r failed: %s\n" % (term, e))
@@ -186,12 +203,29 @@ def main():
             if mid not in sizes:
                 lookups += 1
             nbytes, nfiles = weight_bytes(mid, sizes)
+            if nfiles is None:
+                # A lookup that FAILED is unknown, not empty. Treating it as empty would discard
+                # a newly published runnable quant on the strength of one timed-out request, and
+                # the run would still exit silently as though nothing had appeared.
+                unchecked += 1
+                continue
             if nfiles == 0:
                 continue  # placeholder repo — a name with no weights behind it
             gb = nbytes / 1e9
             if MIN_MODEL_GB <= gb <= limit_gb:
                 found.append({"id": mid, "gb": round(gb, 1), "files": nfiles,
                               "likes": m.get("likes", 0), "downloads": m.get("downloads", 0)})
+
+    # STDOUT, because that is what the scheduler pokes on. stderr alone made a total search
+    # failure — a timeout, a rate limit — indistinguishable from "no runnable variant appeared",
+    # which is the precise shape of a watcher that quietly stops working.
+    if searches_attempted and searches_failed == searches_attempted:
+        print("[variant-watch] EVERY search for %s failed this run — this is NOT a report that "
+              "nothing appeared, it is a report that nothing was looked at." % args.model)
+        return 1
+    if unchecked:
+        print("[variant-watch] %d candidate(s) for %s could not be sized and were left "
+              "unchecked; they will be retried next run." % (unchecked, args.model))
 
     if skipped:
         # Never silent. A ceiling that hides what it skipped is the silent-truncation bug.
@@ -233,7 +267,11 @@ def main():
                          min(f["gb"] for f in extra)))
         state[args.model] = sorted(told | {f["id"] for f in found})
     # Written even when nothing was found, so the size cache earned this run is not thrown away.
-    os.makedirs(os.path.dirname(args.state), exist_ok=True)
+    # A bare filename gives dirname "" and os.makedirs("") raises FileNotFoundError, which since
+    # the state write moved outside the `if found` branch would crash an ordinary quiet run.
+    d = os.path.dirname(args.state)
+    if d:
+        os.makedirs(d, exist_ok=True)
     json.dump(state, open(args.state, "w"), indent=2)
     return 0
 
