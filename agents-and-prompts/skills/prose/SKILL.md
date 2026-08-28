@@ -36,7 +36,7 @@ What an agent can do is a **pre-Grammarly pass**: leave behind a draft that Gram
 
 **Fragments: nobody wins, they are banned.** "A fragment is not concise, it is ambiguous." No skill may produce one, whatever it buys.
 
-**Banned vocabulary outranks all three.** `js-project-GhOST/policy/banned-phrases.txt` is the authority, enforced by `tools/check-banned-phrases.sh`. If a skill suggests a phrase on that list, the list wins, silently.
+**Banned vocabulary outranks all three.** The authority is `policy/banned-phrases.txt` in the GhOST repo, enforced by `tools/check-banned-phrases.sh` beside it. **Those paths are repo-relative to js-project-GhOST, not to wherever this skill is installed** — resolve them from that checkout, and if it is not present on the machine, say the check could not run rather than assuming the draft is clean. A skill that silently skips its own highest-priority rule is worse than one that never claimed it. If a suggested phrase is on that list, the list wins, silently.
 
 **Passive voice: STE wins, with an exception.** STE wants the active voice for anything the reader must do. Where the actor is genuinely unknown or deliberately unnamed — which happens constantly in the legal drafts — the passive stays and Grammarly's flag is ignored.
 
