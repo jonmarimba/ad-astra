@@ -41,21 +41,54 @@ WEIGHT_SUFFIXES = (".safetensors", ".gguf", ".bin", ".npz")
 MIN_MODEL_GB = 1.0
 
 
+# THE API CALL BUDGET IS THE POINT OF THIS SECTION, NOT AN OPTIMIZATION.
+# Hugging Face rate-limits by IP, and an unauthenticated caller gets very little headroom. On
+# 2026-08-28 the verification runs for this very tool tripped that limit — one blob lookup per
+# candidate, roughly a hundred candidates a family, run four times over. The limit then blocks
+# the daily model scan too, so an expensive watcher does not just fail itself, it takes out the
+# thing it was added to. Three defences below: a token when one exists, a per-run ceiling, and
+# a cache so a repeat run costs nothing.
+MAX_LOOKUPS = 60
+
+
+def hf_token():
+    """A token if one is configured, otherwise None. Never invents or prompts for one."""
+    tok = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if tok:
+        return tok.strip()
+    path = os.path.expanduser("~/.cache/huggingface/token")
+    if os.path.isfile(path):
+        try:
+            return open(path).read().strip() or None
+        except OSError:
+            return None
+    return None
+
+
 def api(path):
-    req = urllib.request.Request(HF + path, headers={"User-Agent": "variant-watch"})
+    headers = {"User-Agent": "variant-watch"}
+    tok = hf_token()
+    if tok:
+        headers["Authorization"] = "Bearer " + tok
+    req = urllib.request.Request(HF + path, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
 
 
-def weight_bytes(model_id):
+def weight_bytes(model_id, cache=None):
     """Total size of the actual weight files, and how many there are.
 
     Returns (bytes, count). A count of zero is the placeholder-repo case and must never be
     treated as a small model — it is an empty one.
     """
+    if cache is not None and model_id in cache:
+        return tuple(cache[model_id])
     try:
         d = api("/models/%s?blobs=true" % model_id)
-    except Exception:
+    except Exception as e:
+        # A rate-limited or failed lookup is UNKNOWN, not empty. Caching it as (0,0) would
+        # permanently mark a real model as having no weights.
+        sys.stderr.write("variant-watch: size lookup failed for %s: %s\n" % (model_id, e))
         return (0, 0)
     total = count = 0
     for s in d.get("siblings", []) or []:
@@ -63,6 +96,8 @@ def weight_bytes(model_id):
         if name.endswith(WEIGHT_SUFFIXES):
             total += s.get("size") or 0
             count += 1
+    if cache is not None:
+        cache[model_id] = [total, count]
     return (total, count)
 
 
@@ -121,12 +156,15 @@ def main():
     except Exception:
         state = {}
     told = set(state.get(args.model, []))
+    # Sizes never change for a given repo revision, so a lookup done once is done forever.
+    sizes = state.setdefault("_sizes", {})
+    lookups = 0
 
     # Match on the distinguishing token, not on every word in the name: 'preview' would drag in
     # every preview model on the hub.
     wanted = {t for t in name_tokens(args.model) if t not in ("preview", "instruct", "chat",
                                                               "base", "it", "v1", "v2")}
-    seen, found = set(), []
+    seen, found, skipped = set(), [], 0
     for term in family_terms(args.model):
         try:
             hits = api("/models?search=%s&limit=100" % urllib.parse.quote(term))
@@ -142,13 +180,23 @@ def main():
             seen.add(mid)
             if not shares_family(mid, wanted):
                 continue
-            nbytes, nfiles = weight_bytes(mid)
+            if lookups >= MAX_LOOKUPS and mid not in sizes:
+                skipped += 1
+                continue
+            if mid not in sizes:
+                lookups += 1
+            nbytes, nfiles = weight_bytes(mid, sizes)
             if nfiles == 0:
                 continue  # placeholder repo — a name with no weights behind it
             gb = nbytes / 1e9
             if MIN_MODEL_GB <= gb <= limit_gb:
                 found.append({"id": mid, "gb": round(gb, 1), "files": nfiles,
                               "likes": m.get("likes", 0), "downloads": m.get("downloads", 0)})
+
+    if skipped:
+        # Never silent. A ceiling that hides what it skipped is the silent-truncation bug.
+        print("[variant-watch] stopped after %d size lookups for %s; %d candidates unchecked "
+              "this run and will be checked next time." % (MAX_LOOKUPS, args.model, skipped))
 
     if found:
         # RANK BY WHO PUBLISHED IT, THEN BY LIKES. Sorting on likes alone put a Claude-distill
@@ -184,8 +232,9 @@ def main():
                       % (len(extra), args.model.split("/")[-1],
                          min(f["gb"] for f in extra)))
         state[args.model] = sorted(told | {f["id"] for f in found})
-        os.makedirs(os.path.dirname(args.state), exist_ok=True)
-        json.dump(state, open(args.state, "w"), indent=2)
+    # Written even when nothing was found, so the size cache earned this run is not thrown away.
+    os.makedirs(os.path.dirname(args.state), exist_ok=True)
+    json.dump(state, open(args.state, "w"), indent=2)
     return 0
 
 
