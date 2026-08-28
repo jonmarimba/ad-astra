@@ -113,7 +113,15 @@ wantstdin=1
 for a in "\$@"; do [ "\$a" = "-n" ] && wantstdin=0; done
 [ "\$wantstdin" -eq 1 ] && cat > /dev/null
 printf '%s\n' "\$*" >> "$SB/ssh.log"
-cp "$SB/loaded_after_pull.json" "$SB/loaded.json"   # the pull makes the models appear on the host
+# ONLY a pull makes models appear. The stub used to do this for EVERY ssh call, so any other
+# ssh — ambrosio now asks the host whether a download is already running — made the candidates
+# look already-installed and every pull assertion failed. Real ssh has no such side effect;
+# the stub was modelling the world more loosely than the world behaves.
+# Match the PULL specifically — a URL being fetched. Matching "lms get" alone also matched
+# ambrosio's probe, `pgrep -f 'lms get' | wc -l`, which asks the host whether a download is
+# already running. That probe then made the candidates look already-installed and every pull
+# assertion failed.
+case "\$*" in *huggingface.co*) cp "$SB/loaded_after_pull.json" "$SB/loaded.json";; esac
 exit 0
 SHIM
 cat > "$SB/bin/botline" <<SHIM
@@ -149,6 +157,12 @@ assert_empty "$out" "check stdout is empty (schd silence contract)"
 assert_contains "$SB/ssh.log" 'https://huggingface.co/mlx-community/Qwen3-30B-A3B-4bit' "pull targeted the real 4bit repo (bf16 and distill outranked/rejected)"
 assert_contains "$SB/ssh.log" 'https://huggingface.co/mlx-community/GLM-4.5-Air-4bit' "SECOND pull happened (MAX_PER_RUN=2 delivered 2 — ssh left the candidate stream alone)"
 assert_contains "$SB/ssh.log" '--yes' "lms get ran non-interactive"
+# When the pull assertions fail, the tool's own stderr is the fastest explanation and the test
+# was swallowing it into a temp file that gets deleted. Surface it once, only on failure.
+if ! grep -q -- '--yes' "$SB/ssh.log" 2>/dev/null; then
+  echo "        --- ambrosio stderr (why no pull happened) ---"
+  sed 's/^/        /' "$SB/check.err" 2>/dev/null | head -12
+fi
 grep -qxF "Qwen3" "$AMBROSIO_HOME/seen.txt" && pass "delivered family recorded in seen.txt" || fail "Qwen3 not recorded in seen.txt"
 grep -qi "kimi" "$AMBROSIO_HOME/seen.txt" && fail "Kimi-K3 wrongly marked seen (no repo exists yet — must retry next run)" || pass "Kimi-K3 left unseen for retry (no MLX repo yet)"
 assert_contains "$HOME/.config/opencode/opencode.jsonc" 'lms/qwen3-30b-a3b-4bit' "first delivered model exposed in OpenCode picker"
@@ -157,10 +171,14 @@ assert_eq "lms/glm-4.5-air-4bit" "$(python3 -c "import json;print(json.load(open
 assert_contains "$SB/botline.log" "Ambrosio served" "JS notified via botline"
 
 # ---- RED control: second run must pull NOTHING (seen dedup) ----
-lines_before="$(wc -l < "$SB/ssh.log" | tr -d ' ')"
+# Count PULLS, not ssh calls. Every ssh invocation used to be a pull, so counting lines was a
+# fair proxy — until ambrosio started asking the host whether a download is already running,
+# which adds one ssh per run and made a correct re-run look like it had pulled something.
+# Counting the thing the assertion is actually about survives that.
+pulls_before="$(grep -c 'huggingface.co' "$SB/ssh.log" 2>/dev/null || echo 0)"
 "$AMBROSIO" check >/dev/null 2>&1
-lines_after="$(wc -l < "$SB/ssh.log" | tr -d ' ')"
-assert_eq "$lines_before" "$lines_after" "re-run pulled nothing (seen.txt dedup held)"
+pulls_after="$(grep -c 'huggingface.co' "$SB/ssh.log" 2>/dev/null || echo 0)"
+assert_eq "$pulls_before" "$pulls_after" "re-run pulled nothing (seen.txt dedup held)"
 
 # ---- host-down gate: inert, exit 0, silent stdout ----
 touch "$SB/host_down"

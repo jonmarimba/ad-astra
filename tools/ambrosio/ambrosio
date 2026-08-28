@@ -170,8 +170,12 @@ for m in ms if isinstance(ms,list) else []:
     if not mid: continue
     rank+=1
     org=mid.split('/')[0].lower(); low=mid.lower(); tail=mid.split('/')[-1]
-    # TOP 20 ONLY. Jonathan, 2026-08-27: "Just tell me when something I don't have but could
-    # gets into say the top 20." Everything he was sent before this was ranked 21, 39, 78 —
+    # TOP 20 ONLY. Jonathan, 2026-08-27, roughly: just tell me when something I do not have
+    # but could gets into the top 20. Everything he was sent before this ranked 21, 39 and 78 —
+    # NOTE: no double quotes anywhere in this block. It lives inside python3 -c "..." and a
+    # stray double quote closes the shell string early, silently destroying every function
+    # defined after it. That is exactly what happened here on 2026-08-27, and bash -n cannot
+    # see it because the wreckage is still valid bash.
     # true, off-watchlist, and not worth a text. Trending rank is the whole filter he asked for.
     if rank > int(os.environ.get('TREND_RANK_MAX','20')): break
     if any(j in low for j in JUNK): continue

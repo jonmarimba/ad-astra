@@ -112,7 +112,10 @@ wantstdin=1
 for a in "\$@"; do [ "\$a" = "-n" ] && wantstdin=0; done
 [ "\$wantstdin" -eq 1 ] && cat > /dev/null
 printf '%s\n' "\$*" >> "$SB/ssh.log"
-cp "$SB/loaded_after_pull.json" "$SB/loaded.json"
+# Only a PULL makes models appear. Matching every ssh call also matched ambrosio's probe
+# asking the host whether a download is already running, which made candidates look
+# already-installed and broke the pull assertions. Real ssh has no such side effect.
+case "\$*" in *huggingface.co*) cp "$SB/loaded_after_pull.json" "$SB/loaded.json";; esac
 exit 0
 SHIM
 cat > "$SB/bin/botline" <<SHIM
