@@ -150,10 +150,12 @@ if isinstance(ms,list):
 # function only makes the first one.
 trending_watch(){
   "$CURL" -s --max-time 20 "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=$TREND_LIMIT&pipeline_tag=text-generation" 2>>"$AMBROSIO_HOME/pull.log" \
-   | MIN_PARAMS_B="$MIN_PARAMS_B" WATCHLIST="$WATCHLIST" python3 -c "
+   | MIN_PARAMS_B="$MIN_PARAMS_B" WATCHLIST="$WATCHLIST" \
+     HAVE_MODELS="$(loaded_models 2>/dev/null | tr 'A-Z' 'a-z' | tr '\n' ' ')" python3 -c "
 import sys,json,os,re
 minp=float(os.environ.get('MIN_PARAMS_B','7'))
 wl=os.environ['WATCHLIST'].lower().split()
+have=set(os.environ.get('HAVE_MODELS','').lower().split())
 KNOWN={'deepseek-ai','nvidia','zai-org','qwen','moonshotai','meta-llama','mistralai',
        'minimaxai','microsoft','google','ai21labs','allenai','lmstudio-community','mlx-community'}
 JUNK=('abliterated','obliterat','uncensored','-crack','jang','keys-','dspark','escha','-w2','-w4','roleplay','erp')
@@ -168,10 +170,51 @@ for m in ms if isinstance(ms,list) else []:
     if not mid: continue
     rank+=1
     org=mid.split('/')[0].lower(); low=mid.lower(); tail=mid.split('/')[-1]
+    # TOP 20 ONLY. Jonathan, 2026-08-27: "Just tell me when something I don't have but could
+    # gets into say the top 20." Everything he was sent before this was ranked 21, 39, 78 —
+    # true, off-watchlist, and not worth a text. Trending rank is the whole filter he asked for.
+    if rank > int(os.environ.get('TREND_RANK_MAX','20')): break
     if any(j in low for j in JUNK): continue
     sz=biggest_size_b(tail)
     if sz is not None and sz < minp: continue
+    # "COULD" HAVE. A 400B model he cannot run is not a thing he does not have; it is a thing
+    # that does not fit. The cap is the same one the puller uses.
+    if sz is not None and sz > float(os.environ.get('TREND_MAX_B','200')): continue
     # Why it would NOT have been pulled — the whole point of reporting it.
+    # DOES NOT HAVE IT — by VERSION, not by family name. A bare substring test would have
+    # suppressed GLM-5.3-Flash because glm-4.7-flash sits on the M5, which is precisely the
+    # find he lost on 2026-08-26. He does not have 5.3. Same prefix plus same-or-newer version
+    # on the host means he has it; anything else is news.
+    def _fam(n):
+        letters=''
+        for ch in n:
+            if ch.isalpha(): letters+=ch
+            else: break
+        return letters
+    def _ver(n, pref):
+        at=n.find(pref)
+        if at<0: return None
+        i=at+len(pref); digits=''
+        while i<len(n) and not n[i].isdigit():
+            if n[i] in '-_. /:': i+=1; continue
+            return None
+        while i<len(n) and (n[i].isdigit() or n[i]=='.'):
+            digits+=n[i]; i+=1
+        parts=[int(x) for x in digits.strip('.').split('.') if x.isdigit()]
+        return tuple(parts) or None
+    cand_tail = tail.lower()
+    cand_fam = _fam(cand_tail)
+    cand_ver = _ver(cand_tail, cand_fam) if cand_fam else None
+    already = False
+    for h in have:
+        hf = _fam(h)
+        if not hf or not cand_fam or hf != cand_fam:
+            continue
+        hv = _ver(h, hf)
+        if cand_ver is None or hv is None or hv >= cand_ver:
+            already = True
+            break
+    if already: continue
     why=[]
     if org not in KNOWN: why.append('new org')
     if not any(w in low for w in wl): why.append('off-watchlist')
@@ -354,6 +397,16 @@ PYEOF
 # held it. The scheduler fires every four hours, so overlap only happens when someone runs it by
 # hand during a scheduled pass — which is exactly what a person debugging it does.
 LOCKDIR="$AMBROSIO_HOME/run.lock"
+# True when the host already has an lms download in flight. `pgrep -c` returns 1 with no
+# matches AND prints 0, so count lines instead — the exit code is not the answer here.
+remote_pull_running(){
+  local n
+  n="$("$SSH" -n -o ConnectTimeout=8 -o BatchMode=yes "$SSH_TARGET" \
+        "pgrep -f 'lms get' | wc -l" 2>/dev/null | tr -d ' ')"
+  case "$n" in ''|*[!0-9]*) return 1;; esac   # unreachable or unparseable: do not block on it
+  [ "$n" -gt 0 ]
+}
+
 acquire_lock(){
   if mkdir "$LOCKDIR" 2>/dev/null; then
     echo $$ > "$LOCKDIR/pid"; trap 'rm -rf "$LOCKDIR"' EXIT INT TERM; return 0
@@ -516,7 +569,13 @@ case "${1:-check}" in
     # "is there a hot model I can play with," which is one want, not three.
     if host_up; then
       # The cloud half is read-only and safe to overlap; only the puller needs the lock.
-      if acquire_lock; then run_local; fi
+      # The lock above is LOCAL and the contended resource is REMOTE. A manual `lms get` on
+      # the M5, or a pull started from another machine, would still collide with a scheduled
+      # one — which is exactly what left a half-downloaded model and a stuck entry in LM
+      # Studio's registry on 2026-08-27. Ask the host whether it is already pulling.
+      if remote_pull_running; then
+        log "a download is already running on $HOST — skipping the local half so the two do not fight"
+      elif acquire_lock; then run_local; fi
     else log "host $HOST down — skipping local pulls (cloud surfaces still run)"; fi
     run_cloud
     ;;

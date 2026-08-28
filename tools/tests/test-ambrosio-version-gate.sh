@@ -165,7 +165,12 @@ for filt in $(grep -c "obliterat" "$AMB3"); do :; done
 # puller permanently.
 # ---------------------------------------------------------------------------
 LT="$SB/locktest.sh"
-sed -n '/^LOCKDIR=/,/^}/p' "$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio" > "$SB/lockfns.sh"
+# Extract from LOCKDIR through the END of acquire_lock. A plain /^LOCKDIR=/,/^}/ range broke
+# the moment another function was added between them — it stopped at that function's brace and
+# never included acquire_lock at all, so three assertions failed on a lock that was fine.
+awk '/^LOCKDIR=/{c=1} c{print} c && /^acquire_lock\(\)/{a=1} a && /^}/{exit}' \
+  "$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio" > "$SB/lockfns.sh"
+grep -q "^acquire_lock" "$SB/lockfns.sh" || fail "lock extraction did not capture acquire_lock — the assertions below would be meaningless"
 cat > "$LT" <<EOF
 #!/usr/bin/env bash
 AMBROSIO_HOME="$SB/lockhome"; mkdir -p "\$AMBROSIO_HOME"
@@ -179,5 +184,48 @@ out="$(bash "$LT" 2>&1)"
 case "$out" in *ACQUIRED*) pass "lock is acquired by the first caller";; *) fail "lock not acquired: $out";; esac
 case "$out" in *DECLINED*) pass "a second live caller is refused the lock";; *) fail "second caller was NOT refused: $out";; esac
 case "$out" in *RECLAIMED*) pass "a lock whose owner is gone is reclaimed, not honoured forever";; *) fail "stale lock wedges the puller: $out";; esac
+
+# ---------------------------------------------------------------------------
+# THE TOP-20 RULE. Jonathan, 2026-08-27: "Just tell me when something I don't have but could
+# gets into say the top 20." The three models he was texted that evening ranked 21, 39 and 78.
+# Checked against a FIXTURE rather than the live API — partly because the filter must be
+# testable without the network, and partly because hammering that API all day is what got this
+# IP rate-limited in the first place.
+# ---------------------------------------------------------------------------
+FIX2="$SB/trending.json"
+cat > "$FIX2" <<'JSON'
+[{"id":"newlab/Brandnew-30B"},
+ {"id":"someone/Ornith-1.0-35B-A3B-GGUF"},
+ {"id":"someone/Ornith-1.5-35B-A3B-GGUF"},
+ {"id":"bigco/Enormous-400B"},
+ {"id":"tiny/Peanut-3B"},
+ {"id":"other/Deep-40B"},
+ {"id":"a/x6"},{"id":"a/x7"},{"id":"a/x8"},{"id":"a/x9"},{"id":"a/x10"},
+ {"id":"a/x11"},{"id":"a/x12"},{"id":"a/x13"},{"id":"a/x14"},{"id":"a/x15"},
+ {"id":"a/x16"},{"id":"a/x17"},{"id":"a/x18"},{"id":"a/x19"},{"id":"a/x20"},
+ {"id":"latelab/TooLate-30B"}]
+JSON
+AMB4="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
+# Run only the filter body, fed the fixture, with the same environment the script gives it.
+filter_out="$(sed -n '/^trending_watch(){/,/^}/p' "$AMB4" \
+  | sed -n '/python3 -c "/,/^" 2/p' | sed '1d;$d' \
+  | MIN_PARAMS_B=7 WATCHLIST="glm kimi" HAVE_MODELS="ornith-1.0-35b-mtplx qwen3.6-27b" \
+    TREND_RANK_MAX=20 TREND_MAX_B=200 python3 -c "$(cat)" < "$FIX2" 2>&1)"
+
+case "$filter_out" in *Brandnew-30B*) pass "a top-20 model from an unknown lab is reported";;
+  *) fail "the qualifying model was not reported: $filter_out";; esac
+case "$filter_out" in *TooLate*) fail "reported a model ranked 21 — the top-20 rule is not applied";;
+  *) pass "rank 21 is below the line and stays silent";; esac
+# HE HAS ornith-1.0. So 1.0 is not news and 1.5 IS — the distinction that cost him the GLM-5.3
+# find. An earlier version of this assertion demanded silence on the whole family, which would
+# have re-created that bug in the test instead of the code.
+case "$filter_out" in *Ornith-1.0*) fail "reported ornith 1.0, which is already on the host";;
+  *) pass "the version already on the M5 is not reported";; esac
+case "$filter_out" in *Ornith-1.5*) pass "a NEWER version of a family on the M5 is still reported";;
+  *) fail "suppressed ornith 1.5 — he does not have it: $filter_out";; esac
+case "$filter_out" in *Enormous-400B*) fail "reported a 400B model he could not run";;
+  *) pass "a model too large to run is not reported";; esac
+case "$filter_out" in *Peanut-3B*) fail "reported a model below the size floor";;
+  *) pass "a 3B model is still below the floor";; esac
 
 finish
