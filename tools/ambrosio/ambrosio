@@ -207,6 +207,11 @@ for m in ms if isinstance(ms,list) else []:
     cand_ver = _ver(cand_tail, cand_fam) if cand_fam else None
     already = False
     for h in have:
+        # The host reports namespaced ids — 'lmstudio-community/glm-4.7-flash'. Reading the
+        # family from the front gives 'lmstudio' for every one of them, so nothing on the M5
+        # ever matched a candidate and the whole have-check was dead. Take the tail, the same
+        # way the candidate side already does.
+        h = h.rsplit('/', 1)[-1]
         hf = _fam(h)
         if not hf or not cand_fam or hf != cand_fam:
             continue

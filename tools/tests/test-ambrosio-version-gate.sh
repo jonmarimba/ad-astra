@@ -209,7 +209,7 @@ AMB4="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
 # Run only the filter body, fed the fixture, with the same environment the script gives it.
 filter_out="$(sed -n '/^trending_watch(){/,/^}/p' "$AMB4" \
   | sed -n '/python3 -c "/,/^" 2/p' | sed '1d;$d' \
-  | MIN_PARAMS_B=7 WATCHLIST="glm kimi" HAVE_MODELS="ornith-1.0-35b-mtplx qwen3.6-27b" \
+  | MIN_PARAMS_B=7 WATCHLIST="glm kimi" HAVE_MODELS="mlx-community/ornith-1.0-35b-mtplx lmstudio-community/qwen3.6-27b" \
     TREND_RANK_MAX=20 TREND_MAX_B=200 python3 -c "$(cat)" < "$FIX2" 2>&1)"
 
 case "$filter_out" in *Brandnew-30B*) pass "a top-20 model from an unknown lab is reported";;
@@ -219,6 +219,8 @@ case "$filter_out" in *TooLate*) fail "reported a model ranked 21 — the top-20
 # HE HAS ornith-1.0. So 1.0 is not news and 1.5 IS — the distinction that cost him the GLM-5.3
 # find. An earlier version of this assertion demanded silence on the whole family, which would
 # have re-created that bug in the test instead of the code.
+# The host reports NAMESPACED ids. Using bare names here hid a bug where the family was read
+# as "mlx" or "lmstudio" for every host model, so nothing ever matched. Found by peer review.
 case "$filter_out" in *Ornith-1.0*) fail "reported ornith 1.0, which is already on the host";;
   *) pass "the version already on the M5 is not reported";; esac
 case "$filter_out" in *Ornith-1.5*) pass "a NEWER version of a family on the M5 is still reported";;
