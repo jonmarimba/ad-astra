@@ -527,6 +527,25 @@ run_cloud() {
     echo "ambrosio: trending watch FAILED (rc=$?) — new models outside the watchlist went unreported this run"
   fi
 
+  # VARIANT WATCH — models too big to run here, watched for a version that is not.
+  # tencent/Hy4-preview is the case this was built for: 780B parameters, about 390 GB at 4-bit
+  # against 342 GB of disk and 128 GB of memory. The want-list is a PULL queue and would simply
+  # fail on it every day, which is how a watcher trains you to ignore it. This asks the only
+  # question that can change: has a smaller sibling or a genuinely-populated quant appeared.
+  # One model per line in variant_watch.txt as "model_id disk_gb ram_gb"; '#' comments.
+  VARIANT_WATCH_LIST="$AMBROSIO_HOME/variant_watch.txt"
+  VARIANT_WATCH_BIN="$(dirname "$0")/variant-watch"
+  if [ -x "$VARIANT_WATCH_BIN" ] && [ -f "$VARIANT_WATCH_LIST" ]; then
+    while read -r vw_model vw_disk vw_ram; do
+      case "${vw_model:-}" in ''|'#'*) continue;; esac
+      # Failure speaks, for the same reason the trending watch does above: a network error that
+      # prints nothing is indistinguishable from good news.
+      if ! "$VARIANT_WATCH_BIN" --model "$vw_model" --disk-gb "${vw_disk:-0}" --ram-gb "${vw_ram:-0}"; then
+        echo "ambrosio: variant watch FAILED for $vw_model — a runnable version could have appeared unseen"
+      fi
+    done < "$VARIANT_WATCH_LIST"
+  fi
+
   if [ -x "$OLLAMA_WATCH_BIN" ]; then
     # --dry-run MUST reach the watcher. It did not until 2026-08-26, so `ambrosio check
     # --dry-run` sent Jonathan a real text about glm-5.3-flash while the operator believed

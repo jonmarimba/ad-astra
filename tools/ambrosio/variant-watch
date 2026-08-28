@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""variant-watch — say something when an oversized model becomes one this machine can run.
+
+    variant-watch --model tencent/Hy4-preview --disk-gb 342 --ram-gb 128 [--state FILE] [--json]
+
+WHY THIS EXISTS, SEPARATELY FROM THE WANT-LIST. ambrosio's want-list is a PULL queue: a term
+sits there until it downloads. That is the wrong instrument for a model which physically cannot
+land on the machine. tencent/Hy4-preview is 780 billion parameters — 1,560 GB at full precision,
+about 390 GB even at 4-bit, against 342 GB of free disk and 128 GB of unified memory. Putting it
+on the want-list would attempt and fail every single day, and a daily failure is how a watcher
+teaches you to stop reading it.
+
+What actually changes the answer is one of two events, so those are what this watches:
+
+  1. A SMALLER SIBLING. Labs routinely ship a small variant weeks after the flagship, under a
+     name that shares the family. That variant is a different repo, so nothing watching the
+     original will ever see it.
+  2. A QUANT THAT REALLY EXISTS AND REALLY FITS. On 2026-08-28 mlx-community/Hy4-preview-4bit
+     already existed as a NAME — created that morning, containing one .gitattributes file and no
+     weights at all. A watcher that trusts a repo's existence would have announced a model that
+     could not be downloaded. So a candidate must carry real weight files whose sizes add up,
+     and that total must fit the declared limits.
+
+Silent when nothing has changed. Prints only when there is something to act on, so it can be
+driven straight from the scheduler.
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.request
+
+HF = "https://huggingface.co/api"
+# Weight files. A repo of configs and tokenizers is not a model, and summing every blob would
+# let a few megabytes of JSON masquerade as weights in a repo whose real files never landed.
+WEIGHT_SUFFIXES = (".safetensors", ".gguf", ".bin", ".npz")
+
+# No real language model quantizes below this. The floor exists because the first run of this
+# tool announced 'hy4962/Share' as runnable at 0 GB — someone's scratch repo holding a single
+# tiny file. Without a floor, any repo with one weight-shaped filename reads as a working model.
+MIN_MODEL_GB = 1.0
+
+
+def api(path):
+    req = urllib.request.Request(HF + path, headers={"User-Agent": "variant-watch"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+def weight_bytes(model_id):
+    """Total size of the actual weight files, and how many there are.
+
+    Returns (bytes, count). A count of zero is the placeholder-repo case and must never be
+    treated as a small model — it is an empty one.
+    """
+    try:
+        d = api("/models/%s?blobs=true" % model_id)
+    except Exception:
+        return (0, 0)
+    total = count = 0
+    for s in d.get("siblings", []) or []:
+        name = s.get("rfilename", "")
+        if name.endswith(WEIGHT_SUFFIXES):
+            total += s.get("size") or 0
+            count += 1
+    return (total, count)
+
+
+def name_tokens(model_id):
+    """The model's own name broken into comparable tokens, lowercased.
+
+    Plain splitting rather than a pattern: 'tencent/Hy4-preview' -> {'hy4', 'preview'}. This is
+    what stops 'Hy4' matching 'hy4962/Share', which is a different string entirely once you stop
+    treating it as a substring. HF's search is a substring search and will keep handing back
+    that sort of thing, so the filtering has to happen here.
+    """
+    name = model_id.split("/", 1)[-1].lower()
+    for sep in ("-", "_", ".", " "):
+        name = name.replace(sep, "\n")
+    return {t for t in name.split("\n") if t}
+
+
+def shares_family(candidate_id, wanted_tokens):
+    """True when the candidate's NAME carries one of the family tokens as a whole token.
+
+    The org is deliberately excluded — an org called 'hy4-labs' publishing an unrelated model
+    is not a variant of anything.
+    """
+    return bool(name_tokens(candidate_id) & wanted_tokens)
+
+
+def family_terms(model_id):
+    """Search terms that would surface a sibling: the bare model name and its first token.
+
+    'tencent/Hy4-preview' -> ['Hy4-preview', 'Hy4']. The second is what finds 'Hy4-mini'.
+    """
+    name = model_id.split("/", 1)[-1]
+    out = [name]
+    head = name.replace("_", "-").split("-", 1)[0]
+    if head and head != name:
+        out.append(head)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", required=True, help="the oversized model, e.g. tencent/Hy4-preview")
+    ap.add_argument("--disk-gb", type=float, required=True)
+    ap.add_argument("--ram-gb", type=float, required=True)
+    ap.add_argument("--state", default=os.path.expanduser("~/.ambrosio/variant_watch.json"))
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args()
+
+    # A candidate must fit BOTH: it has to land on the disk and then be resident to run. RAM is
+    # the binding limit in practice and is deliberately not padded here — the caller passes what
+    # it wants to claim is usable.
+    limit_gb = min(args.disk_gb, args.ram_gb)
+
+    try:
+        state = json.load(open(args.state))
+    except Exception:
+        state = {}
+    told = set(state.get(args.model, []))
+
+    # Match on the distinguishing token, not on every word in the name: 'preview' would drag in
+    # every preview model on the hub.
+    wanted = {t for t in name_tokens(args.model) if t not in ("preview", "instruct", "chat",
+                                                              "base", "it", "v1", "v2")}
+    seen, found = set(), []
+    for term in family_terms(args.model):
+        try:
+            hits = api("/models?search=%s&limit=100" % urllib.parse.quote(term))
+        except Exception as e:
+            # Loud, not silent. A watcher that reports nothing because the network failed is
+            # indistinguishable from one reporting good news.
+            sys.stderr.write("variant-watch: search for %r failed: %s\n" % (term, e))
+            continue
+        for m in hits:
+            mid = m.get("id") or m.get("modelId")
+            if not mid or mid in seen or mid == args.model or mid in told:
+                continue
+            seen.add(mid)
+            if not shares_family(mid, wanted):
+                continue
+            nbytes, nfiles = weight_bytes(mid)
+            if nfiles == 0:
+                continue  # placeholder repo — a name with no weights behind it
+            gb = nbytes / 1e9
+            if MIN_MODEL_GB <= gb <= limit_gb:
+                found.append({"id": mid, "gb": round(gb, 1), "files": nfiles,
+                              "likes": m.get("likes", 0), "downloads": m.get("downloads", 0)})
+
+    if found:
+        # RANK BY WHO PUBLISHED IT, THEN BY LIKES. Sorting on likes alone put a Claude-distill
+        # GGUF and an "Uncensored-Aggressive" finetune at the top of the Qwen test while
+        # Qwen/Qwen3.5-9B and -27B — the lab's own small siblings, which are the entire reason
+        # to watch a family — fell past the cap and went unseen. The original publisher's own
+        # repos come first, then the established quantizers, then everyone else.
+        home_org = args.model.split("/", 1)[0].lower()
+        TRUSTED = ("mlx-community", "lmstudio-community", "unsloth", "ggml-org")
+        def rank(f):
+            org = f["id"].split("/", 1)[0].lower()
+            tier = 0 if org == home_org else (1 if org in TRUSTED else 2)
+            return (tier, -f["likes"])
+        found.sort(key=rank)
+        # A BOUND, AND IT SAYS WHAT IT DROPPED. Pointing this at a broad family produces a lot:
+        # the Qwen3.5 test emitted 86 lines in one run, which as a scheduler poke is a wall of
+        # text nobody reads. The cap is 8 because these are ranked by likes and the interesting
+        # ones are the official small siblings, which sort to the top — but a silent truncation
+        # would be the same silent-data-loss bug this codebase keeps finding, so the remainder
+        # is counted out loud and every id is still recorded as told, not re-announced tomorrow.
+        SHOW = 8
+        shown, extra = found[:SHOW], found[SHOW:]
+        if args.json:
+            print(json.dumps(found, indent=2))
+        else:
+            for f in shown:
+                print("[variant-watch] %s is now runnable here — %.0f GB in %d weight files, "
+                      "under the %.0f GB ceiling. Family of %s, which is not."
+                      % (f["id"], f["gb"], f["files"], limit_gb, args.model))
+            if extra:
+                print("[variant-watch] and %d more runnable %s variants not listed, smallest "
+                      "%.0f GB — all recorded, none will be repeated."
+                      % (len(extra), args.model.split("/")[-1],
+                         min(f["gb"] for f in extra)))
+        state[args.model] = sorted(told | {f["id"] for f in found})
+        os.makedirs(os.path.dirname(args.state), exist_ok=True)
+        json.dump(state, open(args.state, "w"), indent=2)
+    return 0
+
+
+if __name__ == "__main__":
+    import urllib.parse
+    sys.exit(main())
