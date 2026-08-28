@@ -102,7 +102,11 @@ def weight_bytes(model_id, cache=None):
     # it. Caching the empty answer would mean it is never looked at again, so the one repo that
     # motivated the tool is the one repo it would permanently ignore. Caught by peer review.
     # An empty repo is cheap to recheck: it is a single request, and there are very few of them.
-    if cache is not None and count > 0:
+    # A file NAMED like weights but holding nothing is still a placeholder. Caching on count
+    # alone let a zero-byte model.safetensors look non-empty, so the repo would be frozen at
+    # zero and never rechecked once real weights arrived — the same defect as caching empties,
+    # wearing a different hat. Both the count and the bytes have to be real.
+    if cache is not None and count > 0 and total > 0:
         cache[model_id] = [total, count]
     return (total, count)
 
@@ -223,6 +227,14 @@ def main():
         print("[variant-watch] EVERY search for %s failed this run — this is NOT a report that "
               "nothing appeared, it is a report that nothing was looked at." % args.model)
         return 1
+    if searches_failed:
+        # A PARTIAL failure hides just as much. The two searches are the exact model name and
+        # the bare family token, and they return different things — the family search is what
+        # finds a smaller sibling under a new name. Losing one of them silently means losing a
+        # whole class of candidate while the run still exits 0 looking healthy.
+        print("[variant-watch] %d of %d searches for %s failed; candidates that only the failed "
+              "search would return were not seen this run."
+              % (searches_failed, searches_attempted, args.model))
     if unchecked:
         print("[variant-watch] %d candidate(s) for %s could not be sized and were left "
               "unchecked; they will be retried next run." % (unchecked, args.model))
