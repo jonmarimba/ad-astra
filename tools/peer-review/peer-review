@@ -98,7 +98,12 @@ for repo in "${REPOS[@]}"; do
   hist="$(git cat-file -p "$prev_ref" 2>/dev/null | head -1)"
   oldest="${hist%% *}"
   case "$oldest" in ''|*[!0-9]*) oldest=-1;; esac
-  if [ "$backlog" -gt $(( LIMIT * 3 )) ] && [ "$oldest" -ge 0 ] && [ "$backlog" -ge "$oldest" ]; then
+  # THREE RUNS MEANS THREE, not "whatever we have". With one prior measurement the warning still
+  # said "has not improved over the last three runs", which is a claim about evidence that does
+  # not exist yet — and the first thing a reader does with a trend claim is trust the window it
+  # names. Peer review caught it on the commit that introduced the window.
+  histlen=$(printf '%s' "$hist" | wc -w | tr -d ' ')
+  if [ "$backlog" -gt $(( LIMIT * 3 )) ] && [ "$histlen" -ge 3 ] && [ "$oldest" -ge 0 ] && [ "$backlog" -ge "$oldest" ]; then
     echo "peer-review: $(basename "$repo") is $backlog commits behind review and has not improved over the last three runs (was $oldest), clearing $LIMIT per run — commits are arriving faster than they are being reviewed, so the review-after-commit guarantee is weaker than it looks."
   fi
   # Keep the last three counts, oldest first.
