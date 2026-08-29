@@ -113,10 +113,16 @@ for repo in "${REPOS[@]}"; do
       # same bug one layer deeper.
       git show --format="" --name-only -z "$sha" | while IFS= read -r -d "" f; do
         [ -n "$f" ] || continue
+        # PRINT THE NAME ON ONE LINE. NUL parsing preserves a pathname containing a NEWLINE, and
+        # then echo splits it back into two staleness lines — so the reviewer sees "b.md —
+        # CHANGED" and cannot tell which file that is, or whether it is a file at all. Reading it
+        # correctly and printing it carelessly loses exactly what the -z fix bought. Third
+        # correction to this section today, each one finding the previous insufficient.
+        show="$(printf '%s' "$f" | tr '\n\t' '??')"
         if [ ! -e "$repo/$f" ]; then
-          echo "  $f — DELETED since this commit"
+          echo "  $show — DELETED since this commit"
         elif ! git diff --quiet "$sha" HEAD -- "$f" 2>/dev/null; then
-          echo "  $f — CHANGED since this commit ($(git rev-list --count "$sha..HEAD" -- "$f") later commit(s) touch it)"
+          echo "  $show — CHANGED since this commit ($(git rev-list --count "$sha..HEAD" -- "$f") later commit(s) touch it)"
         fi
       done > "$moved"
       # The loop above runs in a subshell because of the pipe, so a flag set inside it would be
