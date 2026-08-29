@@ -113,9 +113,27 @@ fi
 #     individual run looks like it worked — and on 2026-08-28 thirty-four commits accumulated
 #     against a limit of three per run with nothing anywhere reporting it.
 for n in 1 2 3 4 5 6 7 8 9 10 11 12 13; do echo "b$n" >> "$REPO/a.txt"; git -C "$REPO" commit -qam "backlog $n"; done
-out="$(STUB_MODE=clean run --limit 3)"
-case "$out" in *"commits behind review"*) pass "a backlog beyond three runs' worth is reported";;
-  *) fail "a 13-commit backlog was not reported: $out";; esac
+# THREE RUNS, because the warning needs three measurements before it will claim a trend — it
+# used to fire off a single prior reading and announce a three-run window it had not observed.
+# STUB_MODE=crash keeps the ref parked so the backlog stays flat across them, which is the
+# condition the warning exists to report: a queue that is not improving.
+# Three PRIMING runs, then a fourth to assert: the check reads its history before appending to
+# it, so three prior measurements exist only from the fourth run onwards. Getting that boundary
+# wrong is how the warning came to claim a three-run trend off a single reading in the first
+# place, so the test states it explicitly rather than counting runs by feel.
+STUB_MODE=crash run --limit 3 >/dev/null 2>&1
+STUB_MODE=crash run --limit 3 >/dev/null 2>&1
+STUB_MODE=crash run --limit 3 >/dev/null 2>&1
+out="$(STUB_MODE=crash run --limit 3 2>&1)"
+case "$out" in *"commits behind review"*) pass "a flat backlog beyond three runs' worth is reported";;
+  *) fail "a flat 13-commit backlog was not reported after three runs: $out";; esac
+# RED CONTROL: one run alone must NOT claim a three-run trend.
+git -C "$REPO" update-ref -d "refs/peer-review/backlog/$(basename "$REPO")" 2>/dev/null || true
+out="$(STUB_MODE=crash run --limit 3 2>&1)"
+case "$out" in *"commits behind review"*) fail "claimed a three-run trend from a single run";;
+  *) pass "RED control: one run does not claim a three-run trend";; esac
+STUB_MODE=crash run --limit 3 >/dev/null 2>&1
+STUB_MODE=crash run --limit 3 >/dev/null 2>&1
 # RED CONTROL: once drained, it must go quiet, or the warning is permanent noise.
 while [ "$(git -C "$REPO" rev-list --count refs/peer-review/last..HEAD)" -gt 0 ]; do
   STUB_MODE=clean run --limit 10 >/dev/null

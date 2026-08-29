@@ -107,7 +107,11 @@ for repo in "${REPOS[@]}"; do
     echo "peer-review: $(basename "$repo") is $backlog commits behind review and has not improved over the last three runs (was $oldest), clearing $LIMIT per run — commits are arriving faster than they are being reviewed, so the review-after-commit guarantee is weaker than it looks."
   fi
   # Keep the last three counts, oldest first.
-  newhist="$(printf '%s %s' "${hist#* }" "$backlog" | awk '{n=NF; s=""; for(i=(n>3?n-2:1);i<=n;i++) s=s $i " "; print s}')"
+  # Append, then let awk keep the last three. The previous version ALSO stripped the first entry
+  # with ${hist#* } before appending, so the list could never grow past two — which made the
+  # histlen>=3 condition unreachable and silently disabled the warning entirely. A guard and a
+  # trimmer both doing the trimming is worse than either alone, and it fails closed and quiet.
+  newhist="$(printf '%s %s' "$hist" "$backlog" | awk '{s=""; for(i=(NF>3?NF-2:1);i<=NF;i++) s=s $i " "; print s}')"
   printf '%s\n' "$newhist" | git hash-object -w --stdin 2>/dev/null | xargs -I{} git update-ref "$prev_ref" {} 2>/dev/null || true
   commits="$(git rev-list --reverse "$last_sha..$head_sha" | head -n "$LIMIT")"
   [ -z "$commits" ] && continue
