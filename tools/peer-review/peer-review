@@ -85,13 +85,25 @@ for repo in "${REPOS[@]}"; do
   # the day removing from other checks, and I nearly shipped it here within minutes of writing
   # the warning. A queue that is shrinking is being handled; the thing worth saying is that the
   # author is outrunning the reviewer, which shows up as a backlog that holds or grows.
+  # JUDGE THE TREND, NOT ONE INTERVAL. Comparing against the immediately previous run made a
+  # queue that had fallen from 38 to 16 overnight report "NOT draining" the moment one cycle
+  # happened to break even — three reviewed, three committed. A reader would conclude it was
+  # stuck while it had more than halved. The warning I wrote to stop crying wolf was crying wolf
+  # within twelve hours.
+  #
+  # Three runs of history, and it speaks only when the backlog is no better than it was three
+  # runs ago. That is roughly two hours at this cadence: long enough that ordinary
+  # commit-and-review interleaving cancels out, short enough to catch a genuine runaway.
   prev_ref="refs/peer-review/backlog/$(basename "$repo")"
-  prev="$(git cat-file -p "$prev_ref" 2>/dev/null | head -1)"
-  case "$prev" in ''|*[!0-9]*) prev=-1;; esac
-  if [ "$backlog" -gt $(( LIMIT * 3 )) ] && [ "$prev" -ge 0 ] && [ "$backlog" -ge "$prev" ]; then
-    echo "peer-review: $(basename "$repo") is $backlog commits behind review and NOT draining (was $prev last run), clearing $LIMIT per run — commits are arriving faster than they are being reviewed, so the review-after-commit guarantee is weaker than it looks."
+  hist="$(git cat-file -p "$prev_ref" 2>/dev/null | head -1)"
+  oldest="${hist%% *}"
+  case "$oldest" in ''|*[!0-9]*) oldest=-1;; esac
+  if [ "$backlog" -gt $(( LIMIT * 3 )) ] && [ "$oldest" -ge 0 ] && [ "$backlog" -ge "$oldest" ]; then
+    echo "peer-review: $(basename "$repo") is $backlog commits behind review and has not improved over the last three runs (was $oldest), clearing $LIMIT per run — commits are arriving faster than they are being reviewed, so the review-after-commit guarantee is weaker than it looks."
   fi
-  printf '%s\n' "$backlog" | git hash-object -w --stdin 2>/dev/null | xargs -I{} git update-ref "$prev_ref" {} 2>/dev/null || true
+  # Keep the last three counts, oldest first.
+  newhist="$(printf '%s %s' "${hist#* }" "$backlog" | awk '{n=NF; s=""; for(i=(n>3?n-2:1);i<=n;i++) s=s $i " "; print s}')"
+  printf '%s\n' "$newhist" | git hash-object -w --stdin 2>/dev/null | xargs -I{} git update-ref "$prev_ref" {} 2>/dev/null || true
   commits="$(git rev-list --reverse "$last_sha..$head_sha" | head -n "$LIMIT")"
   [ -z "$commits" ] && continue
 
