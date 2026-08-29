@@ -118,7 +118,14 @@ for repo in "${REPOS[@]}"; do
         # CHANGED" and cannot tell which file that is, or whether it is a file at all. Reading it
         # correctly and printing it carelessly loses exactly what the -z fix bought. Third
         # correction to this section today, each one finding the previous insufficient.
-        show="$(printf '%s' "$f" | tr '\n\t' '??')"
+        # FOURTH correction to these lines today, and the first three each fixed the reported
+        # case and left the class: word-splitting, then git's C-quoting, then a newline splitting
+        # the echo, and then mapping tabs and newlines to "?" — which made docs/a?b.md and
+        # docs/a<TAB>b.md render identically, so a reviewer could not tell which file moved.
+        #
+        # printf %q rather than a fifth substitution: one line, unambiguous, and REVERSIBLE, so a
+        # tab becomes $'\t' and stays distinct from a literal question mark.
+        show="$(printf '%q' "$f")"
         if [ ! -e "$repo/$f" ]; then
           echo "  $show — DELETED since this commit"
         elif ! git diff --quiet "$sha" HEAD -- "$f" 2>/dev/null; then
