@@ -71,6 +71,18 @@ for repo in "${REPOS[@]}"; do
 
   # Oldest first, so a run that dies partway leaves the ref on a real reviewed commit rather
   # than skipping the ones it never got to.
+  # SAY WHEN THE NET IS FALLING BEHIND. The whole review-after-commit premise — commit freely,
+  # the reviewer catches what you missed — assumes review keeps PACE with committing. On
+  # 2026-08-28 it did not: 34 commits accumulated in this repo against a limit of 3 per run, so
+  # the guarantee had quietly weakened by a factor of about four and nothing anywhere said so.
+  # A backlog is invisible by construction: every individual run looks like it worked.
+  #
+  # Threshold is three runs' worth, because anything clearable inside a couple of hours is
+  # ordinary catch-up and anything beyond it means the author is outrunning the reviewer.
+  backlog="$(git rev-list --count "$last_sha..$head_sha")"
+  if [ "$backlog" -gt $(( LIMIT * 3 )) ]; then
+    echo "peer-review: $(basename "$repo") is $backlog commits behind review, clearing $LIMIT per run — the review-after-commit guarantee is weaker than it looks until this drains."
+  fi
   commits="$(git rev-list --reverse "$last_sha..$head_sha" | head -n "$LIMIT")"
   [ -z "$commits" ] && continue
 

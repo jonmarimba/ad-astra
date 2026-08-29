@@ -109,6 +109,22 @@ else
   fail "could not capture the task file"
 fi
 
+# 3d. THE NET SAYS WHEN IT IS FALLING BEHIND. A backlog is invisible by construction — every
+#     individual run looks like it worked — and on 2026-08-28 thirty-four commits accumulated
+#     against a limit of three per run with nothing anywhere reporting it.
+for n in 1 2 3 4 5 6 7 8 9 10 11 12 13; do echo "b$n" >> "$REPO/a.txt"; git -C "$REPO" commit -qam "backlog $n"; done
+out="$(STUB_MODE=clean run --limit 3)"
+case "$out" in *"commits behind review"*) pass "a backlog beyond three runs' worth is reported";;
+  *) fail "a 13-commit backlog was not reported: $out";; esac
+# RED CONTROL: once drained, it must go quiet, or the warning is permanent noise.
+while [ "$(git -C "$REPO" rev-list --count refs/peer-review/last..HEAD)" -gt 0 ]; do
+  STUB_MODE=clean run --limit 10 >/dev/null
+done
+echo drained >> "$REPO/a.txt"; git -C "$REPO" commit -qam "one more"
+out="$(STUB_MODE=clean run --limit 3)"
+case "$out" in *"commits behind review"*) fail "still warning with a 1-commit backlog";;
+  *) pass "RED control: a drained queue stops warning";; esac
+
 # 4. A FINDING REACHES STDOUT. This is the whole delivery path — stdout becomes a scheduler
 #    poke at the author. A finding written only to a file is the backlog nobody clears.
 echo three >> a.txt && git -C "$REPO" commit -qam "third commit"
