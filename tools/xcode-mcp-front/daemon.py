@@ -177,6 +177,10 @@ logging.basicConfig(level=logging.INFO, format=f"%(asctime)s {SERVER_NAME} %(mes
 log = logging.getLogger(SERVER_NAME)
 
 
+# NOTE: no longer consulted by the click decision. It used to gate the "Don't Allow" branch
+# on the dialog's PID being dead, and that gate is what let a LIVE stranger's dialog block
+# the daemon forever. Kept because it is a correct, cheap liveness check and reads clearly
+# at a call site; delete it if nothing else picks it up.
 def _pid_is_alive(pid_str: str) -> bool:
     """No history file needed: a dialog's PID is either us, or it's a live PID
     that belongs to someone else's legitimate in-flight request (leave it
@@ -247,6 +251,18 @@ async def _run_osascript(script: str) -> bytes:
     if proc.returncode != 0:
         raise RuntimeError(f"osascript exited {proc.returncode}: {err.decode(errors='replace').strip()}")
     return out
+
+
+# THE CLICKER IS LOAD-BEARING AND MUST NOT BE "DESIGNED AWAY". Xcode's approval is keyed to
+# the CONNECTING PID, and a daemon restart always mints a new one, so no grant survives a
+# bounce — not a signed app bundle, not the "don't ask again for this agent binary" checkbox,
+# which only lasts until Xcode itself restarts. An unattended daemon therefore has to answer
+# its own prompt or it can never connect after any restart. Jonathan, 2026-08-30, correcting
+# a suggestion to remove it: "the daemons HAVE to depend on a clicker."
+#
+# That is why a defect in this function is not cosmetic. It is the only path to a working
+# connection, so a branch that silently declines to click — as the sibling case did for
+# sixteen days — takes the whole daemon down while every log line still says "connected".
 
 
 def _pid_is_sibling_front(pid: str) -> bool:
@@ -338,23 +354,24 @@ end tell
 
     if dialog_pid == my_pid or _pid_is_sibling_front(dialog_pid):
         action = "Allow"
-    elif not _pid_is_alive(dialog_pid):
-        # Real button title uses U+2019 (’), not a straight apostrophe — found
-        # live, 2026-08-14, chasing a stray "Allow 'Codex' to access Xcode?"
-        # dialog left over from a convocation run. A straight-quote "Don't
-        # Allow" never matches Xcode's actual button, so this branch has
-        # silently never clicked anything: `exists (button "Don't Allow" ...)`
-        # is always false against the real AX tree, `_run_osascript` returns
-        # "not found" cleanly (no exception), and the caller just logs
-        # clicked=False with nothing louder. A dead-PID's stale dialog would
-        # sit there forever, blocking every future connection attempt behind
-        # it — exactly what this branch exists to prevent.
-        action = "Don’t Allow"
     else:
-        log.debug("a pending approval dialog belongs to a live pid (%s) that is neither us nor a "
-                  "sibling front daemon — leaving it alone", dialog_pid)
-        return False
-
+        # ANYTHING ELSE IN FRONT OF OURS GETS CLEARED, live or dead. This used to leave a
+        # LIVE unfamiliar PID's dialog strictly alone, out of politeness to another agent's
+        # in-flight request. That politeness is unaffordable here: Xcode's dialogs do not
+        # stack, so a single stranger's unanswered prompt sits in front of ours forever and
+        # the daemon can never connect again — which is exactly what a leftover
+        # "Allow 'Codex' to access Xcode?" from a convocation run did on 2026-08-30, and
+        # what the two front daemons did to each other for the sixteen days before that.
+        #
+        # Denying is not destructive and that is what makes this safe. A denied agent is
+        # told no for one connection attempt and re-prompts on its next one, by which time
+        # ours is out of the way. Jonathan, 2026-08-30: "I don't see why this needs
+        # exclusive access. Just run it saying with PID you care about or whatever?"
+        #
+        # The sibling branch above still matters and is not redundant: two front daemons
+        # denying each other would ping-pong, each clearing the other's prompt on every
+        # retry. Family gets Allow, everyone else gets out of the way.
+        action = "Don’t Allow"
     click_script = f"""
 tell application "System Events" to tell process "Xcode"
   repeat with w in windows
@@ -377,7 +394,8 @@ end tell
     if clicked and action == "Allow":
         log.info("clicked Allow for our own connection-approval prompt (pid %s)", my_pid)
     elif clicked:
-        log.info("dismissed a stale approval dialog for dead pid %s, clearing the queue", dialog_pid)
+        log.info("cleared an approval dialog for pid %s (not ours, not a sibling) so ours can "
+                 "surface — it re-prompts on its next attempt", dialog_pid)
     return clicked and action == "Allow"
 
 

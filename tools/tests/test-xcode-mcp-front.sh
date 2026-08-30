@@ -110,6 +110,54 @@ mcp_call() { # usage: mcp_call <port> <method> <params-json>  -> prints the raw 
     -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"$method\",\"params\":$params}"
 }
 
+# --- the clicker's sibling rule, tested directly -----------------------------
+# THE CLICKER IS THE ONLY WAY THESE DAEMONS EVER CONNECT. Xcode keys approval to the
+# connecting PID and a restart always mints a new one, so nothing survives a bounce and an
+# unattended daemon must answer its own prompt. That makes a wrong branch here fatal and
+# silent: for sixteen days each daemon declined to touch the other's dialog, because the
+# other was a live PID it did not recognise, while Xcode's dialogs do not stack so neither
+# ever saw its own. 21,388 broken connections, and every log line said "connected".
+#
+# The two daemons happen to clear their own prompts when they start a second apart, so the
+# sibling branch can pass a whole suite run without ever executing. It is asserted directly
+# instead, against the REAL running daemon PIDs, with the discriminating negatives included —
+# an unrelated Python must NOT be treated as family.
+sib_a="$(pgrep -f "xcode-mcp-front/daemon.py" | head -1)"
+sib_b="$(pgrep -f "xcode-mcp-front/daemon.py" | tail -1)"
+if [ -z "$sib_a" ] || [ -z "$sib_b" ] || [ "$sib_a" = "$sib_b" ]; then
+  fail "expected two front daemons running to test the sibling rule against; found: ${sib_a:-none} ${sib_b:-none}"
+else
+  sib_out="$(python3 - "$sib_a" "$sib_b" <<'SIBPY'
+import importlib.util, os, sys, subprocess
+
+path = os.path.expanduser("~/svnCheckouts/js-db-ad-astra/tools/xcode-mcp-front/daemon.py")
+src = open(path, encoding="utf-8").read()
+# Pull the function out rather than importing the module, which would start a server.
+start = src.index("def _pid_is_sibling_front")
+end = src.index("\nasync def", start)
+ns = {"__file__": path, "os": os, "subprocess": subprocess}
+exec(compile(src[start:end], "<sibling>", "exec"), ns)
+f = ns["_pid_is_sibling_front"]
+
+a, b = sys.argv[1], sys.argv[2]
+checks = [
+    ("daemon A is family", f(a), True),
+    ("daemon B is family", f(b), True),
+    ("this test process is not", f(str(os.getpid())), False),
+    ("launchd is not", f("1"), False),
+    ("a dead pid is not", f("999999"), False),
+]
+bad = [name for name, got, want in checks if got != want]
+print("FAILED:" + ",".join(bad) if bad else "ALLOK")
+SIBPY
+)"
+  if [ "$sib_out" = "ALLOK" ]; then
+    pass "clicker sibling rule: both live front daemons are family, unrelated/dead pids are not"
+  else
+    fail "clicker sibling rule wrong — $sib_out"
+  fi
+fi
+
 # --- single-upstream daemon (port 8765): unprefixed passthrough still works ---
 resp="$(mcp_call 8765 tools/call '{"name":"XcodeListWindows","arguments":{}}')"
 echo "$resp" > "$SB/single.out"
