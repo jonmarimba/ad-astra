@@ -141,7 +141,19 @@ for a in $(echo "$AGENTS" | tr ',' ' '); do
       codex_mcp_args=(-c 'mcp_servers={}')
       [ "${CONVOCATION_CODEX_MCP:-0}" = "1" ] && codex_mcp_args=()
       run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check "${codex_mcp_args[@]}" -o "$o.last" "$PROMPT" </dev/null & pids+=($!) ;;
-    qwen)   run_agent qwen   "$o" "$QWEN_BIN" -m "$QWEN_MODEL" -y -p "$PROMPT" & pids+=($!) ;;
+    # ONE RETRY, BECAUSE THE KNOWN QWEN FAILURE IS TRANSIENT AND COSTS THE WHOLE PANEL.
+    # OmniRoute's documented provider-wide lockout: one uncovered model returns 402, the
+    # ollama-cloud connection flips to credits_exhausted, and EVERY ollamacloud model reports
+    # "no active credentials" for about two minutes — including ones that answered seconds
+    # earlier. The daily readiness probe cannot see this, since it may have passed hours
+    # before the lockout began. GhOST-OpenClaw raised the consequence: Claude and Codex are
+    # already launched and their tokens spent, and the round then completes a voice short.
+    # Waiting out the lockout once is far cheaper than discarding a panel, and a second
+    # failure is a real failure that still gets reported by run_agent.
+    qwen)   ( run_agent qwen "$o" "$QWEN_BIN" -m "$QWEN_MODEL" -y -p "$PROMPT" \
+              || { echo "panel: qwen failed; waiting out a possible OmniRoute lockout (130s) and retrying once" >&2
+                   sleep 130
+                   run_agent qwen "$o" "$QWEN_BIN" -m "$QWEN_MODEL" -y -p "$PROMPT"; } ) & pids+=($!) ;;
   esac
 done
 failed=0
