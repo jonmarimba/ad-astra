@@ -54,7 +54,13 @@ fi
 # The test opens its OWN throwaway Swift package rather than one of Jonathan's workspaces.
 # A test that opens the Kicker project would make the ship gate depend on the state of real
 # work, and would put a test's fingerprints on a repo he is using.
-if [ "$(osascript -e 'tell application "Xcode" to count windows' 2>/dev/null || echo 0)" -lt 1 ]; then
+# COUNT WORKSPACE DOCUMENTS, NOT WINDOWS. "Welcome to Xcode" is a window, so on a machine
+# where Xcode is open with no project this guard was satisfied by the launcher panel and the
+# scaffold below never ran — the suite then failed all four mcpbridge assertions while
+# believing it had a workspace. Found live 2026-08-30, twice, before the real cause was
+# reached. mcpbridge rejects with "no workspace windows are open"; a workspace DOCUMENT is
+# the thing it means.
+if [ "$(osascript -e 'tell application "Xcode" to count workspace documents' 2>/dev/null || echo 0)" -lt 1 ]; then
   need swift "install Xcode command line tools"
   SCRATCH="$SB/xcode-scratch"; mkdir -p "$SCRATCH"
   ( cd "$SCRATCH" && swift package init --name AstraProbe >/dev/null 2>&1 )
@@ -62,10 +68,10 @@ if [ "$(osascript -e 'tell application "Xcode" to count windows' 2>/dev/null || 
   echo "  ..  opening a throwaway package so mcpbridge has a workspace"
   open -g -a "$XCODE_APP" "$SCRATCH/Package.swift" 2>/dev/null
   waited=0
-  until [ "$(osascript -e 'tell application "Xcode" to count windows' 2>/dev/null || echo 0)" -ge 1 ] || [ "$waited" -ge 90 ]; do
+  until [ "$(osascript -e 'tell application "Xcode" to count workspace documents' 2>/dev/null || echo 0)" -ge 1 ] || [ "$waited" -ge 90 ]; do
     sleep 3; waited=$((waited+3))
   done
-  if [ "$(osascript -e 'tell application "Xcode" to count windows' 2>/dev/null || echo 0)" -lt 1 ]; then
+  if [ "$(osascript -e 'tell application "Xcode" to count workspace documents' 2>/dev/null || echo 0)" -lt 1 ]; then
     fail "Xcode is running but never opened a window for $SCRATCH/Package.swift — mcpbridge has no workspace to report and the assertions below cannot mean anything."
     finish
     exit 1

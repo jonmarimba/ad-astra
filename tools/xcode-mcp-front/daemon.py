@@ -249,6 +249,36 @@ async def _run_osascript(script: str) -> bytes:
     return out
 
 
+def _pid_is_sibling_front(pid: str) -> bool:
+    """True when this PID is ANOTHER instance of this same daemon family.
+
+    TWO FRONT DAEMONS DEADLOCKED EACH OTHER AND THIS IS THE FIX. Xcode's approval dialogs do
+    not stack — one showing hides the next — and the click policy above deliberately leaves a
+    live, unfamiliar PID's dialog alone, which is right when the stranger is somebody else's
+    agent. With both `xcode-mcp-front` (8765) and `xcode-combined-front` (8767) running, each
+    one saw the other's dialog, read a live PID that was not its own, and politely declined.
+    Its own dialog sat queued behind that one and it never saw it either. Both then looped
+    connect → "Connection closed" → retry forever: 21,422 cycles between 2026-08-14 and
+    2026-08-30, a dialog pile the user had to clear by hand, and a suite that failed every
+    mcpbridge assertion while both daemons reported themselves healthy.
+
+    A sibling is not a stranger. Approving a dialog raised by another instance of this same
+    program, running from this same directory as this same user, is approving our own family
+    — and it is the only way either of them ever gets through. Identified by matching the
+    process's command line against this file's own path, so an unrelated Python that happens
+    to be running is still treated as a stranger.
+    """
+    try:
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                             capture_output=True, timeout=5)
+    except Exception:
+        return False
+    if out.returncode != 0:
+        return False
+    cmd = out.stdout.decode("utf-8", "replace")
+    return os.path.basename(__file__) in cmd and os.path.dirname(os.path.abspath(__file__)) in cmd
+
+
 async def _click_allow_if_present() -> bool:
     """Best-effort, narrowly scoped: only ever touches a button whose title is
     the exact literal string "Allow" or "Don't Allow", only in Xcode's own
@@ -306,7 +336,7 @@ end tell
 
     dialog_pid = text.split("PID: ", 1)[1].split()[0].strip()
 
-    if dialog_pid == my_pid:
+    if dialog_pid == my_pid or _pid_is_sibling_front(dialog_pid):
         action = "Allow"
     elif not _pid_is_alive(dialog_pid):
         # Real button title uses U+2019 (’), not a straight apostrophe — found
@@ -321,7 +351,8 @@ end tell
         # it — exactly what this branch exists to prevent.
         action = "Don’t Allow"
     else:
-        log.debug("a pending approval dialog belongs to a live pid (%s) that isn't us — leaving it alone", dialog_pid)
+        log.debug("a pending approval dialog belongs to a live pid (%s) that is neither us nor a "
+                  "sibling front daemon — leaving it alone", dialog_pid)
         return False
 
     click_script = f"""
