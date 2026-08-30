@@ -109,6 +109,7 @@ import contextlib
 import logging
 import os
 import subprocess
+import time
 
 import anyio
 import uvicorn
@@ -261,38 +262,22 @@ async def _run_osascript(script: str) -> bytes:
 # a suggestion to remove it: "the daemons HAVE to depend on a clicker."
 #
 # That is why a defect in this function is not cosmetic. It is the only path to a working
-# connection, so a branch that silently declines to click — as the sibling case did for
-# sixteen days — takes the whole daemon down while every log line still says "connected".
+# connection, so a branch that silently declines to click takes the whole daemon down while
+# every log line still says "connected".
 
 
-def _pid_is_sibling_front(pid: str) -> bool:
-    """True when this PID is ANOTHER instance of this same daemon family.
+# How long another process's approval dialog is left alone before we clear it. Only once we
+# have been blocked for this long is it fair to assume nobody is coming to answer it.
+FOREIGN_DIALOG_GRACE_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_FOREIGN_GRACE", "45"))
 
-    TWO FRONT DAEMONS DEADLOCKED EACH OTHER AND THIS IS THE FIX. Xcode's approval dialogs do
-    not stack — one showing hides the next — and the click policy above deliberately leaves a
-    live, unfamiliar PID's dialog alone, which is right when the stranger is somebody else's
-    agent. With both `xcode-mcp-front` (8765) and `xcode-combined-front` (8767) running, each
-    one saw the other's dialog, read a live PID that was not its own, and politely declined.
-    Its own dialog sat queued behind that one and it never saw it either. Both then looped
-    connect → "Connection closed" → retry forever: 21,422 cycles between 2026-08-14 and
-    2026-08-30, a dialog pile the user had to clear by hand, and a suite that failed every
-    mcpbridge assertion while both daemons reported themselves healthy.
+# How long an upstream may make NO progress before we let launchd restart us. See
+# stall_watchdog(). Generous on purpose: a false positive restarts a healthy daemon.
+STALL_EXIT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_STALL_EXIT", "180"))
 
-    A sibling is not a stranger. Approving a dialog raised by another instance of this same
-    program, running from this same directory as this same user, is approving our own family
-    — and it is the only way either of them ever gets through. Identified by matching the
-    process's command line against this file's own path, so an unrelated Python that happens
-    to be running is still treated as a stranger.
-    """
-    try:
-        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
-                             capture_output=True, timeout=5)
-    except Exception:
-        return False
-    if out.returncode != 0:
-        return False
-    cmd = out.stdout.decode("utf-8", "replace")
-    return os.path.basename(__file__) in cmd and os.path.dirname(os.path.abspath(__file__)) in cmd
+# Set the first time we see a foreign dialog while we are not connected; cleared whenever we
+# see no dialog or our own. Module-level rather than per-upstream because Xcode shows one
+# dialog at a time for the whole application, so this is genuinely global state.
+_foreign_dialog_first_seen: dict = {}
 
 
 async def _click_allow_if_present() -> bool:
@@ -352,9 +337,34 @@ end tell
 
     dialog_pid = text.split("PID: ", 1)[1].split()[0].strip()
 
-    if dialog_pid == my_pid or _pid_is_sibling_front(dialog_pid):
+    if dialog_pid == my_pid:
+        _foreign_dialog_first_seen.pop("pid", None)
         action = "Allow"
     else:
+        # A GRACE PERIOD, BECAUSE CLEARING UNCONDITIONALLY MONOPOLISES XCODE. The previous
+        # version denied every foreign PID on sight. That unblocks us and starves everyone
+        # else: a legitimate agent's dialog gets Don't Allow, it retries, and it lands in the
+        # same denial loop forever, so this daemon owns Xcode and nothing else can use it.
+        # GhOST-OpenClaw caught it in peer review of the commit that introduced it.
+        #
+        # The bounded version keeps both properties. Somebody else's prompt is left alone
+        # while there is any chance they are about to answer it — which is the normal case,
+        # since a live agent's own approval usually resolves in seconds. Only once the SAME
+        # foreign dialog has been sitting there long enough to have stopped being anyone's
+        # in-flight request do we clear it so ours can surface. Nothing is destroyed either
+        # way: a denied agent re-prompts on its next attempt.
+        first = _foreign_dialog_first_seen.get("pid")
+        now = time.monotonic()
+        if first is None or first[0] != dialog_pid:
+            _foreign_dialog_first_seen["pid"] = (dialog_pid, now)
+            log.debug("a foreign approval dialog (pid %s) is in the way; leaving it for %.0fs "
+                      "in case its own agent answers it", dialog_pid, FOREIGN_DIALOG_GRACE_SECONDS)
+            return False
+        if now - first[1] < FOREIGN_DIALOG_GRACE_SECONDS:
+            return False
+        log.info("foreign approval dialog for pid %s has blocked us for %.0fs — clearing it so "
+                 "our own prompt can surface; that process re-prompts on its next attempt",
+                 dialog_pid, now - first[1])
         # ANYTHING ELSE IN FRONT OF OURS GETS CLEARED, live or dead. This used to leave a
         # LIVE unfamiliar PID's dialog strictly alone, out of politeness to another agent's
         # in-flight request. That politeness is unaffordable here: Xcode's dialogs do not
@@ -410,6 +420,9 @@ class Upstream:
 
     def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool):
         self.name = name
+        # Watchdog input: bumped on every connect attempt and every successful heartbeat.
+        # Initialised here so the watchdog never reads a missing attribute on a slow start.
+        self.last_progress = time.monotonic()
         self.command = command
         self.args = args
         self.require_xcode_running = require_xcode_running
@@ -467,6 +480,44 @@ class Upstream:
                 )
             return result
 
+    async def stall_watchdog(self) -> None:
+        """Exit the process if this upstream stops making progress entirely.
+
+        THE RECONNECT LOOP CAN GET STUCK AND GO PERMANENTLY SILENT. Observed live
+        2026-08-30: xcode-mcp-front logged "heartbeat list_tools failed, marking broken"
+        at 18:50:55 and then never logged again — no retry, no error, nothing — while its
+        HTTP endpoint kept answering and serving zero tools. The cause is the teardown, not
+        the loop: leaving `async with stdio_client(...)` waits for the child to exit, and a
+        wedged mcpbridge never does, so the task blocks inside __aexit__ where no `except`
+        and no retry can reach it. Every health signal this daemon has says "fine" in that
+        state, which is the worst possible failure shape.
+
+        There is no clean way to bound a hung context-manager exit from inside it. There IS
+        a supervisor: launchd, with KeepAlive true. So when an upstream has made no progress
+        for STALL_EXIT_SECONDS — no connect attempt, no successful heartbeat — say so loudly
+        and exit non-zero. That is the file's own stated philosophy: "a genuine crash is what
+        the process supervisor is for." A restart costs one new Xcode approval prompt, which
+        the clicker answers.
+
+        Deliberately generous, because a false positive here restarts a working daemon: the
+        default is many multiples of the heartbeat interval, and any progress at all resets it.
+        """
+        while True:
+            await anyio.sleep(RECONNECT_POLL_SECONDS)
+            if self.require_xcode_running and not _xcode_is_running():
+                # Waiting for Xcode is not a stall; that path logs and sleeps on purpose.
+                self.last_progress = time.monotonic()
+                continue
+            idle = time.monotonic() - getattr(self, "last_progress", time.monotonic())
+            if idle > STALL_EXIT_SECONDS:
+                log.error("[%s] no connect attempt and no successful heartbeat for %.0fs — the "
+                          "reconnect loop is wedged, almost certainly blocked in stdio_client "
+                          "teardown waiting on an mcpbridge child that will not exit. Exiting "
+                          "so launchd restarts us; staying up would serve zero tools while "
+                          "every log line claimed we were connected.", self.name, idle)
+                os._exit(75)
+
+
     async def connection_manager(self) -> None:
         """Owns this upstream's connection for the daemon's whole life. Loops
         forever: while not connected, check Xcode is running (if this upstream
@@ -486,6 +537,7 @@ class Upstream:
                 await _click_allow_if_present()
 
             log.info("[%s] attempting connect: %s %s", self.name, self.command, self.args)
+            self.last_progress = time.monotonic()
             try:
                 async with stdio_client(params) as (read, write):
                     async with ClientSession(read, write) as session:
@@ -495,6 +547,7 @@ class Upstream:
                             self.session = session
                             self.known_broken = False
                         log.info("[%s] connected — serving until this breaks", self.name)
+                        self.last_progress = time.monotonic()
                         while not self.known_broken:
                             await anyio.sleep(RECONNECT_POLL_SECONDS)
                             # Health-check: a silent list_tools call catches a
@@ -505,6 +558,7 @@ class Upstream:
                             try:
                                 with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
                                     await session.list_tools()
+                                self.last_progress = time.monotonic()
                             except Exception as e:
                                 log.warning("[%s] heartbeat list_tools failed, marking broken: %s", self.name, e)
                                 async with self.lock:
@@ -688,6 +742,7 @@ async def _lifespan(app: Server, upstreams: list[Upstream]):
     async with anyio.create_task_group() as tg:
         for u in upstreams:
             tg.start_soon(u.connection_manager)
+            tg.start_soon(u.stall_watchdog)
         try:
             yield {}
         finally:
