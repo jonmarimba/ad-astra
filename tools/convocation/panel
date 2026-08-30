@@ -49,10 +49,28 @@ for a in $(echo "$AGENTS" | tr ',' ' '); do
               # past the executable check and died on the model, after the other two brands
               # had already been launched and their tokens spent. One cheap round-trip here
               # turns that into a refusal to start.
-              if ! timeout 90 "$QWEN_BIN" -m "$QWEN_MODEL" -y -p 'Reply with exactly: READY' 2>/dev/null | grep -q READY; then
-                echo "panel: agent 'qwen' requested but model '$QWEN_MODEL' did not answer a trivial prompt." >&2
-                echo "         Check OmniRoute is up (curl -s localhost:20128/v1/models) and that the model serves." >&2
-                bad=1
+              #
+              # ONCE A DAY, not once a round. Which models serve changes on the scale of
+              # days — a plan changing, a route being added — not on the scale of the six
+              # panels you run in an evening. Re-probing every round spent 90 seconds of
+              # wall time and a request to say the same thing it said twenty minutes
+              # earlier. The stamp is per model and per day, so switching QWEN_MODEL still
+              # probes, and a model that broke overnight is still caught tomorrow morning.
+              #
+              # PANEL_FORCE_PROBE=1 re-probes now, for when a route has just been fixed and
+              # you do not want to wait for midnight.
+              probe_dir="${XDG_CACHE_HOME:-$HOME/.cache}/convocation"
+              probe_stamp="$probe_dir/ready-$(echo "$QWEN_MODEL" | tr '/:' '__')-$(date +%Y%m%d)"
+              if [ "${PANEL_FORCE_PROBE:-0}" = "1" ] || [ ! -f "$probe_stamp" ]; then
+                if timeout 90 "$QWEN_BIN" -m "$QWEN_MODEL" -y -p 'Reply with exactly: READY' 2>/dev/null | grep -q READY; then
+                  mkdir -p "$probe_dir" && : > "$probe_stamp"
+                  # Yesterday's stamps for this model are noise; keep the directory small.
+                  find "$probe_dir" -name "ready-*" -mtime +2 -delete 2>/dev/null || true
+                else
+                  echo "panel: agent 'qwen' requested but model '$QWEN_MODEL' did not answer a trivial prompt." >&2
+                  echo "         Check OmniRoute is up (curl -s localhost:20128/v1/models) and that the model serves." >&2
+                  bad=1
+                fi
               fi
             else
               echo "panel: agent 'qwen' requested but $QWEN_BIN is not executable" >&2; bad=1
@@ -102,7 +120,27 @@ for a in $(echo "$AGENTS" | tr ',' ' '); do
     # stderr and leaves stdout empty, so the 2026-08-26 22:05 round recorded codex as a
     # zero-byte answer while its stderr held a real review — it had queried the live database
     # and everything. Capturing stdout is simply the wrong seam for this CLI.
-    codex)  run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check -o "$o.last" "$PROMPT" </dev/null & pids+=($!) ;;
+    # -c mcp_servers={} STOPS EVERY CODEX PANELIST FROM KNOCKING ON XCODE'S DOOR.
+    # ~/.codex/config.toml declares [mcp_servers.xcode] = `xcrun mcpbridge`, so a plain
+    # `codex exec` opens a connection to Xcode on startup and Xcode raises an
+    # "Allow 'Codex' to access Xcode?" prompt keyed to that codex PID. A convocation spawns
+    # one codex per round, the codex exits when the round ends, and the prompt it raised
+    # stays on screen forever with nobody left to answer it. Xcode's dialogs do not stack,
+    # so each orphan sits in front of the next and the pile only grows — on 2026-08-30
+    # Jonathan closed 21 of them by hand, and one of those orphans was also blocking the
+    # xcode-mcp-front daemons from connecting at all.
+    #
+    # A review panelist has no business driving Xcode. It reads files natively in read-only
+    # sandbox mode, which does not go through MCP, so dropping the servers costs the round
+    # nothing. Verified both directions on 2026-08-30: with the flag, codex answers normally
+    # and no dialog appears; without it, a dialog appears every time.
+    #
+    # CONVOCATION_CODEX_MCP=1 restores the configured servers for a round that genuinely
+    # needs them. Nothing does today.
+    codex)
+      codex_mcp_args=(-c 'mcp_servers={}')
+      [ "${CONVOCATION_CODEX_MCP:-0}" = "1" ] && codex_mcp_args=()
+      run_agent codex  "$o" "$CODEX_BIN" exec --skip-git-repo-check "${codex_mcp_args[@]}" -o "$o.last" "$PROMPT" </dev/null & pids+=($!) ;;
     qwen)   run_agent qwen   "$o" "$QWEN_BIN" -m "$QWEN_MODEL" -y -p "$PROMPT" & pids+=($!) ;;
   esac
 done
