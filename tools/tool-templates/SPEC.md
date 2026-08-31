@@ -77,7 +77,20 @@ Jonathan's expectation, 2026-08-31, was that MCPs are mostly additive, at least 
 
 The local 26.6 list, read through the approved daemon, matches the published 26.6 capture exactly, which cross-validates both the comparison tool and that repository's data. Captures are vendored under `tool-lists/` so this comparison can be repeated without a network.
 
-**So the expectation is right in the common case and wrong in the most recent one, which is exactly why the version is worth recording.** A rename is the failure mode that matters here: purely additive drift is harmless, but a rename removes a name that a sieve entry or a map entry may point at, and it does so without changing the tool count — so a config that tracked only "how many tools" would see nothing. This is the concrete argument for the map absorbing upstream renames, for the mismatch warning naming which entries no longer resolve, and for treating older-than-tested differently from newer-than-tested.
+**Both directions are dangerous, and the additive one is worse because it is silent.**
+
+A **rename** removes a name that a sieve or map entry may point at, without changing the tool count, so a config tracking only "how many tools" sees nothing. But it does break loudly in the only way that counts: an entry stops resolving, and the audit catches it.
+
+An **addition** breaks nothing and resolves everything, and can still ruin the surface. Jonathan's example, 2026-08-31: Drew's server already offers scheme switching, and Xcode 27 adds it. Nothing is missing, no entry has gone stale, the config is still entirely valid — and the aggregate now offers two ways to do one job, which is precisely the incoherence the sieve exists to prevent. It arrived on an upstream update, and nothing in a config of decisions can notice, because a decision written when only one server offered a capability says nothing about a second server that has just started offering it.
+
+So "additive is safe" is wrong, and it is wrong in the specific way that matters: **the addition case cannot be detected by checking the config at all.** Checking that every sieve and map entry still resolves catches renames and removals and is blind to this. Detecting it requires re-running the cross-server comparison against the new version and asking what NEW tool now overlaps something already offered — which is the semantic pass, since Xcode's new tool need not be named anything like Drew's.
+
+That makes the comparison script part of the version-change response rather than a thing someone runs manually when they remember. The mismatch warning therefore has two halves, and they are found by different means:
+
+- **entries that no longer resolve** — from the config, cheap, catches renames and removals;
+- **new tools that collide with something already offered** — from a fresh cross-server comparison, needs the model pass, catches additions.
+
+Reporting only the first would leave the failure Jonathan named undetectable.
 
 Xcode 27.0 is installed here as `Xcode-beta.app` and was NOT measured. Running it requires installing system-wide components, which is an administrative change and Jonathan's to authorise; the beta was launched, presented "Install Required", and was quit without installing. That comparison is one command away whenever he wants it.
 
