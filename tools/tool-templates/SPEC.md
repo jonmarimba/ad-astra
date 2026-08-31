@@ -68,6 +68,22 @@ Everything else in the daemon is already generic and stays: the reconnect loop, 
 
 **Record the compatible upstream version in step one, not later.** Two Xcodes are installed on this machine right now — `Xcode.app` at 26.6, currently selected, and `Xcode-beta.app` at 27.0 — and the beta carries a lot that has not been tried. A wrapped server's tool list is a property of its version, so a config that names upstreams without recording which version was verified against them cannot tell "this tool is gone" from "you are pointed at a different Xcode." Both servers already supply what is needed: `initialize` returns `serverInfo`, giving `xcode-tools 24952` for Apple's bridge and `Xcode MCP Server 1.29.1` for Drew's.
 
+### A version mismatch warns; it never refuses
+
+Jonathan, 2026-08-31: "I also don't want to die in a fire if the mcp version changes. Just warn the user and the, uh, User." So the recorded compatible version is advisory. A wrapped server that comes back at a different version still gets wrapped, still gets served, and the mismatch is reported. Refusing to start would mean an Xcode update takes the whole surface down, which is a worse failure than serving a tool list that has shifted slightly.
+
+**Two audiences, and there is a real channel for each.**
+
+For the controlling LLM — the "user" in his sense — the `initialize` response already carries an `instructions` string, observed today from Apple's bridge as "Request Xcode perform the action you specify." The wrapper composes its own instructions anyway, so a mismatch line belongs there: it reaches the model in-band, at the moment it starts working, with no new mechanism.
+
+For Jonathan — the "User" — a native dialog from the wrapper's own `.app`, which is where this always runs, via pyobjc. Something plain: compatible with 24952, found 24953.
+
+**The hazard, and it must be designed in rather than discovered.** This daemon reconnects every five seconds. A dialog raised on mismatch, per connection, is twenty-one modals in an evening — the exact failure that cost a night on 2026-08-30, arriving from a new direction. Xcode's dialogs do not stack, so those modals would also block the approval prompts the daemon needs answered, and the tooling would deadlock itself over a warning. **So the human dialog fires once per distinct mismatch and then stays quiet**: keyed on server name plus the version pair, persisted rather than held in memory, so a launchd restart does not re-raise it. The in-band note to the model can repeat freely, because a string in an initialize response costs nothing and every fresh session genuinely needs telling.
+
+**Say what actually differs, not just that numbers differ.** The config holds decisions rather than inventory, and the comparison script can list the live tools, so the warning can name the blocks and maps that no longer resolve against the new version. "Compatible with 24952, found 24953; 2 blocked tools and 1 rename no longer match anything" is actionable. A bare version pair is a number to dismiss, and a warning that is always dismissed is the same as no warning.
+
+Distinguish the two directions too. Newer than tested is the common case and usually benign — new tools appear, nothing promised disappears. Older than tested is the one that breaks things, because a rename or block may reference a tool that does not exist yet. They deserve different wording.
+
 ### The comparison script
 
 Built 2026-08-31, ahead of the rest, because the sieve and the map both need its output before they can be written: `tools/tool-templates/mcp_tools.py`.
