@@ -93,4 +93,39 @@ red "jsonc gets the point-at-the-generated-file message, not a bare parse error"
 red "missing config file must fail as a missing file" 66 "cannot read" \
   python3 "$LOADER" validate "$SB/does-not-exist.json"
 
+# --- resolve: how the daemon picks its upstreams (increment 1.2) ---
+# The colon/comma env format is REPLACED, not deprecated: a set XCODE_MCP_FRONT_UPSTREAMS
+# is a hard error pointing at the file, because the old parser silently corrupted a colon
+# in a command path and a comma in an argument, and a daemon that half-honoured both
+# mechanisms would hide which one won.
+out="$SB/resolve-file.out"
+env -u XCODE_MCP_FRONT_UPSTREAMS XCODE_MCP_FRONT_MCP_INFO="$ok_cfg" \
+  python3 "$LOADER" resolve >"$out" 2>&1
+assert_eq "0" "$?" "resolve honours XCODE_MCP_FRONT_MCP_INFO"
+assert_contains "$out" "xcode__" "resolve keeps the xcode__ prefix from the file"
+assert_contains "$out" "drews__" "resolve keeps the drews__ prefix from the file"
+
+red "a set XCODE_MCP_FRONT_UPSTREAMS is refused, pointing at the file" 65 "replaced by _mcp_info.json" \
+  env XCODE_MCP_FRONT_UPSTREAMS="xcode:1:xcrun:mcpbridge" python3 "$LOADER" resolve
+
+red "UPSTREAMS set alongside the file is still refused — one mechanism must win visibly" 65 "replaced by _mcp_info.json" \
+  env XCODE_MCP_FRONT_UPSTREAMS="x:1:c" XCODE_MCP_FRONT_MCP_INFO="$ok_cfg" python3 "$LOADER" resolve
+
+# With neither set, the deployed single-upstream daemon's env contract is unchanged:
+# default xcrun mcpbridge, Xcode required, served unprefixed.
+out="$SB/resolve-single.out"
+env -u XCODE_MCP_FRONT_UPSTREAMS -u XCODE_MCP_FRONT_MCP_INFO \
+  python3 "$LOADER" resolve >"$out" 2>&1
+assert_eq "0" "$?" "resolve with no env keeps the single-upstream default"
+assert_contains "$out" "xcrun mcpbridge" "single-upstream default is still xcrun mcpbridge"
+assert_contains "$out" "require_xcode" "single-upstream default still waits for Xcode"
+
+out="$SB/resolve-drews.out"
+env -u XCODE_MCP_FRONT_UPSTREAMS -u XCODE_MCP_FRONT_MCP_INFO \
+  XCODE_MCP_FRONT_UPSTREAM_CMD=uvx XCODE_MCP_FRONT_UPSTREAM_ARGS=drews-xcode-mcp \
+  XCODE_MCP_FRONT_REQUIRE_XCODE=0 python3 "$LOADER" resolve >"$out" 2>&1
+assert_eq "0" "$?" "single-upstream env overrides still resolve"
+assert_contains "$out" "uvx drews-xcode-mcp" "single-upstream CMD/ARGS overrides survive"
+assert_not_contains "$out" "require_xcode" "REQUIRE_XCODE=0 drops the quirk"
+
 finish

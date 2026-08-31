@@ -110,9 +110,58 @@ def load(path):
     return [_parse_server(name, spec) for name, spec in servers.items()]
 
 
+def resolve_specs(environ):
+    """How the daemon picks its upstreams (increment 1.2). One mechanism wins, visibly:
+
+    - XCODE_MCP_FRONT_UPSTREAMS set: HARD ERROR. The colon/comma format silently corrupted
+      a colon in a command path and a comma in an argument; it is replaced, not deprecated,
+      because a daemon half-honouring both mechanisms would hide which one won.
+    - XCODE_MCP_FRONT_MCP_INFO set: load that _mcp_info.json.
+    - neither: the deployed single-upstream env contract, unchanged — UPSTREAM_CMD
+      (default xcrun), UPSTREAM_ARGS (default mcpbridge), REQUIRE_XCODE (default 1),
+      served unprefixed exactly as before.
+    """
+    if environ.get("XCODE_MCP_FRONT_UPSTREAMS"):
+        raise ConfigError(
+            "XCODE_MCP_FRONT_UPSTREAMS has been replaced by _mcp_info.json — set "
+            "XCODE_MCP_FRONT_MCP_INFO=<path> instead. The colon/comma format corrupts a "
+            "command path containing ':' and an argument containing ',', silently.")
+    info = environ.get("XCODE_MCP_FRONT_MCP_INFO")
+    if info:
+        return load(info)
+    quirks = frozenset({"require_xcode"}) if environ.get(
+        "XCODE_MCP_FRONT_REQUIRE_XCODE", "1") == "1" else frozenset()
+    return [UpstreamSpec(
+        name="default",
+        command=environ.get("XCODE_MCP_FRONT_UPSTREAM_CMD", "xcrun"),
+        args=environ.get("XCODE_MCP_FRONT_UPSTREAM_ARGS", "mcpbridge").split(),
+        prefix="",
+        quirks=quirks,
+    )]
+
+
+def _print_specs(upstreams):
+    for u in upstreams:
+        quirks = ",".join(sorted(u.quirks)) or "-"
+        print("%s  prefix=%s  quirks=%s  %s %s" % (u.name, u.prefix, quirks, u.command,
+                                                   " ".join(u.args)))
+
+
 def main(argv):
+    import os
+    if len(argv) == 2 and argv[1] == "resolve":
+        try:
+            upstreams = resolve_specs(os.environ)
+        except ConfigError as e:
+            print("mcp_config: %s" % e, file=sys.stderr)
+            return 65
+        except OSError as e:
+            print(str(e), file=sys.stderr)
+            return 66
+        _print_specs(upstreams)
+        return 0
     if len(argv) != 3 or argv[1] != "validate":
-        print("usage: mcp_config.py validate <file>", file=sys.stderr)
+        print("usage: mcp_config.py validate <file> | resolve", file=sys.stderr)
         return 64
     try:
         upstreams = load(argv[2])
@@ -122,10 +171,7 @@ def main(argv):
     except OSError as e:
         print(str(e), file=sys.stderr)
         return 66
-    for u in upstreams:
-        quirks = ",".join(sorted(u.quirks)) or "-"
-        print("%s  prefix=%s  quirks=%s  %s %s" % (u.name, u.prefix, quirks, u.command,
-                                                   " ".join(u.args)))
+    _print_specs(upstreams)
     return 0
 
 

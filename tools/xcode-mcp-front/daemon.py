@@ -81,13 +81,19 @@ Env overrides — SINGLE-upstream mode (default):
 
 Env overrides — MULTI-upstream mode (mutually exclusive with the single-upstream
 UPSTREAM_CMD/ARGS/REQUIRE_XCODE vars above — set THIS instead):
-  XCODE_MCP_FRONT_UPSTREAMS       semicolon-separated upstream specs, each
-                                   "name:require_xcode:command:arg1,arg2,...".
-                                   Example:
-                                   "xcode:1:xcrun:mcpbridge;drews:0:uvx:drews-xcode-mcp"
-                                   Tool names are prefixed "<name>__" in the
-                                   merged tool list and un-prefixed again when
-                                   routing a call back to that upstream.
+  XCODE_MCP_FRONT_MCP_INFO        path to a _mcp_info.json in the Claude Code shape
+                                   ({"mcpServers": {"<name>": {"command", "args"}}}),
+                                   plus per-server "prefix" (default "<name>__") and
+                                   "quirks" (["require_xcode"] for an upstream that
+                                   needs a live Xcode). See mcp_config.py, which
+                                   validates it and REJECTS fields the daemon does
+                                   not pass through (env, cwd, url, ...) by name.
+                                   Tool names are prefixed in the merged tool list
+                                   and un-prefixed again when routing a call back.
+  XCODE_MCP_FRONT_UPSTREAMS       REPLACED by the file above; setting it is a
+                                   startup error naming the replacement. The old
+                                   colon/comma format corrupted a command path
+                                   containing ':' and an argument containing ','.
 
 Env overrides — both modes:
   XCODE_MCP_FRONT_HOST             default "127.0.0.1" (do not bind wider — no auth layer)
@@ -113,6 +119,8 @@ import time
 
 import anyio
 import uvicorn
+
+import mcp_config
 from mcp import types
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -448,8 +456,12 @@ class Upstream:
     each one's tools with `self.name + "__"` so two upstreams that happen to
     share a tool name can't collide."""
 
-    def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool):
+    def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool,
+                 prefix: str = ""):
         self.name = name
+        # Exposed-name prefix in multi-upstream mode; ignored (empty) when this daemon
+        # fronts a single upstream, which stays an unprefixed passthrough.
+        self.prefix = prefix or f"{name}__"
         # Watchdog input: bumped on every connect attempt and every successful heartbeat.
         # Initialised here so the watchdog never reads a missing attribute on a slow start.
         self.last_progress = time.monotonic()
@@ -647,32 +659,19 @@ class Upstream:
             await anyio.sleep(RECONNECT_POLL_SECONDS)
 
 
-def _parse_multi_upstreams(spec: str) -> list[Upstream]:
-    """"name:require_xcode:command:arg1,arg2,...;name2:..." -> [Upstream, ...]"""
-    upstreams = []
-    for chunk in spec.split(";"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        name, require_xcode, command, argstr = chunk.split(":", 3)
-        args = [a for a in argstr.split(",") if a]
-        upstreams.append(Upstream(name.strip(), command.strip(), args, require_xcode.strip() == "1"))
-    if not upstreams:
-        raise ValueError(f"XCODE_MCP_FRONT_UPSTREAMS set but parsed to zero upstreams: {spec!r}")
-    return upstreams
-
-
 def _build_upstreams() -> list[Upstream]:
-    multi_spec = os.environ.get("XCODE_MCP_FRONT_UPSTREAMS")
-    if multi_spec:
-        return _parse_multi_upstreams(multi_spec)
+    """All selection and validation logic lives in mcp_config.resolve_specs (tested fast,
+    without this file's mcp/uvicorn dependencies); this is only the Upstream construction.
+    A bad config is a loud startup death for launchd to report, never a half-configured
+    daemon."""
+    try:
+        specs = mcp_config.resolve_specs(os.environ)
+    except (mcp_config.ConfigError, OSError) as e:
+        raise SystemExit(f"{SERVER_NAME}: {e}")
     return [
-        Upstream(
-            name="default",
-            command=os.environ.get("XCODE_MCP_FRONT_UPSTREAM_CMD", "xcrun"),
-            args=os.environ.get("XCODE_MCP_FRONT_UPSTREAM_ARGS", "mcpbridge").split(),
-            require_xcode_running=os.environ.get("XCODE_MCP_FRONT_REQUIRE_XCODE", "1") == "1",
-        )
+        Upstream(name=s.name, command=s.command, args=s.args,
+                 require_xcode_running=s.require_xcode, prefix=s.prefix)
+        for s in specs
     ]
 
 
@@ -694,7 +693,7 @@ def _not_connected_result(detail: str) -> types.CallToolResult:
 
 def build_server(upstreams: list[Upstream]) -> Server:
     single = len(upstreams) == 1
-    prefix_of = {u: (f"{u.name}__" if not single else "") for u in upstreams}
+    prefix_of = {u: (u.prefix if not single else "") for u in upstreams}
     upstream_by_prefix = {prefix_of[u]: u for u in upstreams}
 
     async def on_list_tools(
