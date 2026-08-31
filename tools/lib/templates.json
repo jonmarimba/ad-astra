@@ -2,13 +2,16 @@
   "_comment": "Named groups of astra tools fit for a KIND of project. Non-exclusive: installing one adds its tools and never removes another's, and two templates may overlap freely \u2014 swift-ios and legal-pdf both pull the writing tools, and installing one after the other must leave both intact.",
   "templates": {
     "swift-ios": {
-      "description": "Swift/iOS app work \u2014 the Maharam repos. Xcode both ways (Apple's bridge needs a one-time approval; XcodeBuildMCP is headless), plus simulator and device control.",
+      "description": "Swift/iOS app work \u2014 the Maharam repos. Xcode both ways (Apple's bridge needs a one-time approval; XcodeBuildMCP is headless), plus simulator and device control, plus the code-quality set: ponytail (the decision ladder), periphery (dead code) and dedup-scan (duplicate code).",
       "tools": [
         "mcp-xcode",
         "mcp-XcodeBuildMCP",
         "mcp-ios-simulator",
         "mcp-mobile-mcp",
-        "mcp-mac-control-mcp"
+        "mcp-mac-control-mcp",
+        "ponytail",
+        "periphery",
+        "dedup-scan"
       ]
     },
     "legal-pdf": {
