@@ -302,14 +302,20 @@ FOREIGN_DIALOG_GRACE_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_FOREIGN_GRA
 # The relationship above is load-bearing, so it is checked rather than trusted to a comment. A
 # grace period at or beyond the connect timeout is a silent, permanent deadlock whenever a second
 # client exists, and it presents as "mcpbridge refuses to serve tools" — which is exactly how it
-# presented, for a night.
-if FOREIGN_DIALOG_GRACE_SECONDS >= CONNECT_TIMEOUT_SECONDS:
-    raise SystemExit(
-        "xcode-mcp-front: XCODE_MCP_FRONT_FOREIGN_GRACE (%.1fs) must be less than "
-        "XCODE_MCP_FRONT_CONNECT_TIMEOUT_S (%.1fs). A foreign approval dialog that outlives the "
-        "connection attempt it is blocking can never be cleared in time, so two daemons deadlock "
-        "and every symptom looks like Xcode refusing to serve tools."
-        % (FOREIGN_DIALOG_GRACE_SECONDS, CONNECT_TIMEOUT_SECONDS))
+# presented, for a night. The check runs from _build_upstreams once the specs are known,
+# because it only binds daemons that actually run the clicker: aborting a non-Xcode repo
+# daemon at startup over a dialog constraint it can never hit turned a small explicit
+# connect timeout into a KeepAlive crash loop (adversarial round, codex and qwen legs).
+def _check_dialog_grace(specs) -> None:
+    if not any(s.require_xcode for s in specs):
+        return
+    if FOREIGN_DIALOG_GRACE_SECONDS >= CONNECT_TIMEOUT_SECONDS:
+        raise SystemExit(
+            "xcode-mcp-front: XCODE_MCP_FRONT_FOREIGN_GRACE (%.1fs) must be less than "
+            "XCODE_MCP_FRONT_CONNECT_TIMEOUT_S (%.1fs). A foreign approval dialog that outlives "
+            "the connection attempt it is blocking can never be cleared in time, so two daemons "
+            "deadlock and every symptom looks like Xcode refusing to serve tools."
+            % (FOREIGN_DIALOG_GRACE_SECONDS, CONNECT_TIMEOUT_SECONDS))
 
 # How long an upstream may make NO progress before we let launchd restart us. See
 # stall_watchdog(). Generous on purpose: a false positive restarts a healthy daemon.
@@ -838,6 +844,7 @@ def _build_upstreams() -> list[Upstream]:
         specs = mcp_config.resolve_specs(os.environ)
     except (mcp_config.ConfigError, OSError) as e:
         raise SystemExit(f"{SERVER_NAME}: {e}")
+    _check_dialog_grace(specs)
     return [
         Upstream(name=s.name, command=s.command, args=s.args,
                  require_xcode_running=s.require_xcode, prefix=s.prefix, env=s.env,
@@ -997,30 +1004,18 @@ def build_server(upstreams: list[Upstream]) -> Server:
         # streams instead; the bus fans this out to every active listener there.
         await subscription_bus.publish(ToolsListChanged())
 
-    async def on_list_tools(
-        ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
-    ) -> types.ListToolsResult:
-        _remember_downstream(ctx)
-        # A DISCONNECTED upstream is reported and skipped; it must NOT blank the others
-        # (increment 1.4 — the defect all three colloquium brands found independently:
-        # this used to serve zero tools for EVERY upstream when any one was missing, so
-        # during an Xcode reconnect Drew's tools, which need no Xcode, vanished too).
-        # A connected upstream answering with zero tools contributes zero tools; that is
-        # an answer, not an absence.
-        # This daemon serves its whole surface as ONE page (each upstream is drained in
-        # Upstream.list_tools), so it never issues a nextCursor — and a cursor it never
-        # issued cannot be honoured. Refusing beats forwarding it into upstream cursor
-        # spaces it cannot belong to, which corrupted per-upstream pagination silently.
-        if params is not None and params.cursor is not None:
-            # MCPError so both transport paths return the spec's INVALID_PARAMS with the
-            # message intact — a raised ValueError became code 0 on the 2025 path and a
-            # message-less "Internal server error" on the modern one (panel, measured by
-            # the claude leg on both protocol versions; empty-string cursor caught by
-            # codex — "" is as unissued as any other value).
-            raise MCPError(
-                types.INVALID_PARAMS,
-                f"{SERVER_NAME} serves its full tool list in one page and issued no cursor; "
-                f"got unexpected cursor {params.cursor!r}")
+    async def compose_surface() -> list[types.Tool]:
+        """Compose the whole surface and swap the dispatch table — THE ONLY code path
+        allowed to build dispatch entries. The adversarial round broke the previous
+        split: a lighter per-upstream refresh on the tools/call miss path skipped the
+        two-pass collision policy, so a client calling a remembered name into the
+        empty startup table executed the alias claimant's tool under another
+        upstream's natural name (findings/adversarial-cold-call-hijack.sh). One
+        composer, every path, identical policy.
+
+        A DISCONNECTED upstream is reported and skipped; it must NOT blank the others
+        (increment 1.4). A connected upstream answering with zero tools contributes
+        zero tools; that is an answer, not an absence."""
         # Upstreams are listed CONCURRENTLY: each drain is independent, and the old
         # sequential walk meant one slow upstream withheld every later upstream's tools
         # for its whole timeout (panel: measured 23 seconds behind a single stalled stub).
@@ -1146,27 +1141,27 @@ def build_server(upstreams: list[Upstream]) -> Server:
             log.warning("list_tools: serving %d tools WITHOUT unavailable upstream(s) %s — "
                         "each reconnects on its own; calls to them return a per-upstream error",
                         len(all_tools), ", ".join(unavailable))
-        return types.ListToolsResult(tools=all_tools)
+        return all_tools
 
-    async def _refresh_upstream_dispatch(u: Upstream) -> bool:
-        """Re-list ONE upstream and fold its tools into the dispatch table. Returns
-        False when the upstream is unavailable."""
-        result = await u.list_tools(None)
-        if result is None:
-            return False
-        prefix = prefix_of[u]
-        for t in result.tools:
-            if t.name in u.blocks:
-                continue  # the sieve applies on every path that builds dispatch entries
-            entry = u.maps.get(t.name)
-            exposed = entry.exposed if entry else f"{prefix}{t.name}"  # so does the map
-            # ADD-ONLY, NEVER OVERWRITE. This refresh runs outside the full composition's
-            # collision handling, so an unconditional write could hijack a name another
-            # upstream legitimately published — the phase-3 panel's worst finding, a
-            # wrong-tool execution. Names this leaves stale are corrected by the next
-            # full tools/list, which rebuilds the table with the real collision policy.
-            dispatch.setdefault(exposed, (u, t.name))
-        return True
+    async def on_list_tools(
+        ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+    ) -> types.ListToolsResult:
+        _remember_downstream(ctx)
+        # This daemon serves its whole surface as ONE page (each upstream is drained in
+        # Upstream.list_tools), so it never issues a nextCursor — and a cursor it never
+        # issued cannot be honoured. Refusing beats forwarding it into upstream cursor
+        # spaces it cannot belong to, which corrupted per-upstream pagination silently.
+        if params is not None and params.cursor is not None:
+            # MCPError so both transport paths return the spec's INVALID_PARAMS with the
+            # message intact — a raised ValueError became code 0 on the 2025 path and a
+            # message-less "Internal server error" on the modern one (panel, measured by
+            # the claude leg on both protocol versions; empty-string cursor caught by
+            # codex — "" is as unissued as any other value).
+            raise MCPError(
+                types.INVALID_PARAMS,
+                f"{SERVER_NAME} serves its full tool list in one page and issued no cursor; "
+                f"got unexpected cursor {params.cursor!r}")
+        return types.ListToolsResult(tools=await compose_surface())
 
     async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
         _remember_downstream(ctx)
@@ -1231,7 +1226,19 @@ def build_server(upstreams: list[Upstream]) -> Server:
                               f"blocked on this surface — {candidate.blocks[bare]}"))],
                     is_error=True,
                 )
-            if not await _refresh_upstream_dispatch(candidate):
+            # A miss composes the FULL surface — the same two-pass collision policy as
+            # tools/list, never a lighter per-upstream shortcut (the adversarial round's
+            # cold-call hijack lived in exactly that gap).
+            await compose_surface()
+            if name in dispatch:
+                target, tool_name = dispatch[name]
+                result = await target.call_tool(tool_name, params.arguments)
+                if result is None:
+                    return _not_connected_result(target)
+                return result
+            async with candidate.lock:
+                candidate_down = candidate.session is None or candidate.known_broken
+            if candidate_down:
                 return _not_connected_result(candidate)
             if name not in dispatch:
                 # `bare` from the guarded slice above: a mapped alias carries no prefix,

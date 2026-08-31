@@ -119,9 +119,11 @@ def _parse_server(name, spec, strict=True):
         raise ConfigError("server '%s': 'env' must be an object of string values" % name)
 
     version = spec.get("version")
-    if version is not None and not isinstance(version, str):
-        raise ConfigError("server '%s': 'version' must be a string (serverInfo.version "
-                          "is opaque text, not a number)" % name)
+    if version is not None and (not isinstance(version, str) or not version.strip()):
+        # An empty string is falsy downstream, silently DISABLING the check while the
+        # config still validates (adversarial round, codex leg).
+        raise ConfigError("server '%s': 'version' must be a non-empty string "
+                          "(serverInfo.version is opaque text, not a number)" % name)
 
     blocks = _parse_blocks(name, spec.get("block", []), strict)
     maps = _parse_maps(name, spec.get("map", []), strict)

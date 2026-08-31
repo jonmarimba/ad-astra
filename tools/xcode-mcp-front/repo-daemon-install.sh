@@ -36,9 +36,15 @@ case "$REPO" in
     exit 64 ;;
 esac
 # git rev-parse, not [ -d .git ]: a worktree's .git is a FILE, and the checkout set
-# here includes one (phase-5 panel, codex leg — js-lp-members-site).
-git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-  || { echo "repo-daemon-install: '$REPO' is not a git repo" >&2; exit 65; }
+# here includes one (phase-5 panel, codex leg — js-lp-members-site). The target must BE
+# the top level, not merely inside one — installing into repo/subdir would scatter
+# .astra directories through a checkout (adversarial round, codex leg).
+TOPLEVEL="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$TOPLEVEL" ] || { echo "repo-daemon-install: '$REPO' is not a git repo" >&2; exit 65; }
+# Physical paths on BOTH sides: git resolves /var/folders to /private/var/folders and
+# a logical-vs-physical compare called every symlinked path "not the top level".
+[ "$(cd "$TOPLEVEL" && pwd -P)" = "$(cd "$REPO" && pwd -P)" ] \
+  || { echo "repo-daemon-install: '$REPO' is inside a repo but is not its top level ($TOPLEVEL) — install there" >&2; exit 65; }
 
 DEST="$REPO/.astra/mcp-front"
 mkdir -p "$DEST"

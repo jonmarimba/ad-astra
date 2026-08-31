@@ -178,8 +178,11 @@ python3 "$LOADER" validate "$SB/ver.json" >"$out" 2>&1
 assert_eq "0" "$?" "a recorded compatible version validates"
 assert_contains "$out" "24952" "the recorded version is shown in the listing"
 printf '{"mcpServers": {"x": {"command": "c", "version": 24952}}}' > "$SB/badver.json"
-red "a non-string version is rejected" 65 "'version' must be a string" \
+red "a non-string version is rejected" 65 "'version' must be a non-empty string" \
   python3 "$LOADER" validate "$SB/badver.json"
+printf '{"mcpServers": {"x": {"command": "c", "version": ""}}}' > "$SB/emptyver.json"
+red "an empty version is rejected — falsy downstream, it silently disabled the check" 65 "'version' must be a non-empty string" \
+  python3 "$LOADER" validate "$SB/emptyver.json"
 
 # --- the map: source-qualified renames (Phase 3) ---
 mapcfg="$SB/mapcfg.json"

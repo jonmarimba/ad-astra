@@ -40,13 +40,17 @@ ka="$(/usr/libexec/PlistBuddy -c "Print :KeepAlive" "$REPO/.astra/mcp-front/laun
 assert_eq "true" "$ka" "KeepAlive is bare true (the SuccessfulExit variant silently stays dead on EADDRINUSE)"
 
 # --- the unservable placeholder dies BEFORE any side effect ---
-red "launching on the placeholder config refuses with the reason" 78 "no servable mcpServers" \
+red "launching on the placeholder config refuses with the reason" 78 "would not load" \
   bash "$REPO/.astra/mcp-front/run.sh"
 assert_no_file "$REPO/.astra/mcp-front/port" "no port file was written by the refused launch"
 assert_no_file "$REPO/.mcp.json" "and .mcp.json was not pointed at a dead endpoint"
 
 red "the installer refuses a target under HOME itself" 64 "refusing" \
   bash "$INSTALLER" --into "$HOME"
+
+mkdir -p "$REPO/some/subdir"
+red "the installer refuses a directory INSIDE a repo that is not its top level" 65 "not its top level" \
+  bash "$INSTALLER" --into "$REPO/some/subdir"
 
 # --- launch: deterministic port, recorded in .mcp.json, real daemon serving ---
 cat > "$REPO/.astra/mcp-front/_mcp_info.json" <<EOF
@@ -129,6 +133,26 @@ assert_contains "$SB/repo2-list.out" "beta__ping" "the second repo's daemon serv
 body1_again="$(mcp_probe "$PORT" 2>/dev/null || true)"
 printf '%s' "$body1_again" > "$SB/repo1-again.out"
 assert_contains "$SB/repo1-again.out" "alpha__ping" "the first repo's daemon is untouched — autonomy holds"
+
+# --- a shape-valid config the LOADER rejects must not touch a healthy deployment ---
+# The adversarial round's second break: the old jq gate passed {"command":..., "url":...}
+# (shape-valid, loader-fatal), so the relaunch preempted the running daemon and
+# rewrote .mcp.json before dying — a working deployment torn down by a bad template
+# push. The gate is now the daemon's own loader.
+cp "$REPO/.astra/mcp-front/_mcp_info.json" "$SB/good-config-backup.json"
+cat > "$REPO/.astra/mcp-front/_mcp_info.json" <<'EOF'
+{"mcpServers": {"alpha": {"command": "python3", "url": "http://nope"}}}
+EOF
+MCPJSON_BEFORE="$(cat "$REPO/.mcp.json")"
+red "a loader-fatal config is refused before any side effect" 78 "would not load" \
+  bash "$REPO/.astra/mcp-front/run.sh"
+LIVEPID="$(cat "$REPO/.astra/mcp-front/pid")"
+kill -0 "$LIVEPID" 2>/dev/null && pass "the healthy daemon survived the bad-config relaunch" \
+  || fail "the bad-config relaunch preempted the healthy daemon (pid $LIVEPID gone)"
+[ "$(cat "$REPO/.mcp.json")" = "$MCPJSON_BEFORE" ] \
+  && pass ".mcp.json was left exactly as it was" \
+  || fail ".mcp.json was rewritten by a launch that then died"
+cp "$SB/good-config-backup.json" "$REPO/.astra/mcp-front/_mcp_info.json"
 
 # --- relaunching THIS repo's daemon preempts the stale copy and keeps the port ---
 # The port file is REMOVED first and the old pid captured, so these assertions cannot

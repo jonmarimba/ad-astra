@@ -26,15 +26,17 @@ if [ "${1:-}" = "--print-port" ]; then
   exit 0
 fi
 
-# VALIDATE BEFORE ANY SIDE EFFECT. The installer's placeholder is deliberately
-# unservable so a daemon launched before the template writes real upstreams dies
-# loudly — but dying loudly must not first preempt processes, rewrite .mcp.json to a
-# dead endpoint, and leave a port file (phase-5 panel: the crash loop's side effects
-# were the problem, not the crash). This is a shape check only; the daemon's own
-# loader does the real validation with the lenient runtime contract.
-if ! jq -e '.mcpServers | type == "object" and length > 0' "$CONFIG" >/dev/null 2>&1; then
-  echo "repo-daemon: $CONFIG has no servable mcpServers — the template has not written" >&2
-  echo "  a real config yet (or it is malformed). Refusing to touch anything." >&2
+# VALIDATE BEFORE ANY SIDE EFFECT — with the DAEMON'S OWN LOADER, not a shape check.
+# The adversarial round broke the jq version: a shape-valid config carrying a field the
+# loader rejects (a stray 'url') cleared the gate, preempted the running healthy
+# daemon, rewrote .mcp.json, and only THEN died — tearing down a working deployment
+# (findings/adversarial-run-side-effects.sh). `resolve` is the lenient runtime
+# contract: it warns on a missing why and still serves, and rejects exactly what the
+# daemon itself would refuse to start on. Its warnings go to our stderr, so the log
+# still shows what the authoring check would have said.
+if ! XCODE_MCP_FRONT_MCP_INFO="$CONFIG" python3 "$HERE/mcp_config.py" resolve >/dev/null; then
+  echo "repo-daemon: $CONFIG would not load — the daemon would die on it, so nothing is" >&2
+  echo "  preempted and nothing is rewritten. Fix the template's config and relaunch." >&2
   exit 78
 fi
 
