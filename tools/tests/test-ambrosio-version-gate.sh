@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: slow — 112s measured 2026-08-31; exercises real version-gate flows end to end
 # test-ambrosio-version-gate.sh — the redundancy check must not swallow a version jump.
 #
 # THE FAILURE THIS GUARDS. On 2026-08-26 ambrosio's trending scan found GLM-5.3-Flash and

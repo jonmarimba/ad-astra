@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: slow — 18s measured 2026-08-31; drives the real TUI
 # test-ambrosio-tui.sh — proves a model ambrosio delivers actually shows up in the REAL qwen and
 # OpenCode TUIs, not just that expose_model() wrote plausible-looking text into their config
 # files. Jonathan's explicit ask (2026-08-14): "actual tests. Like checking qwen and open code

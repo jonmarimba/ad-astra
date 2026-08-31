@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: slow — 7s measured 2026-08-31; runs real review rounds
 # test-peer-review.sh — the review loop must never silently skip a commit.
 #
 # This tool is the mechanism that makes "act without asking" safe: work is committed, the other

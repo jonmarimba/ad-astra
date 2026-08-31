@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: slow — needs a live Xcode with a workspace and its approval dialogs; minutes, and GUI by definition
 # test-xcode-mcp-front.sh — asserts BY EFFECT against the real, running daemons
 # (both the single-upstream and combined instances) over their actual HTTP
 # endpoints — no mocks, no fakes. Requires both launchd jobs already running:
