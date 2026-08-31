@@ -27,9 +27,9 @@ assert_file "$SB/stdin.aiff" "tts reads text from stdin with '-'"
 
 # ---- RED controls ----
 printf 'this is not audio' > "$SB/garbage.bin"
-red "stt on non-audio bytes must fail" "$BEE" stt "$SB/garbage.bin"
-red "stt with a missing model must fail" env SPEECH_BEE_MODEL="$SB/no-model.bin" "$BEE" stt "$SB/fox.aiff"
-red "unknown STT engine must fail" env SPEECH_BEE_STT=elvish "$BEE" stt "$SB/fox.aiff"
-red "no arguments must fail with usage" "$BEE"
+red "stt on non-audio bytes must fail" 1 "ffmpeg convert failed" "$BEE" stt "$SB/garbage.bin"
+red "stt with a missing model must fail" 1 "no model at" env SPEECH_BEE_MODEL="$SB/no-model.bin" "$BEE" stt "$SB/fox.aiff"
+red "unknown STT engine must fail" 1 "unknown STT engine" env SPEECH_BEE_STT=elvish "$BEE" stt "$SB/fox.aiff"
+red "no arguments must fail with usage" 1 "usage:" "$BEE"
 
 finish

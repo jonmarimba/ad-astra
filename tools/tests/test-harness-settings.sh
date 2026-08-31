@@ -79,8 +79,8 @@ cmp -s "$SB/qwen.orig"   "$HOME/.qwen/settings.json"   && pass "apply+undo round
 
 # ---- RED controls ----
 export HOME="$SB/home3"; mkdir -p "$HOME"
-red "undo with no backups must fail" "$HS_BIN" --scope global undo
-red "unknown subcommand must fail" "$HS_BIN" --scope global frobnicate
+red "undo with no backups must fail" 1 "no backup to undo" "$HS_BIN" --scope global undo
+red "unknown subcommand must fail" 1 "apply|undo|status" "$HS_BIN" --scope global frobnicate
 # a config jq can't parse must FAIL the apply — not print per-config success + 'DONE.' (the
 # false-success shape: believing the safety deny-rules are live when nothing changed)
 mkdir -p "$HOME/.claude"

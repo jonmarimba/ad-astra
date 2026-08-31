@@ -51,9 +51,9 @@ assert_eq "$lines" "$(wc -l < "$SB/botline.log" | tr -d ' ')" "unchanged library
 # ---- RED controls: failed fetch must fail AND leave state untouched ----
 cp "$OLLAMA_WATCH_HOME/seen.txt" "$SB/seen.before"
 touch "$SB/fetch_down"
-red "failed fetch must exit nonzero" "$OW" check
+red "failed fetch must exit nonzero" 1 "fetch failed" "$OW" check
 cmp -s "$SB/seen.before" "$OLLAMA_WATCH_HOME/seen.txt" && pass "failed fetch left seen.txt byte-identical" || fail "failed fetch MUTATED seen.txt (would re-alert the whole library)"
 rm -f "$SB/fetch_down"
-red "unknown subcommand must fail" "$OW" frobnicate
+red "unknown subcommand must fail" 1 "usage: ollama-watch" "$OW" frobnicate
 
 finish

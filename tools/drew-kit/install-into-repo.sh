@@ -122,7 +122,11 @@ fi
 for target in "$REPO/CLAUDE.md" "$REPO/AGENTS.md"; do
   touch "$target"
   if grep -qF "$BEGIN" "$target"; then
-    bs=$(grep -nF "$BEGIN" "$target" | head -1 | cut -d: -f1); be=$(grep -nF "$END" "$target" | head -1 | cut -d: -f1)
+    # `|| true` because a missing END marker makes the grep pipeline exit 1, and under
+    # `set -euo pipefail` a failing command substitution in a plain assignment kills the
+    # script BEFORE the broken-markers message below can print. The abort was correct but
+    # silent; the guard on the next line is where the refusal is supposed to speak.
+    bs=$(grep -nF "$BEGIN" "$target" | head -1 | cut -d: -f1 || true); be=$(grep -nF "$END" "$target" | head -1 | cut -d: -f1 || true)
     { [ -n "$bs" ] && [ -n "$be" ] && [ "$be" -gt "$bs" ]; } || { echo "markers broken in $target — fix by hand" >&2; exit 1; }
     { head -n $((bs-1)) "$target"; tail -n +$((be+1)) "$target"; } > "$target.tmp" && mv "$target.tmp" "$target"
   fi

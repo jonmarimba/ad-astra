@@ -70,16 +70,16 @@ case "$first" in *FARAWAY*) pass "scan sorted chronologically (12:00 shot first)
 # ---- config guard: the shipped template / placeholder coords must REFUSE to run ----
 # (proves the tool ships generic, not with someone's real house baked in)
 UNCONF="$SB/unconf-home"; mkdir -p "$UNCONF"
-red "unconfigured template config (Example/0,0) refuses to run" env GEO_EVIDENCE_HOME="$UNCONF" "$GE" scan --since 2026-08-08 --until 2026-08-09
+red "unconfigured template config (Example/0,0) refuses to run" 3 "wrote a template config" env GEO_EVIDENCE_HOME="$UNCONF" "$GE" scan --since 2026-08-08 --until 2026-08-09
 # and it auto-wrote a template the user can edit
 assert_file "$UNCONF/config" "template config written for the user to edit"
 assert_contains "$UNCONF/config" "ExampleSite" "shipped config is a placeholder, not real coordinates"
 
 # ---- RED controls ----
-red "missing --since must fail" "$GE" scan --until 2026-08-09
-red "pull without --property must fail" "$GE" pull --since 2026-08-08 --until 2026-08-09 --out "$SB/o"
-red "unknown command must fail" "$GE" frobnicate --since 2026-08-08 --until 2026-08-09
-red "unknown flag must fail" "$GE" scan --since 2026-08-08 --until 2026-08-09 --wat x
+red "missing --since must fail" 1 "--since YYYY-MM-DD required" "$GE" scan --until 2026-08-09
+red "pull without --property must fail" 1 "--property NAME required" "$GE" pull --since 2026-08-08 --until 2026-08-09 --out "$SB/o"
+red "unknown command must fail" 1 "usage: geo-evidence" "$GE" frobnicate --since 2026-08-08 --until 2026-08-09
+red "unknown flag must fail" 1 "unknown flag '--wat'" "$GE" scan --since 2026-08-08 --until 2026-08-09 --wat x
 
 # ---- gallery: a media folder -> date-grouped HTML with images inline + videos as players ----
 GMED="$SB/media"; mkdir -p "$GMED"
@@ -123,8 +123,8 @@ assert_contains "$IMED/g.html" "not downloaded" "missing item shown as a placeho
 assert_contains "$IMED/g.html" 'data-id="UUID-VID"' "placeholder is still selectable (checkbox carries its uuid)"
 assert_contains "$IMED/g.html" "🎬 video" "placeholder shows it's a video"
 
-red "gallery with no folder must fail" "$GE" gallery --out "$SB/g.html"
-red "gallery without --out must fail" "$GE" gallery "$GMED"
+red "gallery with no folder must fail" 1 "need a media folder" "$GE" gallery --out "$SB/g.html"
+red "gallery without --out must fail" 1 "--out FILE required" "$GE" gallery "$GMED"
 
 # ---- pull --select: take UUIDs from a selection file, export exactly those ----
 cat > "$SB/selection.txt" <<'EOF'
@@ -147,6 +147,6 @@ export OSX_EXPORT_LOG="$SB/exportargs.log"; : > "$OSX_EXPORT_LOG"
 assert_contains "$OSX_EXPORT_LOG" "UUID-1" "pull --select passed the selected UUID-1 to export"
 assert_contains "$OSX_EXPORT_LOG" "UUID-2" "pull --select passed UUID-2"
 assert_not_contains "$OSX_EXPORT_LOG" "# a comment" "comment line ignored in selection file"
-red "pull --select with a missing file must fail" "$GE" pull --select "$SB/nope.txt" --out "$SB/o2"
+red "pull --select with a missing file must fail" 1 "--select: no such file" "$GE" pull --select "$SB/nope.txt" --out "$SB/o2"
 
 finish

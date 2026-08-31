@@ -28,12 +28,12 @@ assert_rc 0 "named template 'attorney-docs' resolves and renders" "$MD2PDF" "$SB
 assert_file "$SB/doc2.pdf" "templated PDF exists"
 
 # RED controls — the one-letter-off class: a near-miss template name must FAIL, not fall back
-red "one-letter-off template name (attorney-doc) must fail" "$MD2PDF" "$SB/doc.md" "$SB/doc3.pdf" --template attorney-doc
+red "one-letter-off template name (attorney-doc) must fail" 1 "template not found: attorney-doc" "$MD2PDF" "$SB/doc.md" "$SB/doc3.pdf" --template attorney-doc
 assert_no_file "$SB/doc3.pdf" "no PDF produced from the failed template run"
-red "--template with no value must fail, not fall back to default.css" "$MD2PDF" "$SB/doc.md" "$SB/doc5.pdf" --template
+red "--template with no value must fail, not fall back to default.css" 64 "--template needs a value" "$MD2PDF" "$SB/doc.md" "$SB/doc5.pdf" --template
 assert_no_file "$SB/doc5.pdf" "no PDF from the missing-value run"
-red "misspelled flag (--tempalte) must fail, not be silently ignored" "$MD2PDF" "$SB/doc.md" "$SB/doc6.pdf" --tempalte attorney-docs
-red "missing input file must fail" "$MD2PDF" "$SB/no-such.md" "$SB/doc4.pdf"
-red "no arguments must fail with usage" "$MD2PDF"
+red "misspelled flag (--tempalte) must fail, not be silently ignored" 64 "unknown argument '--tempalte'" "$MD2PDF" "$SB/doc.md" "$SB/doc6.pdf" --tempalte attorney-docs
+red "missing input file must fail" 1 "input not found" "$MD2PDF" "$SB/no-such.md" "$SB/doc4.pdf"
+red "no arguments must fail with usage" 2 "usage: md2pdf" "$MD2PDF"
 
 finish

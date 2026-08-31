@@ -46,7 +46,7 @@ uc_rm_symlink "$realf" >/dev/null
 assert_file "$realf" "uc_rm_symlink refused to delete a real (non-symlink) file"
 
 # ---- RED controls ----
-red "unknown flag must fail" "$GEO" --nuke-everything
-red "missing shared lib would break sourcing (sanity: bad path fails)" bash -c '. /no/such/uninstall-common.sh'
+red "unknown flag must fail" 64 "unknown flag" "$GEO" --nuke-everything
+red "missing shared lib would break sourcing (sanity: bad path fails)" 1 "No such file or directory" bash -c '. /no/such/uninstall-common.sh'
 
 finish
