@@ -28,7 +28,8 @@ cat > "$SB/_mcp_info.json" <<EOF
 {
   "mcpServers": {
     "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong", "--tool", "build=alpha-built"]},
-    "beta":  {"command": "python3", "args": ["$STUB", "--name", "beta", "--tool", "ping=beta-pong"]}
+    "beta":  {"command": "python3", "args": ["$STUB", "--name", "beta", "--tool", "ping=beta-pong"]},
+    "pager": {"command": "python3", "args": ["$STUB", "--name", "pager", "--page-size", "1", "--tool", "first=page-one", "--tool", "second=page-two"]}
   }
 }
 EOF
@@ -80,6 +81,21 @@ mcp_call tools/call '{"name":"alpha__ping","arguments":{}}' > "$SB/alpha.out"
 assert_contains "$SB/alpha.out" "alpha-pong" "alpha__ping routes to the alpha stub"
 mcp_call tools/call '{"name":"beta__ping","arguments":{}}' > "$SB/beta.out"
 assert_contains "$SB/beta.out" "beta-pong" "beta__ping routes to the beta stub, same bare name"
+
+# --- increment 1.5: a paginating upstream is drained into a full snapshot ---
+# Cursors are per-server opaque tokens, so the one downstream cursor used to be handed
+# to EVERY upstream verbatim; the pager stub serves one tool per page, and only draining
+# its pages produces both tools.
+assert_contains "$SB/list.out" "pager__first" "page one of a paginating upstream is served"
+assert_contains "$SB/list.out" "pager__second" "page two is served as well — the upstream was drained, not truncated"
+mcp_call tools/call '{"name":"pager__second","arguments":{}}' > "$SB/pager.out"
+assert_contains "$SB/pager.out" "page-two" "a tool from a drained later page is callable"
+
+# A downstream cursor this daemon never issued is refused, not forwarded to upstreams
+# whose cursor spaces it cannot belong to.
+mcp_call tools/list '{"cursor":"bogus-cursor"}' > "$SB/cursor.out"
+assert_contains "$SB/cursor.out" "error" \
+  "a cursor the daemon never issued is an error, not a forwarded guess"
 
 # An unrecognised exposed name is a real error, not a silent success or a misroute.
 mcp_call tools/call '{"name":"NotARealTool","arguments":{}}' > "$SB/unknown.out"

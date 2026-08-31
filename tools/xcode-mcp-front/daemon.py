@@ -481,8 +481,21 @@ class Upstream:
             if self.session is None:
                 return None
             try:
+                # DRAIN EVERY PAGE (increment 1.5). Cursors are opaque, per-server tokens,
+                # so the downstream client's cursor cannot be forwarded here — this daemon
+                # aggregates several cursor spaces into one surface and therefore serves a
+                # complete snapshot instead. Ignoring nextCursor used to silently truncate
+                # any upstream that paginates.
+                tools: list[types.Tool] = []
+                cursor: str | None = None
                 with anyio.fail_after(CALL_TIMEOUT_SECONDS):
-                    return await self.session.list_tools(params=params)
+                    while True:
+                        page = await self.session.list_tools(
+                            params=types.PaginatedRequestParams(cursor=cursor) if cursor else None)
+                        tools.extend(page.tools)
+                        cursor = page.next_cursor
+                        if not cursor:
+                            return types.ListToolsResult(tools=tools)
             except Exception as e:
                 # Found live, 2026-08-14: this call had NO timeout at all before
                 # this fix — a genuinely hung upstream call (confirmed: a real
@@ -719,11 +732,19 @@ def build_server(upstreams: list[Upstream]) -> Server:
         # during an Xcode reconnect Drew's tools, which need no Xcode, vanished too).
         # A connected upstream answering with zero tools contributes zero tools; that is
         # an answer, not an absence.
+        # This daemon serves its whole surface as ONE page (each upstream is drained in
+        # Upstream.list_tools), so it never issues a nextCursor — and a cursor it never
+        # issued cannot be honoured. Refusing beats forwarding it into upstream cursor
+        # spaces it cannot belong to, which corrupted per-upstream pagination silently.
+        if params is not None and params.cursor:
+            raise ValueError(
+                f"{SERVER_NAME} serves its full tool list in one page and issued no cursor; "
+                f"got unexpected cursor {params.cursor!r}")
         all_tools: list[types.Tool] = []
         unavailable: list[str] = []
         new_dispatch: dict[str, tuple[Upstream, str]] = {}
         for u in upstreams:
-            result = await u.list_tools(params)
+            result = await u.list_tools(None)
             if result is None:
                 unavailable.append(u.name)
                 continue
