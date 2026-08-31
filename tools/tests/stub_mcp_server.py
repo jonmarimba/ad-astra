@@ -42,6 +42,8 @@ def main():
                     help="override a tool's description (for description-rewrite tests)")
     ap.add_argument("--banner", default=None)
     ap.add_argument("--notify-before-reply", action="store_true")
+    ap.add_argument("--blank-before-reply", action="store_true",
+                    help="emit one empty line before every response (must NOT read as EOF)")
     ap.add_argument("--stall-tools", action="store_true")
     ap.add_argument("--emit-list-changed-on-call", default=None, metavar="TOOL",
                     help="emit notifications/tools/list_changed before answering a call "
@@ -64,6 +66,8 @@ def main():
                  for n in tools]
 
     def send(obj):
+        if a.blank_before_reply and "id" in obj:
+            sys.stdout.write("\n")   # a spec-irrelevant blank line before every response
         if a.notify_before_reply and "id" in obj:
             sys.stdout.write(json.dumps({"jsonrpc": "2.0",
                                          "method": "notifications/message",

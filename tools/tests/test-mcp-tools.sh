@@ -21,7 +21,8 @@ cat > "$SB/cfg.json" <<EOF
   "mcpServers": {
     "plain":  {"command": "python3", "args": ["$STUB", "--name", "plain", "--tool", "ping=pong", "--tool", "build=ok"]},
     "chatty": {"command": "python3", "args": ["$STUB", "--name", "chatty", "--banner", "starting chatty v1...", "--notify-before-reply", "--tool", "ping=pong"]},
-    "gated":  {"command": "python3", "args": ["$STUB", "--name", "gated", "--stall-tools", "--tool", "hidden=x"]}
+    "gated":  {"command": "python3", "args": ["$STUB", "--name", "gated", "--stall-tools", "--tool", "hidden=x"]},
+    "blanky": {"command": "python3", "args": ["$STUB", "--name", "blanky", "--blank-before-reply", "--tool", "ping=pong"]}
   }
 }
 EOF
@@ -37,6 +38,16 @@ python3 "$MT" list --config "$SB/cfg.json" --server chatty >"$SB/chatty.out" 2>&
 assert_eq "0" "$?" "a server with a stdout banner and notifications still lists (rc 0)"
 assert_contains "$SB/chatty.out" "ping" "the real tools/list answer is found past the chatter"
 assert_not_contains "$SB/chatty.out" "Traceback" "no crash on non-JSON or notification lines"
+
+# --- a blank line before a response is CHATTER, not end-of-stream ---
+# The id-matched framing rewrite left this hole: next_line returned "" for both a
+# zero-length line and EOF, so one stray newline read as "the server closed its output"
+# and collapsed the probe into "no answer to initialize" (adversarial round, executed).
+python3 "$MT" list --config "$SB/cfg.json" --server blanky >"$SB/blanky.out" 2>&1
+assert_eq "0" "$?" "a server printing a blank line before each response still lists (rc 0)"
+assert_contains "$SB/blanky.out" "ping" "the tools are found past the blank lines"
+assert_not_contains "$SB/blanky.out" "no answer to initialize" \
+  "a blank line is never misread as the server closing its output"
 
 # --- a server that never answers tools/list is a TIMEOUT, never an empty list ---
 red "a gated server reads as a timeout naming the approval dialog, not as zero tools" 2 "approval dialog" \

@@ -36,11 +36,30 @@ if [ "${#fast[@]}" -eq 0 ]; then
   exit 1
 fi
 
-printf '%s\n' "${fast[@]}" | TMPOUT="$TMPOUT" xargs -P "$JOBS" -I{} bash -c '
-  f="{}"; b="$(basename "$f")"
-  bash "$f" >"$TMPOUT/$b.out" 2>&1
-  echo $? >"$TMPOUT/$b.rc"
-' || true   # per-file verdicts come from the rc files, not xargs's own exit
+# PER-FILE WALL-CLOCK KILL. The budget check below runs only AFTER every file exits,
+# so a single hung test file (waiting on a dialog, a dead socket, a stray sleep) makes
+# xargs wait forever and the tier NEVER reports — the exact failure the "budget is an
+# assertion" claim could not catch (adversarial round #3, executed with a sleep-300
+# stub). Each file gets `timeout`; a killed file exits nonzero (124 from timeout) and
+# becomes a loud FAILURE instead of an infinite stall. PERFILE is the tier budget by
+# default, so a file that alone would blow the budget is the one that gets killed.
+PERFILE="${ASTRA_FAST_PERFILE_S:-$BUDGET}"
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+if [ -z "$TIMEOUT_BIN" ]; then
+  echo "run-all: no timeout(1) on PATH (brew install coreutils) — a hung fast test would" >&2
+  echo "  stall the tier forever with no verdict, so refusing to run without the watchdog." >&2
+  exit 1
+fi
+# -n1 (filename as $1), NOT -I{}: the latter has a small command-assembly size limit
+# that the timeout-wrapped body overran ("command line cannot be assembled, too long").
+export TMPOUT TIMEOUT_BIN PERFILE
+printf '%s\n' "${fast[@]}" | xargs -P "$JOBS" -n1 bash -c '
+  f="$1"; b="$(basename "$f")"
+  "$TIMEOUT_BIN" -k 2 "$PERFILE" bash "$f" >"$TMPOUT/$b.out" 2>&1
+  rc=$?
+  [ "$rc" = 124 ] && echo "  FAIL: $b was KILLED after ${PERFILE}s — it hung (a fast test must not block)" >>"$TMPOUT/$b.out"
+  echo "$rc" >"$TMPOUT/$b.rc"
+' _ || true   # per-file verdicts come from the rc files, not xargs own exit
 
 overall=0; ran=0
 for t in "${fast[@]}"; do

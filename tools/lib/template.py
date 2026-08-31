@@ -78,6 +78,23 @@ def resolve_tools(templates, name, _stack=None):
     return tools
 
 
+def claimed_tools(templates, name, _stack=None):
+    """Every tool `name` claims, resolved as far as the catalogue allows and NEVER
+    raising. A wrapper whose member no longer resolves still claims what it CAN resolve
+    plus its own tools — the previous flat-list fallback returned own-tools-only, so a
+    tool a wrapper claimed only THROUGH a now-missing member read as unclaimed and got
+    deleted out from under the still-installed wrapper (adversarial round #7). This is
+    the claim question; resolve_tools stays strict for the install question."""
+    _stack = _stack or []
+    meta = templates.get(name)
+    if meta is None or name in _stack:
+        return set()
+    claimed = set(meta.get("tools", []))
+    for member in meta.get("templates", []):
+        claimed |= claimed_tools(templates, member, _stack + [name])
+    return claimed
+
+
 def tool_dir(name):
     d = TOOLS / name
     return d if d.is_dir() else None
@@ -147,7 +164,7 @@ def installed_templates(repo):
     return _read_state(repo).get("templates", [])
 
 
-def record_template(repo, name, add=True):
+def record_template(repo, name, add=True, resolved=None):
     data = _read_state(repo)
     cur = list(data.get("templates", []))
     if add and name not in cur:
@@ -155,6 +172,19 @@ def record_template(repo, name, add=True):
     if not add and name in cur:
         cur.remove(name)
     data["templates"] = sorted(cur)
+    # RECORD THE RESOLVED TOOL LIST AT INSTALL TIME. The manifest records template
+    # NAMES, but a claim question asked later re-resolves the CURRENT catalogue — and if
+    # a member template was renamed or removed since install, that resolution is wrong,
+    # so a tool a wrapper still holds through a now-missing member read as unclaimed and
+    # got deleted (adversarial round #7; QUESTIONS.md predicted this exact "reasons from
+    # the wrong graph" failure). Recording what was actually installed makes uninstall
+    # reason from truth, not from a catalogue that may have moved underneath it.
+    tt = dict(data.get("template_tools", {}))
+    if add:
+        tt[name] = sorted(resolved or [])
+    else:
+        tt.pop(name, None)
+    data["template_tools"] = tt
     p = state_path(repo)
     p.parent.mkdir(parents=True, exist_ok=True)
     # Write beside and rename: a half-written manifest is exactly the corrupt
@@ -177,18 +207,19 @@ def tools_still_claimed(repo, excluding):
     by swift-ios, which was installed and working. Caught by the overlap test on
     2026-08-18, which is exactly what that test exists for."""
     t = load()["templates"]
+    recorded = _read_state(repo).get("template_tools", {})
     claimed = set()
     for name in installed_templates(repo):
         if name == excluding:
             continue
-        try:
-            # Claims are TRANSITIVE: a composed template claims its members' tools, or
-            # uninstalling a sibling would remove tools the wrapper still needs.
-            claimed.update(resolve_tools(t, name))
-        except ValueError:
-            # A recorded template the catalogue no longer resolves still claims its
-            # FLAT list — under-claiming here is what deletes another template's tools.
-            claimed.update(t.get(name, {}).get("tools", []))
+        # Prefer the tool list RECORDED AT INSTALL — it is what this template actually
+        # placed, immune to a catalogue that changed since (adversarial round #7). Fall
+        # back to a live resolve for templates installed before that field existed;
+        # claimed_tools never raises and resolves as far as the catalogue allows.
+        if name in recorded:
+            claimed |= set(recorded[name])
+        else:
+            claimed |= claimed_tools(t, name)
     return claimed
 
 
@@ -282,8 +313,11 @@ def _apply(verb, args):
     keep = tools_still_claimed(repo, name) if verb == "uninstall" else set()
     for t in member_tools:
         if t in keep:
+            # claimed_tools, not resolve_tools: this cosmetic "who else needs it" line
+            # must not raise on an unresolvable member and abort the whole uninstall
+            # mid-run, after earlier members were already removed (adversarial round #4).
             others = [n for n in installed_templates(repo) if n != name
-                      and t in resolve_tools(load()["templates"], n)]
+                      and t in claimed_tools(load()["templates"], n)]
             print(f"  KEPT    {t} — still required by: {', '.join(others)}")
             kept_n += 1
             continue
@@ -301,7 +335,7 @@ def _apply(verb, args):
     # again, and the record changes when the run is clean. (Found by the round-one
     # colloquium, codex leg — record_template ran unconditionally here.)
     if fail_n == 0:
-        record_template(repo, name, add=(verb == "install"))
+        record_template(repo, name, add=(verb == "install"), resolved=member_tools)
     else:
         print(f"NOT recording this {verb}: {fail_n} member(s) failed, and the record "
               f"must describe what actually happened. Fix the failure and re-run "

@@ -55,6 +55,15 @@ printf '{"name": "fake-tool", "description": "d", "provides": "cli", "dependenci
 red "an unknown dependency ecosystem is rejected by name" 65 "unknown dependency ecosystem 'cargo'" \
   python3 "$READER" validate "$D/tool.json"
 
+# A whitespace-only coordinate cleared the bare empty gate and validated as a dep that
+# never installs; a duplicate dep passed twice (adversarial round).
+printf '{"name": "fake-tool", "description": "d", "provides": "cli", "dependencies": ["brew:   "]}' > "$D/tool.json"
+red "a whitespace-only coordinate is rejected, not emitted as a dep that never installs" 65 "names no coordinate" \
+  python3 "$READER" validate "$D/tool.json"
+printf '{"name": "fake-tool", "description": "d", "provides": "cli", "dependencies": ["npm:jq", "npm:jq"]}' > "$D/tool.json"
+red "a duplicate dependency is rejected" 65 "duplicate dependency 'npm:jq'" \
+  python3 "$READER" validate "$D/tool.json"
+
 printf '{"name": "fake-tool", "description": "d", "provides": "cli", "dependencies": [], "backed_by": "tools/no-such-dir"}' > "$D/tool.json"
 red "a backed_by that does not exist is rejected" 65 "backed_by 'tools/no-such-dir' does not exist" \
   python3 "$READER" validate "$D/tool.json"

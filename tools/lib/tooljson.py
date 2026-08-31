@@ -103,13 +103,23 @@ def parse(path, expect_dirname=None):
         raise DescriptorError("%s: 'dependencies' must be a list of strings" % path)
     grouped = {eco: [] for eco in KNOWN_ECOSYSTEMS}
     legacy = []
+    seen = set()
     for dep in deps:
+        if dep in seen:
+            # A duplicate is a mistake, not a doubled install — reject it so a typo
+            # that repeats a dep is caught rather than emitted twice (adversarial round).
+            raise DescriptorError("%s: duplicate dependency '%s'" % (path, dep))
+        seen.add(dep)
         eco, sep, coord = dep.partition(":")
         if sep:
             if eco not in KNOWN_ECOSYSTEMS:
                 raise DescriptorError(
                     "%s: unknown dependency ecosystem '%s' in '%s' (known: %s)"
                     % (path, eco, dep, ", ".join(KNOWN_ECOSYSTEMS)))
+            # strip() then emptiness: a whitespace-only coordinate ('brew:   ') cleared
+            # the bare `if not coord` gate and validated as a dep that never installs
+            # (adversarial round). Store the stripped coordinate so it is used verbatim.
+            coord = coord.strip()
             if not coord:
                 raise DescriptorError("%s: dependency '%s' names no coordinate" % (path, dep))
             grouped[eco].append(coord)

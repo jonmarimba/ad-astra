@@ -22,11 +22,20 @@ UNINSTALL_DEPS=0
 _uc_hr(){ printf '  %s\n' "============================================================"; }
 uc_warn(){ _uc_hr; for line in "$@"; do printf '  ⚠️  %s\n' "$line"; done; _uc_hr; }
 
+UC_REPO=""
 uc_parse(){ # read flags an uninstaller shares; call once with "$@"
-  for a in "$@"; do case "$a" in
-    --deps) UNINSTALL_DEPS=1 ;;
-    --help|-h) echo "usage: uninstall.sh [--deps]   (--deps also removes shared brew/uv deps, loudly)"; exit 0 ;;
-    --*) echo "unknown flag '$a'" >&2; exit 64 ;;
+  # --into <repo> is the TEMPLATE contract: template.py runs every member as
+  # `uninstall.sh --into <repo>`. A machine-wide tool (a brew formula, a uv tool) has
+  # no per-repo state to remove, so it ACCEPTS and records --into rather than rejecting
+  # it — a member that fails the contract makes template.py mark the member FAILED,
+  # which then refuses to update the manifest, leaving the template half-removed and
+  # the record lying (adversarial round: periphery did exactly this to swift-ios).
+  while [ $# -gt 0 ]; do case "$1" in
+    --into) UC_REPO="${2:-}"; shift 2 ;;
+    --deps) UNINSTALL_DEPS=1; shift ;;
+    --help|-h) echo "usage: uninstall.sh [--deps] [--into <repo>]   (--deps also removes shared brew/uv deps, loudly)"; exit 0 ;;
+    --*) echo "unknown flag '$1'" >&2; exit 64 ;;
+    *) shift ;;
   esac; done
 }
 

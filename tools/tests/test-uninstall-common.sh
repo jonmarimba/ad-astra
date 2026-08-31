@@ -45,8 +45,15 @@ realf="$SB/realfile"; printf 'precious\n' > "$realf"
 uc_rm_symlink "$realf" >/dev/null
 assert_file "$realf" "uc_rm_symlink refused to delete a real (non-symlink) file"
 
+# ---- the template contract: --into <repo> is ACCEPTED, not rejected ----
+# template.py runs every member's uninstall as `uninstall.sh --into <repo>`, so a
+# machine-wide tool's uninstaller must accept it and exit 0 — rejecting it left
+# swift-ios half-removed with the manifest lying (adversarial round #5).
+assert_rc 0 "an uninstaller accepts --into and exits 0 (no per-repo state to remove)" \
+  "$GEO" --into "$SB"
+
 # ---- RED controls ----
-red "unknown flag must fail" 64 "unknown flag" "$GEO" --nuke-everything
+red "an unknown flag still fails (--into did not open the gate to everything)" 64 "unknown flag" "$GEO" --nuke-everything
 red "missing shared lib would break sourcing (sanity: bad path fails)" 1 "No such file or directory" bash -c '. /no/such/uninstall-common.sh'
 
 finish

@@ -16,6 +16,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
 . "$HERE/lib.sh"
 
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+need "$(basename "${TIMEOUT_BIN:-timeout}")" "brew install coreutils"
+
 FAKE="$SB/tests"; mkdir -p "$FAKE" "$SB/lib"
 cp "$HERE/run-all.sh" "$HERE/run-slow.sh" "$FAKE/"
 
@@ -64,15 +67,35 @@ MENTION_SENTINEL="$SB/mention-ran" bash "$FAKE/run-all.sh" >/dev/null 2>&1
 assert_file "$SB/mention-ran" "a file that only quotes the marker in its body still runs in the fast tier"
 rm "$FAKE/test-mentions-marker-stub.sh"
 
-# --- fast tier budget: going over the budget is a FAILURE, not a note ---
+# --- fast tier budget: total time over budget is a FAILURE, not a note ---
+# PERFILE is raised above the file's own runtime so this tests the TOTAL-TIME budget
+# specifically, not the per-file hang kill (which is a different failure, tested below).
+# The sluggish file finishes; the tier's elapsed time exceeds the 1s budget.
 cat > "$FAKE/test-sluggish-stub.sh" <<'EOF'
 #!/usr/bin/env bash
 sleep 2
 echo "== test-sluggish-stub.sh: 1 ok, 0 failed"
 EOF
-red "fast tier over budget must fail loudly" 1 "FAST TIER OVER BUDGET" \
-  env ASTRA_FAST_BUDGET_S=1 bash "$FAKE/run-all.sh"
+red "fast tier over TOTAL budget must fail loudly" 1 "FAST TIER OVER BUDGET" \
+  env ASTRA_FAST_BUDGET_S=1 ASTRA_FAST_PERFILE_S=10 bash "$FAKE/run-all.sh"
 rm "$FAKE/test-sluggish-stub.sh"
+
+# --- a HUNG test file is killed and fails; the tier does not stall forever ---
+# The budget check ran only after every file exited, so one wedged file made the tier
+# wait indefinitely and never report — the "budget is an assertion" claim could not
+# catch the failure that actually stops the suite (adversarial round #3, executed with
+# sleep 300). Per-file timeout now kills it.
+cat > "$FAKE/test-hung-stub.sh" <<'EOF'
+#!/usr/bin/env bash
+sleep 300
+EOF
+# The whole run must itself finish well under the hang: an external timeout proves the
+# tier did NOT block on the 300s sleep.
+"$TIMEOUT_BIN" 40 env ASTRA_FAST_PERFILE_S=3 ASTRA_FAST_BUDGET_S=60 bash "$FAKE/run-all.sh" >"$SB/hung.out" 2>&1
+rc=$?
+assert_eq "1" "$rc" "the tier finished (not killed by the external 40s watchdog) and reported failure"
+assert_contains "$SB/hung.out" "was KILLED after" "the hung file is named as killed, not left to stall"
+rm "$FAKE/test-hung-stub.sh"
 
 # --- fast tier refuses to report green having run nothing ---
 mkdir -p "$SB/empty-tests"; cp "$HERE/run-all.sh" "$SB/empty-tests/"

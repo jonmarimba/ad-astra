@@ -90,7 +90,13 @@ astra_record() {
   local tool="$1"; shift
   local manifest="$TARGET/.astra/manifest.json"
   local dest="$TARGET/.astra/$tool"
-  ASTRA_TOOL="$tool" ASTRA_SRC="$ASTRA_ROOT" ASTRA_DEST="$dest" \
+  # The source's git-remote identity, recorded so a cloned repo on another machine can
+  # verify a sibling-source guess is the SAME project before it feeds content in
+  # (adversarial round: an impostor sibling sharing only the basename could inject
+  # arbitrary content). Empty when the source has no remote — then no sibling fallback.
+  local src_remote
+  src_remote="$(git -C "$ASTRA_ROOT" remote get-url origin 2>/dev/null || true)"
+  ASTRA_TOOL="$tool" ASTRA_SRC="$ASTRA_ROOT" ASTRA_SRC_REMOTE="$src_remote" ASTRA_DEST="$dest" \
   ASTRA_MANIFEST="$manifest" ASTRA_FILES="$*" python3 - <<'PY'
 import hashlib, json, os, pathlib
 
@@ -109,10 +115,13 @@ except Exception:
 data.setdefault("tools", {})
 # The SOURCE is recorded per-install rather than once for the file, because a
 # repo may legitimately be fed by more than one astra checkout over its life.
-data["tools"][tool] = {
+entry = {
     "source": os.environ["ASTRA_SRC"],
     "files": {f: sha(dest / f) for f in files},
 }
+if os.environ.get("ASTRA_SRC_REMOTE"):
+    entry["source_remote"] = os.environ["ASTRA_SRC_REMOTE"]
+data["tools"][tool] = entry
 manifest.parent.mkdir(parents=True, exist_ok=True)
 tmp = manifest.with_suffix(".json.tmp")
 tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")

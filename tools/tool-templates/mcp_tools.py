@@ -97,8 +97,16 @@ def probe(name, spec, timeout):
     # combination timed out on the very first chatty-server test this file's tests ran.
     pending = [b""]
 
+    # EOF is its OWN sentinel, never the empty string. A blank line ("") is spec-
+    # irrelevant chatter any server may emit before a response; conflating it with EOF
+    # made one stray newline read as "the server closed its output" and collapsed the
+    # whole probe (adversarial round: a healthy server printing one blank line reported
+    # "no answer to initialize"). None = deadline, EOF = closed, "" = a real blank line.
+    EOF = object()
+
     def next_line(deadline):
-        """One decoded line, or None on deadline, or "" on closed stdout."""
+        """One decoded line, or None on deadline, or EOF on closed stdout. A blank line
+        returns "" and is NOT EOF."""
         while True:
             nl = pending[0].find(b"\n")
             if nl >= 0:
@@ -116,26 +124,23 @@ def probe(name, spec, timeout):
                 if pending[0]:       # closed mid-line: hand over what there is, then EOF
                     line, pending[0] = pending[0], b""
                     return line.decode("utf-8", "replace")
-                return ""
+                return EOF
             pending[0] += chunk
 
     def read_response(want_id, limit):
         """Read until THE RESPONSE WITH THIS ID arrives, a deadline passes, or stdout
-        closes. The old version took whatever line came next, so a startup banner or a
-        spec-legal notification arriving between request and response was misread as the
-        answer or crashed the probe — the exact class of error the module docstring
-        forbids, found independently by all three round-one colloquium brands.
-        Returns the parsed response object, None on timeout, "" on closed stdout."""
+        closes. Skips banners, notifications, and blank lines. Returns the parsed
+        response object, None on timeout, EOF on closed stdout."""
         deadline = time.monotonic() + limit
         while True:
             line = next_line(deadline)
             if line is None:
                 return None
-            if line == "":
-                return ""
+            if line is EOF:
+                return EOF
             line = line.strip()
             if not line:
-                continue
+                continue             # a blank line — chatter, not the end of the stream
             try:
                 obj = json.loads(line)
             except ValueError:
@@ -149,8 +154,11 @@ def probe(name, spec, timeout):
               "params": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
                          "clientInfo": {"name": "mcp_tools", "version": "1"}}})
         resp = read_response(1, timeout)
-        if not resp:
+        if resp is None:
             return {"error": "no answer to initialize within %.0fs" % timeout}
+        if resp is EOF:
+            return {"error": "the server closed its output before answering initialize%s" % (
+                " — its stderr said: %s" % " ".join(stderr_lines)[-300:] if stderr_lines else "")}
         init = resp.get("result") or {}
 
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -162,7 +170,7 @@ def probe(name, spec, timeout):
                              "NOT an empty tool list. A server that gates tool access behind an "
                              "approval dialog blocks here until the dialog is answered — check "
                              "for one before believing anything about this server." % timeout}
-        if resp == "":
+        if resp is EOF:
             return {"serverInfo": init.get("serverInfo"),
                     "error": "the server closed its output after initialize rather than answering "
                              "tools/list%s" % (
