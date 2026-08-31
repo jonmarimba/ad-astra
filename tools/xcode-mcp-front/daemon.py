@@ -116,6 +116,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import subprocess
 import time
 
@@ -464,7 +465,8 @@ class Upstream:
     share a tool name can't collide."""
 
     def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool,
-                 prefix: str = "", env: dict | None = None, blocks: dict | None = None):
+                 prefix: str = "", env: dict | None = None, blocks: dict | None = None,
+                 maps: dict | None = None):
         self.name = name
         # Exposed-name prefix, VERBATIM from the spec. The daemon used to force "" for a
         # sole upstream regardless of what the config declared, so the validator printed
@@ -480,6 +482,20 @@ class Upstream:
         # names from its own context and previous sessions.
         self.blocks: dict[str, str] = dict(blocks) if blocks else {}
         self._stale_blocks_reported: set[str] = set()
+        # The map (Phase 3): bare tool name -> mcp_config.MapEntry. The exposed name is
+        # FINAL — it replaces prefix+bare outright; the original is refused like any
+        # other name the upstream does not offer on this surface.
+        self.maps: dict = dict(maps) if maps else {}
+        self._stale_maps_reported: set[str] = set()
+        # One word-boundary pattern per upstream drives the mechanical description pass:
+        # every sibling description mentioning a renamed tool goes stale at the same
+        # moment, so the rename table itself substitutes them all (SPEC). A regex is
+        # used deliberately — whole-word replacement is the one job plain string
+        # scanning cannot do without reimplementing \b: the roadmap's own red case is a
+        # tool named 'read' mangling the word 'already'.
+        self._rename_pattern = (
+            re.compile(r"\b(" + "|".join(re.escape(old) for old in self.maps) + r")\b")
+            if self.maps else None)
         # Watchdog input: bumped on every connect attempt and every successful heartbeat.
         # Initialised here so the watchdog never reads a missing attribute on a slow start.
         self.last_progress = time.monotonic()
@@ -489,6 +505,11 @@ class Upstream:
         self.lock = anyio.Lock()
         self.session: ClientSession | None = None
         self.known_broken = False
+
+    def rewrite_description(self, text: str) -> str:
+        if not text or self._rename_pattern is None:
+            return text
+        return self._rename_pattern.sub(lambda m: self.maps[m.group(1)].exposed, text)
 
     async def _mark_broken(self, why: str) -> None:
         """Set known_broken AND drop the public session reference immediately. The codex
@@ -786,7 +807,7 @@ def _build_upstreams() -> list[Upstream]:
     return [
         Upstream(name=s.name, command=s.command, args=s.args,
                  require_xcode_running=s.require_xcode, prefix=s.prefix, env=s.env,
-                 blocks=s.blocks)
+                 blocks=s.blocks, maps=s.maps)
         for s in specs
     ]
 
@@ -893,24 +914,60 @@ def build_server(upstreams: list[Upstream]) -> Server:
                 offered.add(bare)
                 if bare in u.blocks:
                     continue  # sieved; the call path refuses it too, with the why
-                if prefix:
-                    t = t.model_copy(update={"name": f"{prefix}{bare}"})
-                if t.name in new_dispatch:
-                    # Reachable since 1.5: an upstream mutating its list between drained
-                    # pages can hand back the same tool twice. First one wins; say so.
-                    log.warning("list_tools: duplicate exposed name %r from upstream %s — "
-                                "keeping the first occurrence", t.name, u.name)
-                    continue
-                new_dispatch[t.name] = (u, bare)
+                entry = u.maps.get(bare)
+                # The map (Phase 3): a mapped name is the FINAL exposed name, replacing
+                # prefix+bare. The description travels with the name and usually should
+                # not: an explicit override wins outright; otherwise the rename table
+                # mechanically rewrites whole-word references to renamed siblings, so
+                # every description goes un-stale in the same pass that renamed them.
+                exposed = entry.exposed if entry else f"{prefix}{bare}"
+                if entry and entry.description is not None:
+                    desc = entry.description
+                    leftover = u.rewrite_description(desc)
+                    if leftover != desc:
+                        log.warning("[%s] override description for '%s' still references "
+                                    "renamed tools by their OLD names — it will mislead "
+                                    "the model; fix it in the template", u.name, exposed)
+                else:
+                    desc = u.rewrite_description(t.description or "")
+                if exposed in new_dispatch:
+                    if entry:
+                        # A mapped name colliding with something already published is
+                        # increment 3.3's degraded state: drop the alias, keep serving
+                        # the tool under its prefixed original, report it.
+                        log.warning("[%s] mapped name '%s' collides with an already "
+                                    "published tool — dropping the alias and serving "
+                                    "'%s%s' instead", u.name, exposed, prefix, bare)
+                        exposed = f"{prefix}{bare}"
+                        if exposed in new_dispatch:
+                            continue
+                    else:
+                        # Reachable since 1.5: an upstream mutating its list between
+                        # drained pages can hand back the same tool twice.
+                        log.warning("list_tools: duplicate exposed name %r from upstream "
+                                    "%s — keeping the first occurrence", exposed, u.name)
+                        continue
+                t = t.model_copy(update={"name": exposed, "description": desc})
+                new_dispatch[exposed] = (u, bare)
                 all_tools.append(t)
-            # A block naming a tool the upstream does not offer is a line protecting
-            # nothing, and a version bump is exactly when that happens. Once per entry,
-            # so a 5-second poll loop does not turn staleness into log spam.
+            # A decision naming a tool the upstream does not offer is a line that stopped
+            # meaning anything, and a version bump is exactly when that happens. Once per
+            # entry, so a 5-second poll loop does not turn staleness into log spam. A
+            # stale MAP entry is the harsher case: the surface promised a name that would
+            # fail on first use — drop the alias, keep serving, say so (3.3).
             for stale in sorted(set(u.blocks) - offered - u._stale_blocks_reported):
                 u._stale_blocks_reported.add(stale)
                 log.warning("[%s] block entry for '%s' matched nothing the upstream "
                             "offers — the decision it records no longer applies; "
                             "fix or remove it in the template", u.name, stale)
+            for stale in sorted(set(u.maps) - offered - u._stale_maps_reported):
+                u._stale_maps_reported.add(stale)
+                log.warning("[%s] map entry for '%s' matched nothing the upstream offers "
+                            "— its exposed name '%s' is dropped from the surface; the "
+                            "upstream likely renamed or removed the tool. Fix the "
+                            "template, and consider re-running the collision comparison "
+                            "against this upstream's new version.",
+                            u.name, stale, u.maps[stale].exposed)
         dispatch.clear()
         dispatch.update(new_dispatch)
         if unavailable:
@@ -929,7 +986,9 @@ def build_server(upstreams: list[Upstream]) -> Server:
         for t in result.tools:
             if t.name in u.blocks:
                 continue  # the sieve applies on every path that builds dispatch entries
-            dispatch[f"{prefix}{t.name}"] = (u, t.name)
+            entry = u.maps.get(t.name)
+            exposed = entry.exposed if entry else f"{prefix}{t.name}"  # so does the map
+            dispatch[exposed] = (u, t.name)
         return True
 
     async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
@@ -945,10 +1004,18 @@ def build_server(upstreams: list[Upstream]) -> Server:
             if passthrough is not None:
                 candidate = passthrough
             else:
-                for prefix, u in upstream_by_prefix.items():
-                    if prefix and name.startswith(prefix):
+                # A mapped exposed name carries no prefix, so before the prefix walk,
+                # recognise it from the static map tables — a call can legitimately
+                # arrive before this daemon's first tools/list.
+                for u in upstreams:
+                    if any(e.exposed == name for e in u.maps.values()):
                         candidate = u
                         break
+                else:
+                    for prefix, u in upstream_by_prefix.items():
+                        if prefix and name.startswith(prefix):
+                            candidate = u
+                            break
             if candidate is None:
                 return types.CallToolResult(
                     content=[
@@ -967,7 +1034,8 @@ def build_server(upstreams: list[Upstream]) -> Server:
                 if result is None:
                     return _not_connected_result(candidate)
                 return result
-            bare = name[len(prefix_of[candidate]):]
+            pfx = prefix_of[candidate]
+            bare = name[len(pfx):] if pfx and name.startswith(pfx) else name
             if bare in candidate.blocks:
                 # The sieve at tools/call (increment 2.1): hiding a tool from the listing
                 # while leaving it callable would make the block decoration. The refusal

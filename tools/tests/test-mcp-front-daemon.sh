@@ -27,8 +27,14 @@ PORT=8899
 cat > "$SB/_mcp_info.json" <<EOF
 {
   "mcpServers": {
-    "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong", "--tool", "build=alpha-built", "--tool", "secret=env:ASTRA_STUB_SECRET", "--tool", "bad=error:kaboom-from-alpha"], "env": {"ASTRA_STUB_SECRET": "sekrit-env-value"}},
-    "beta":  {"command": "python3", "args": ["$STUB", "--name", "beta", "--tool", "ping=beta-pong"]},
+    "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong", "--tool", "build=alpha-built", "--tool", "secret=env:ASTRA_STUB_SECRET", "--tool", "bad=error:kaboom-from-alpha", "--tool", "read=file-contents", "--tool", "helper=h", "--describe", "helper=already read the docs, then read again"],
+      "env": {"ASTRA_STUB_SECRET": "sekrit-env-value"},
+      "map": [{"tool": "read", "name": "fetch_file", "why": "surface vocabulary: bare 'read' is ambiguous beside beta's file tools"}]},
+    "beta":  {"command": "python3", "args": ["$STUB", "--name", "beta", "--tool", "ping=beta-pong", "--tool", "nudge=beta-nudged"],
+      "map": [
+        {"tool": "nudge", "name": "poke_beta", "why": "aggregate coherence: 'nudge' reads wrong beside alpha's verbs", "description": "Poke beta and await its pong."},
+        {"tool": "gone-tool", "name": "never_served", "why": "stale entry — the upstream never offered this; the degrade test wants it"}
+      ]},
     "pager": {"command": "python3", "args": ["$STUB", "--name", "pager", "--page-size", "1", "--tool", "first=page-one", "--tool", "second=page-two"]},
     "muzzled": {"command": "python3", "args": ["$STUB", "--name", "muzzled", "--tool", "a=muzzled-a", "--tool", "b=muzzled-b"],
       "block": [
@@ -87,6 +93,35 @@ mcp_call tools/call '{"name":"alpha__ping","arguments":{}}' > "$SB/alpha.out"
 assert_contains "$SB/alpha.out" "alpha-pong" "alpha__ping routes to the alpha stub"
 mcp_call tools/call '{"name":"beta__ping","arguments":{}}' > "$SB/beta.out"
 assert_contains "$SB/beta.out" "beta-pong" "beta__ping routes to the beta stub, same bare name"
+
+# --- Phase 3, the map: renames replace, descriptions follow, stale entries degrade ---
+# The exposed name is FINAL and the original is gone: a rename is a decision about the
+# surface's vocabulary, not an alias (SPEC; codex leg — keeping the old name callable
+# would defeat the map exactly as the prefix fallback would have defeated the sieve).
+assert_contains "$SB/list.out" "fetch_file" "a mapped tool is listed under its exposed name"
+assert_not_contains "$SB/list.out" "alpha__read" "and its prefixed original is gone from the listing"
+mcp_call tools/call '{"name":"fetch_file","arguments":{}}' > "$SB/mapped.out"
+assert_contains "$SB/mapped.out" "file-contents" "the exposed name routes to the upstream's real tool"
+mcp_call tools/call '{"name":"alpha__read","arguments":{}}' > "$SB/oldname.out"
+assert_contains "$SB/oldname.out" "does not currently offer" \
+  "the replaced original name is refused, not quietly honoured"
+
+# The rename table drives a MECHANICAL description pass across the same upstream's other
+# tools — whole words only. The roadmap's own red case: a tool named 'read' renames, and
+# the word 'already' must survive untouched.
+assert_contains "$SB/list.out" "already fetch_file the docs, then fetch_file again" \
+  "sibling descriptions now speak the exposed name, with 'already' intact"
+
+# An explicit description override wins outright.
+assert_contains "$SB/list.out" "Poke beta and await its pong." \
+  "a map entry's description override replaces the upstream's text"
+mcp_call tools/call '{"name":"poke_beta","arguments":{}}' > "$SB/poke.out"
+assert_contains "$SB/poke.out" "beta-nudged" "the overridden tool still routes by its exposed name"
+
+# A stale map entry degrades: drop the alias, keep serving, report (increment 3.3 —
+# 'Don't be stupid': an upstream rename must never take the whole surface down).
+assert_not_contains "$SB/list.out" "never_served" "a stale map entry's exposed name is not served"
+assert_contains "$SB/daemon.log" "map entry for 'gone-tool'" "the stale map entry is reported by name"
 
 # --- Phase 2, the sieve: blocked tools are neither listed nor callable ---
 # Blocking EVERY tool on one upstream empties only that upstream — the round-one

@@ -36,7 +36,7 @@ KNOWN_QUIRKS = frozenset({"require_xcode"})
 # six-variable allowlist, and Drew's server is configured through XCODEMCP_ALLOWED_FOLDERS,
 # so rejecting env left that mechanism unreachable.
 UNIMPLEMENTED_FIELDS = ("cwd", "url", "type", "transport", "headers")
-IMPLEMENTED_FIELDS = frozenset({"command", "args", "prefix", "quirks", "env", "block"})
+IMPLEMENTED_FIELDS = frozenset({"command", "args", "prefix", "quirks", "env", "block", "map"})
 TOP_LEVEL_FIELDS = frozenset({"mcpServers"})
 
 
@@ -45,7 +45,7 @@ class ConfigError(ValueError):
 
 
 class UpstreamSpec:
-    def __init__(self, name, command, args, prefix, quirks, env=None, blocks=None):
+    def __init__(self, name, command, args, prefix, quirks, env=None, blocks=None, maps=None):
         self.name = name
         self.command = command
         self.args = args
@@ -56,6 +56,11 @@ class UpstreamSpec:
         # withheld. Deny-list only, per Jonathan: "KISS it. I'd rather have a collision
         # or a little less safety than miss features."
         self.blocks = dict(blocks) if blocks else {}
+        # The map (Phase 3): bare upstream tool name -> MapEntry. The exposed name is
+        # FINAL — it replaces prefix+bare outright, because a curated surface gets its
+        # own vocabulary rather than the vendor's (SPEC: window_close can be exposed as
+        # close_current_window, a name neither server uses).
+        self.maps = dict(maps) if maps else {}
 
     @property
     def require_xcode(self):
@@ -101,8 +106,66 @@ def _parse_server(name, spec, strict=True):
         raise ConfigError("server '%s': 'env' must be an object of string values" % name)
 
     blocks = _parse_blocks(name, spec.get("block", []), strict)
+    maps = _parse_maps(name, spec.get("map", []), strict)
+    for tool in maps:
+        if tool in blocks:
+            raise ConfigError(
+                "'%s' on server '%s' is both blocked and mapped — a tool cannot be "
+                "withheld and renamed at once; pick one decision" % (tool, name))
 
-    return UpstreamSpec(name, command, list(args), prefix, frozenset(quirks), env, blocks)
+    return UpstreamSpec(name, command, list(args), prefix, frozenset(quirks), env, blocks,
+                        maps)
+
+
+class MapEntry:
+    def __init__(self, exposed, why, description=None):
+        self.exposed = exposed          # the FINAL exposed name; replaces prefix+bare
+        self.why = why
+        self.description = description  # optional outright override; None = mechanical pass only
+
+
+def _parse_maps(name, raw, strict):
+    """Map entries: [{"tool", "name", "why", "description"?}] -> {bare tool: MapEntry}.
+    Same why policy as the sieve: hard error at authoring time, warn-and-apply at daemon
+    runtime (ROADMAP 2.2 applies to every decision field)."""
+    if not isinstance(raw, list) or not all(isinstance(m, dict) for m in raw):
+        raise ConfigError("server '%s': 'map' must be a list of objects" % name)
+    maps = {}
+    claimed = set()
+    for m in raw:
+        tool = m.get("tool")
+        if not isinstance(tool, str) or not tool:
+            raise ConfigError("map entry on server '%s' has no 'tool' name" % name)
+        for key in m:
+            if key not in ("tool", "name", "why", "description"):
+                raise ConfigError("unknown field '%s' in map entry for '%s' on server '%s'"
+                                  % (key, tool, name))
+        exposed = m.get("name")
+        if not isinstance(exposed, str) or not exposed:
+            raise ConfigError("map entry for '%s' on server '%s' has no 'name' (the "
+                              "exposed name it becomes)" % (tool, name))
+        why = m.get("why")
+        if not isinstance(why, str) or not why.strip():
+            msg = ("map entry for '%s' on server '%s' has no 'why' — every rename "
+                   "carries its stated reason, or the map outlives its cause"
+                   % (tool, name))
+            if strict:
+                raise ConfigError(msg)
+            print("mcp_config: WARNING: %s (applying the rename anyway; fix the template)"
+                  % msg, file=sys.stderr)
+            why = "(no reason recorded — fix the template)"
+        if tool in maps:
+            raise ConfigError("duplicate map entry for '%s' on server '%s'" % (tool, name))
+        if exposed in claimed:
+            raise ConfigError("exposed name '%s' is claimed twice on server '%s'"
+                              % (exposed, name))
+        claimed.add(exposed)
+        desc = m.get("description")
+        if desc is not None and not isinstance(desc, str):
+            raise ConfigError("map entry for '%s' on server '%s': 'description' must be "
+                              "a string" % (tool, name))
+        maps[tool] = MapEntry(exposed, why, desc)
+    return maps
 
 
 def _parse_blocks(name, raw, strict):
@@ -173,7 +236,22 @@ def load(path, strict=True):
             raise ConfigError("unknown top-level field '%s' in %s" % (key, path))
     specs = [_parse_server(name, spec, strict) for name, spec in servers.items()]
     _check_prefixes(specs)
+    _check_exposed_names(specs)
     return specs
+
+
+def _check_exposed_names(specs):
+    """Two servers claiming one exposed name is a static contradiction, caught at load.
+    (A mapped name colliding with another upstream's LIVE prefixed tool is dynamic — the
+    daemon degrades by dropping the alias at composition, per increment 3.3.)"""
+    owner = {}
+    for s in specs:
+        for entry in s.maps.values():
+            if entry.exposed in owner:
+                raise ConfigError(
+                    "exposed name '%s' is claimed by both server '%s' and server '%s'"
+                    % (entry.exposed, owner[entry.exposed], s.name))
+            owner[entry.exposed] = s.name
 
 
 def _check_prefixes(specs):
@@ -243,6 +321,8 @@ def _print_specs(upstreams):
                                                      u.command, " ".join(u.args)))
         for tool, why in sorted(u.blocks.items()):
             print("    blocked: %s — %s" % (tool, why))
+        for tool, entry in sorted(u.maps.items()):
+            print("    mapped:  %s -> %s — %s" % (tool, entry.exposed, entry.why))
 
 
 def main(argv):

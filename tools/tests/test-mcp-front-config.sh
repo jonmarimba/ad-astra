@@ -171,6 +171,38 @@ env -u XCODE_MCP_FRONT_UPSTREAMS XCODE_MCP_FRONT_MCP_INFO="$SB/nowhy.json" \
 assert_eq "0" "$?" "resolve accepts the missing-why config instead of failing the repo at startup"
 assert_contains "$out" "no 'why'" "and it says out loud what the authoring check would have rejected"
 
+# --- the map: source-qualified renames (Phase 3) ---
+mapcfg="$SB/mapcfg.json"
+cat > "$mapcfg" <<'EOF'
+{"mcpServers": {"x": {"command": "c", "map": [
+  {"tool": "window_close", "name": "close_current_window", "why": "surface vocabulary: neither vendor's name reads right in the aggregate"}
+]}}}
+EOF
+out="$SB/mapcfg.out"
+python3 "$LOADER" validate "$mapcfg" >"$out" 2>&1
+assert_eq "0" "$?" "a map entry with tool, name and why validates"
+assert_contains "$out" "close_current_window" "the exposed name is shown in the listing"
+
+printf '{"mcpServers": {"x": {"command": "c", "map": [{"tool": "t", "name": "n"}]}}}' > "$SB/mapnowhy.json"
+red "validate rejects a map entry without a why" 65 "map entry for 't' on server 'x' has no 'why'" \
+  python3 "$LOADER" validate "$SB/mapnowhy.json"
+
+printf '{"mcpServers": {"x": {"command": "c", "map": [{"tool": "t", "why": "w"}]}}}' > "$SB/mapnoname.json"
+red "a map entry without an exposed name is rejected" 65 "map entry for 't' on server 'x' has no 'name'" \
+  python3 "$LOADER" validate "$SB/mapnoname.json"
+
+printf '{"mcpServers": {"x": {"command": "c", "map": [{"tool": "a", "name": "same", "why": "w"}, {"tool": "b", "name": "same", "why": "w"}]}}}' > "$SB/mapdup.json"
+red "two map entries claiming one exposed name are rejected" 65 "exposed name 'same' is claimed twice" \
+  python3 "$LOADER" validate "$SB/mapdup.json"
+
+printf '{"mcpServers": {"x": {"command": "c", "block": [{"tool": "t", "why": "w"}], "map": [{"tool": "t", "name": "n", "why": "w"}]}}}' > "$SB/mapblock.json"
+red "a tool both blocked and renamed is a contradiction, rejected" 65 "'t' on server 'x' is both blocked and mapped" \
+  python3 "$LOADER" validate "$SB/mapblock.json"
+
+printf '{"mcpServers": {"one": {"command": "c", "map": [{"tool": "a", "name": "shared", "why": "w"}]}, "two": {"command": "c", "map": [{"tool": "b", "name": "shared", "why": "w"}]}}}' > "$SB/mapxserver.json"
+red "two SERVERS claiming one exposed name are rejected at load" 65 "exposed name 'shared' is claimed by both" \
+  python3 "$LOADER" validate "$SB/mapxserver.json"
+
 # --- resolve: how the daemon picks its upstreams (increment 1.2) ---
 # The colon/comma env format is REPLACED, not deprecated: a set XCODE_MCP_FRONT_UPSTREAMS
 # is a hard error pointing at the file, because the old parser silently corrupted a colon

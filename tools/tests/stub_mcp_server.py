@@ -38,6 +38,8 @@ def main():
     ap.add_argument("--name", required=True)
     ap.add_argument("--version", default="1.0-stub")
     ap.add_argument("--tool", action="append", default=[], metavar="NAME=REPLY")
+    ap.add_argument("--describe", action="append", default=[], metavar="NAME=TEXT",
+                    help="override a tool's description (for description-rewrite tests)")
     ap.add_argument("--banner", default=None)
     ap.add_argument("--notify-before-reply", action="store_true")
     ap.add_argument("--stall-tools", action="store_true")
@@ -49,8 +51,12 @@ def main():
     for spec in a.tool:
         name, _, reply = spec.partition("=")
         tools[name] = reply
+    described = {}
+    for spec in a.describe:
+        n, _, text = spec.partition("=")
+        described[n] = text
     tool_list = [{"name": n,
-                  "description": "stub tool %s on %s" % (n, a.name),
+                  "description": described.get(n, "stub tool %s on %s" % (n, a.name)),
                   "inputSchema": {"type": "object"}}
                  for n in tools]
 
