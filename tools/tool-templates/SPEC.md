@@ -106,6 +106,20 @@ The mechanical pass is the one that scales. A curated surface renames many tools
 
 For the coherence purpose, writing per-server deny-lists means that adding a third server that also covers the same ground requires editing every other server's list, and getting one wrong reintroduces the duplicate. Saying instead that a given capability is **owned** by one named upstream puts the decision in one place and makes a third server's arrival a single edit. Both shapes are expressible in the same file; this is a recommendation, not a decision.
 
+## Repo override of the sieve and the map, and what the two files actually mean
+
+The sieve and the map are template output, so they get the mogenerator treatment like everything else. On install a template writes `_mcp_info.json`, machine-owned and overwritten on every update, and the repo owns `mcp_info.json` beside it, which no machine action ever writes. Jonathan raised `_mcp_info_machine.json` / `_mcp_info_human.json` as an alternative: it says out loud what the underscore only implies, which helps a newcomer, at the cost of breaking the mogenerator analogy that makes the whole convention memorable. The underscore pair is the recommendation, weakly held.
+
+**The merge semantics are the hard part, not the file names.** In mogenerator the override is a subclass, so "override" has one obvious meaning: a method replaces a method. JSON has no such rule, and the sieve makes the ambiguity concrete. If the template blocks four tools and the repo also wants three blocked, the human file adds to the machine list. If the template blocks a tool the repo actually needs, the human file must remove an entry the machine file asserts. Those are opposite operations and a deep merge cannot tell them apart from the values alone.
+
+So the human file should carry **verbs rather than values** — block and unblock, map and unmap, override-description — and the effective configuration is the machine file with the human file's operations applied in order. That has three properties worth having: a repo can undo a template decision without editing generated output, a template update cannot silently reinstate something the repo removed, and the human file reads as a list of deliberate departures, which is the thing someone actually wants to see six months later.
+
+It also gives the installer something to check. A human `unblock` naming a tool the template no longer blocks, or a `map` for a tool that no longer exists, is a departure that has quietly become a no-op — exactly the staleness the sieve and map sections already say must surface rather than rot.
+
+**On jsonc.** The human file is where someone records *why* a tool is blocked, and that reason is the first thing lost without comments, so comments belong there. Two costs to weigh. Standard tooling does not read it: `jq` fails on comments, and Python's `json` module fails on them, which matters here because the house rule is to reach for `jq` on JSON rather than write Python for it. And Claude Code's own `.mcp.json`, whose shape this format deliberately borrows, is strict JSON — so a jsonc human file could no longer be copy-pasted into it, which was one of the stated reasons for borrowing the shape.
+
+A middle position keeps both: the machine file stays strict JSON, since it is generated and its provenance header can be a normal string field, and only the human file allows comments. Whoever implements it then needs a comment-tolerant parser on exactly one path, and every existing tool still works on the generated file.
+
 ## Open questions Jonathan left open on purpose
 
 - **How to compose the Mac set.** Three candidate shapes: wrap all three servers behind one front; wrap the two already wrapped together and then wrap that wrapper alongside `MacControlMCP.app`; or wrap the existing two and let `MacControlMCP.app` stand separately. Nothing decided.
