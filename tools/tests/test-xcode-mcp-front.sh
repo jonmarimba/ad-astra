@@ -41,68 +41,43 @@ if ! pgrep -x Xcode >/dev/null 2>&1; then
 fi
 
 # A RUNNING XCODE WITH NO PROJECT OPEN IS NOT ENOUGH, and this is the part that made the
-# first fix look like it worked. mcpbridge reports a workspacePath, so with zero windows the
-# assertions below fail exactly as they did with Xcode closed. Verified live 2026-08-26:
-# Xcode up, window count 0, same four failures.
+# first fix look like it worked. mcpbridge reports a workspacePath, so with zero workspace
+# documents the assertions below fail exactly as they did with Xcode closed. Verified live
+# 2026-08-26: Xcode up, no workspace, same four failures.
 #
-# ASK XCODE, NOT SYSTEM EVENTS. `tell application "System Events" to tell process "Xcode" to
-# count windows` returns 0 for a Xcode showing two windows — it reads the Accessibility view of
-# the process, which is empty without that permission in this context. `tell application
-# "Xcode" to count windows` returns 2. Measured side by side on 2026-08-26, after the wrong one
-# had already produced a confident hard failure. The instrument was the bug, not Xcode.
+# NO osascript. THIS FILE USED TO SEND FOUR APPLE EVENTS TO XCODE AND THAT WAS THE BUG BEHIND
+# THE BUG. macOS attributes an Apple Event to the process that sent it, which here is the
+# shell, which is tmux — not a stable grantable identity — so every run asked Jonathan to
+# grant *tmux* control of Xcode, and answering it grants a shell rather than a task. That is
+# the same disease as the daemon connecting as a bare interpreter with no identity to grant.
+# Jonathan, 2026-08-30: "NOBODY should be firing one-off python or osascript shit without
+# wrapping it in something I don't have to re-approve."
 #
-# The test opens its OWN throwaway Swift package rather than one of Jonathan's workspaces.
-# A test that opens the Kicker project would make the ship gate depend on the state of real
-# work, and would put a test's fingerprints on a repo he is using.
-# COUNT WORKSPACE DOCUMENTS, NOT WINDOWS. "Welcome to Xcode" is a window, so on a machine
-# where Xcode is open with no project this guard was satisfied by the launcher panel and the
-# scaffold below never ran — the suite then failed all four mcpbridge assertions while
-# believing it had a workspace. Found live 2026-08-30, twice, before the real cause was
-# reached. mcpbridge rejects with "no workspace windows are open"; a workspace DOCUMENT is
-# the thing it means.
-if [ "$(osascript -e 'tell application "Xcode" to count workspace documents' 2>/dev/null || echo 0)" -lt 1 ]; then
+# What replaces it: `open` is LaunchServices, not scripting, and needs no Automation grant —
+# the same reason launching Mail for the mail sweep is not GUI automation. Readiness is then
+# read from the daemon itself over HTTP. Nothing here talks to Xcode directly.
+#
+# THE PROBE PACKAGE LIVES OUTSIDE THE SANDBOX, ON PURPOSE. It used to be scaffolded inside $SB,
+# which lib.sh wipes on exit — so Xcode was left holding a workspace whose file had vanished
+# and threw a modal "The workspace file ... has disappeared" that a human had to dismiss. Since
+# Xcode's dialogs do not stack, that one modal also blocked every approval prompt behind it.
+# Every run produced one; Jonathan closed twenty-one by hand in an evening and then killed
+# Xcode. The previous fix was to close the document before the delete, which needed yet another
+# Apple Event and still lost the race when the suite was killed rather than exited.
+#
+# Not deleting it is the fix that has no race in it. The package is created once, reused by
+# every run, and never removed, so there is nothing for Xcode to lose and no cleanup that has
+# to survive a SIGKILL. Reuse also skips re-scaffolding and re-indexing on every run.
+PROBE_DIR="$HOME/.xcode-mcp-front-probe/AstraProbe"
+if [ ! -f "$PROBE_DIR/Package.swift" ]; then
   need swift "install Xcode command line tools"
-  SCRATCH="$SB/xcode-scratch"; mkdir -p "$SCRATCH"
-  ( cd "$SCRATCH" && swift package init --name AstraProbe >/dev/null 2>&1 )
-  [ -f "$SCRATCH/Package.swift" ] || { fail "could not scaffold a Swift package to open — swift package init failed in $SCRATCH"; finish; exit 1; }
-  echo "  ..  opening a throwaway package so mcpbridge has a workspace"
-  # CLOSE THE WORKSPACE IN XCODE BEFORE THE SANDBOX IS DELETED. lib.sh wipes $SB on EXIT, and
-  # Xcode is left holding a workspace whose file just vanished — it then throws a modal
-  # "The workspace file ... has disappeared. Re-save or Close?" that sits there until a human
-  # dismisses it, and because Xcode's dialogs do not stack it also blocks every approval
-  # prompt behind it. Every run of this suite produced one. Jonathan, 2026-08-30: "Close it in
-  # Xcode before you delete it."
-  #
-  # The trap is chained rather than replaced: lib.sh owns EXIT and still has to wipe $SB, so
-  # this runs first and hands off. Closing is best-effort — a failure here must not fail the
-  # suite, and Xcode having already closed the document is the normal case on a rerun.
-  _close_xcode_scratch(){
-    osascript -e "tell application \"Xcode\"
-      repeat with d in workspace documents
-        try
-          if (path of d) contains \"$SCRATCH\" then close d saving no
-        end try
-      end repeat
-    end tell" >/dev/null 2>&1 || true
-  }
-  # INT and TERM as well as EXIT: an EXIT trap does not fire on a kill, so an interrupted
-  # run skipped this entirely and left the disappeared-workspace modal behind — the worst
-  # version of the mess, produced by exactly the situation where someone has had enough and
-  # hit ctrl-C. Handlers are idempotent, so running twice is harmless.
-  trap '_close_xcode_scratch; _lib_cleanup' EXIT INT TERM
-
-  open -g -a "$XCODE_APP" "$SCRATCH/Package.swift" 2>/dev/null
-  waited=0
-  until [ "$(osascript -e 'tell application "Xcode" to count workspace documents' 2>/dev/null || echo 0)" -ge 1 ] || [ "$waited" -ge 90 ]; do
-    sleep 3; waited=$((waited+3))
-  done
-  if [ "$(osascript -e 'tell application "Xcode" to count workspace documents' 2>/dev/null || echo 0)" -lt 1 ]; then
-    fail "Xcode is running but never opened a window for $SCRATCH/Package.swift — mcpbridge has no workspace to report and the assertions below cannot mean anything."
-    finish
-    exit 1
-  fi
-  sleep 15   # indexing settles; mcpbridge answers once the workspace is loaded
+  mkdir -p "$PROBE_DIR"
+  ( cd "$PROBE_DIR" && swift package init --name AstraProbe >/dev/null 2>&1 )
+  [ -f "$PROBE_DIR/Package.swift" ] || { fail "could not scaffold the probe package in $PROBE_DIR — swift package init failed"; finish; exit 1; }
+  echo "  ..  created the persistent probe package at $PROBE_DIR (kept between runs by design)"
 fi
+echo "  ..  opening the probe package so mcpbridge has a workspace to report"
+open -g -a "$XCODE_APP" "$PROBE_DIR/Package.swift" 2>/dev/null
 
 # KNOWN STATE, 2026-08-27 09:50 — the four mcpbridge assertions below fail, and the daemon is
 # not the reason. Traced with Xcode running and two windows open:
@@ -144,7 +119,41 @@ mcp_call() { # usage: mcp_call <port> <method> <params-json>  -> prints the raw 
 # telling System Events to do it, which asks macOS to let the CALLING process control Xcode
 # and prompts the user for tmux or Terminal.
 open -a "$XCODE_APP" 2>/dev/null
-sleep 3
+
+# WAIT FOR THE WORKSPACE THE WAY THE TEST WILL LATER READ IT — through the daemon, over HTTP.
+# The old wait polled Xcode with an Apple Event; this asks the thing under test whether it can
+# see a workspace yet, which needs no permission and is the same channel every assertion below
+# uses. A fixed `sleep 3` is not a substitute: Xcode indexes for as long as it indexes, and a
+# short sleep turned "not ready yet" into a hard failure that read like a daemon regression.
+#
+# THIS DOES NOT MAKE THE FIRST ASSERTION UNFALSIFIABLE, which is the obvious hazard of using
+# the assertion's own call as its precondition. Timing out here does NOT skip or pass anything:
+# it falls through and lets the assertions run and fail on their own terms. The wait exists to
+# stop a slow Xcode being reported as a broken daemon, not to decide the verdict.
+echo "  ..  waiting for mcpbridge to report a workspace"
+ws_waited=0
+until [ "$ws_waited" -ge 90 ]; do
+  probe_resp="$(mcp_call 8765 tools/call '{"name":"XcodeListWindows","arguments":{}}' 2>/dev/null || true)"
+  case "$probe_resp" in
+    *workspacePath*) echo "  ..  workspace visible after ${ws_waited}s"; break ;;
+  esac
+  sleep 5; ws_waited=$((ws_waited+5))
+done
+if [ "$ws_waited" -ge 90 ]; then
+  # SAY WHICH FAILURE THIS IS. mcpbridge answers "no workspace windows are open" when Xcode has
+  # nothing loaded, which is a different situation from the daemon being down, and the two used
+  # to produce identical unexplained assertion failures. Naming it here does not weaken the
+  # assertions; they still run.
+  case "$probe_resp" in
+    *"no workspace"*|*"No workspace"*)
+      echo "  ..  NOTE: mcpbridge says Xcode has no workspace open after 90s. The failures below" ;;
+    "")
+      echo "  ..  NOTE: the daemon on 8765 returned nothing at all after 90s. The failures below" ;;
+    *)
+      echo "  ..  NOTE: the daemon answered but never reported a workspacePath in 90s. Below" ;;
+  esac
+  echo "  ..        are about THAT, not about routing or prefixing."
+fi
 
 # The sibling rule this used to assert is GONE, and deliberately. It identified a family
 # process by substring-matching `ps` output, which GhOST-OpenClaw showed would match an
