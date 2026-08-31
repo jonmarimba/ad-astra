@@ -7,3 +7,7 @@ notes/.obsidian
 skills/humanizer
 tools/handlebars/handlebars.log
 tools/lib/installed.json
+
+# Agent CLI scratch dirs created by convocation panelists in this working tree.
+.codex/
+.qwen/
