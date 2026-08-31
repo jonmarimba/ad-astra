@@ -124,6 +124,20 @@ The mechanical pass is the one that scales. A curated surface renames many tools
 
 For the coherence purpose, writing per-server deny-lists means that adding a third server that also covers the same ground requires editing every other server's list, and getting one wrong reintroduces the duplicate. Saying instead that a given capability is **owned** by one named upstream puts the decision in one place and makes a third server's arrival a single edit. Both shapes are expressible in the same file; this is a recommendation, not a decision.
 
+## The config records decisions, never inventory
+
+Jonathan, 2026-08-31: the jsonc file must not hold an exhaustive tool list. The script produces the full list on demand; the file keeps only what is filtered out and what is renamed, and nothing else.
+
+This is the difference between a config that ages well and one that rots. An exhaustive list is a mirror of upstream state, so every upstream version bump makes it wrong and it has to be regenerated — and a regenerated file cannot be reviewed, because every line changed. An exceptions list changes only when a decision changes, so its diff is always meaningful and its size stays proportional to how much has been decided rather than to how many tools exist.
+
+It also makes staleness auditable instead of invisible. Run the comparison script against the version recorded in the config, and every block or rename naming a tool the upstream no longer has is a decision that has quietly stopped applying. That audit is only possible because the file holds decisions; against an inventory it would be noise.
+
+**Every block and every rename carries a reason, and the reason should be a field rather than a comment.** Jonathan's requirement is that each entry says WHY. That is the right requirement and it is the thing that rots first — without it, a later session cannot tell a block that still protects something from one that outlived its cause, and the safe-looking move is always to leave it, so the surface silently narrows forever.
+
+The tension: he also asked for jsonc so we can comment, and a jsonc comment cannot be enforced or read back. Any parser discards it, so nothing can require it, nothing can grep it, and any tool that rewrites the file loses it. If the reason matters enough to be mandatory — and the argument above says it does — it has to be data: a required `why` string on every sieve and map entry, rejected at load time when missing or empty. Comments stay allowed for everything else, which is where they are genuinely better than a field, such as explaining a group of related entries or leaving a note about an upstream bug.
+
+So: `why` required and enforced; jsonc comments permitted alongside it. That keeps his intent, which is that no entry exists without a stated cause, and makes it survive a machine reading the file.
+
 ## Repo override of the sieve and the map, and what the two files actually mean
 
 The sieve and the map are template output, so they get the mogenerator treatment like everything else. On install a template writes `_mcp_info.json`, machine-owned and overwritten on every update, and the repo owns `mcp_info.json` beside it, which no machine action ever writes. Jonathan raised `_mcp_info_machine.json` / `_mcp_info_human.json` as an alternative: it says out loud what the underscore only implies, which helps a newcomer, at the cost of breaking the mogenerator analogy that makes the whole convention memorable. The underscore pair is the recommendation, weakly held.
