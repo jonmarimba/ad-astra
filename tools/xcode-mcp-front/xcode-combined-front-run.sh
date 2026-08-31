@@ -30,8 +30,23 @@ export XCODE_MCP_FRONT_MCP_INFO="$XCODE_MCP_FRONT_HOME/_mcp_info.json"
 cat > "$XCODE_MCP_FRONT_MCP_INFO" <<'EOF'
 {
   "mcpServers": {
-    "xcode": {"command": "xcrun", "args": ["mcpbridge"], "quirks": ["require_xcode"]},
-    "drews": {"command": "uvx", "args": ["drews-xcode-mcp"]}
+    "xcode": {
+      "command": "xcrun", "args": ["mcpbridge"], "quirks": ["require_xcode"],
+      "block": [
+        {"tool": "BuildProject", "why": "MEASURED 2026-08-31 (tool-templates/facts/build.md): Drew's build_project returns inline warning counts+text and builds any path; Apple's is errors-only + log path, open-tab only. Drew owns build."},
+        {"tool": "GetBuildLog", "why": "MEASURED (facts/build-diagnostics.md): Apple's GetBuildLog returned empty entries (totalFound 0); Drew's get_build_results/get_build_errors give structured per-file warning analysis. Drew owns build diagnostics."}
+      ]
+    },
+    "drews": {
+      "command": "uvx", "args": ["drews-xcode-mcp"],
+      "block": [
+        {"tool": "list_project_tests", "why": "MEASURED (facts/tests.md): Apple's GetTestList gives structured test-plan results and works on the open workspace incl SwiftPM; Drew needs a configured .xcodeproj test target. Apple owns test-listing. (CAVEAT in facts/tests.md for path-based .xcodeproj workflows.)"},
+        {"tool": "run_project_tests", "why": "MEASURED (facts/tests.md): Apple owns test-running for the open workspace; see the CAVEAT for path-based .xcodeproj workflows."}
+      ],
+      "map": [
+        {"tool": "build_project", "name": "build", "why": "MEASURED: Drew wins the build overlap; expose it under one canonical name so the model sees a single build tool, not two vendors' names."}
+      ]
+    }
   }
 }
 EOF
