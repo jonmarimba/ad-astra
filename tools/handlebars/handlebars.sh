@@ -56,6 +56,49 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 
 echo "handlebars: tower run @ $(date '+%Y-%m-%d %H:%M:%S')"
 
+# ---- ONE-RUN TASK (2026-08-31, Claude/Fable, Jonathan in the seat and directing) ----
+# An Xcode MCP approval dialog exists on screen (Jonathan screenshotted it) for PID 61655,
+# a daemon self-preempt killed at 12:16:30 — a STALE prompt nobody is waiting on. Xcode's
+# dialogs do not stack, so it has silently blocked every new approval since. Neither the
+# daemon's clicker (searches process "Xcode" windows) nor mac-control found it, so first:
+# report WHERE it actually lives (that gap is a real clicker defect to fix). Then, ONLY if
+# a window's own text names the dead PID 61655, click its "Don't Allow" — the documented-
+# safe action; the live daemon re-prompts within seconds. Remove this block after the run.
+osascript <<'EOS' 2>&1
+set report to ""
+tell application "System Events"
+  repeat with p in (every application process)
+    set pname to name of p
+    try
+      repeat with w in windows of p
+        set btnNames to {}
+        try
+          set btnNames to name of every button of w
+        end try
+        if btnNames contains "Allow" then
+          set txt to ""
+          try
+            set txt to (value of every static text of w) as string
+          end try
+          set report to report & "FOUND: process=" & pname & " window=" & (name of w) & " buttons=" & (btnNames as string) & " text=" & txt & linefeed
+          if txt contains "61655" then
+            click (button "Don’t Allow" of w)
+            set report to report & "CLICKED Don't Allow on the stale PID-61655 dialog in process " & pname & linefeed
+          else
+            set report to report & "LEFT ALONE: text does not name the dead PID 61655" & linefeed
+          end if
+        end if
+      end repeat
+    end try
+  end repeat
+end tell
+if report is "" then set report to "NO window with an Allow button found in ANY process"
+return report
+EOS
+echo "handlebars: dialog hunt complete."
+exit 0
+# ---- END ONE-RUN TASK ----
+
 # ---- ONE grant at a time, driven interactively, never a batch-grant-everything run ----
 # Jonathan (2026-08-14): "we do one at a time in the script. And coordinate where I grant
 # access in the seat with your direction." NOT "grant every TCC pane up front" — that's a
