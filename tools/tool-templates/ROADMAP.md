@@ -19,6 +19,7 @@ Synthesised by GhOST-Claude, 2026-08-31, from a three-brand colloquium: Claude, 
 - **A repo's config MAY add upstreams.** "You're overindexing on security. Again. This is a tool for software developers. Sharper edges can cut off fingers, that's fine."
 - **Homebrew where it can be, uv and npm where needed.** The point is fewer dependency mechanisms and reasonable consistency, not brew-only. Our own tooling — the `.app` wrappers — is fair game and was never the problem I made it out to be.
 - **Stale map entry: drop the alias, keep serving.** ("Don't be stupid.")
+- **Andrew Benson is Drew** — one person. He wrote `drews-xcode-mcp` and he contributes `agents-and-prompts` to this repo, so "Andrew's Swift stuff" may mean either and both are his.
 - **Xcode 27 is in scope later**, and he wants to know what it adds, specifically so scheme-switching can be compared between Drew's server and Apple's.
 
 **One consequence of the per-repo decision, stated once and not argued.** N repo daemons reintroduce the approval-serialisation ceiling that the shared broker would have dissolved: each needs roughly six seconds of exclusive Xcode dialog time and they queue, against a fifteen-second connect timeout. Two fit today. The mitigation is that the connect timeout is configurable and the foreign-dialog grace is now asserted to be below it, so the ceiling can be raised deliberately rather than discovered. Worth measuring at three before a third repo depends on it.

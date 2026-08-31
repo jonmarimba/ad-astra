@@ -21,11 +21,15 @@ Seven carry a `tool.json` descriptor, all of them `mcp-*`, and **nothing reads t
 
 An Apple Note dated 2026-08-18, "Dead code and duplicate code detection (swift and others)", holds the research behind the last two. There is also a standing tech-to-try list in Notes — Exo, OpenHands, Firecrawl, TickTick, Brett Terpstra's TerminalWidget — which is the intake queue for future template members.
 
-## Andrew Benson is a real ad astra contributor, and he is not Drew
+## Andrew Benson IS Drew — one person, both things
 
-`Andrew Benson <db@nuclearcyborg.com>` has commits in this repo. His contributions are `agents-and-prompts/` — the components tree (`Coding.md`, `NamingThings.md`, `CodeComments.md`, `BuildingAppleProjects.md`, `AccessibilitySuperPrompt.md`), the commands (`swiftlint.md`, `3way.md`, `recheck.md`, `stupid.md`), and the Jira tooling.
+Corrected by Jonathan, 2026-08-31, immediately after I concluded the opposite. `Andrew Benson <db@nuclearcyborg.com>` wrote `drews-xcode-mcp` — the `Xcode MCP Server 1.29.1` running in the combined daemon right now — **and** contributes to this repo.
 
-So **"Andrew's Swift stuff" is prompt-and-skill material, not an MCP server**, and it is distinct from `drews-xcode-mcp` (`Xcode MCP Server 1.29.1`), which is what runs in the combined daemon today. Both names were real and they are two different things.
+His ad astra contributions are `agents-and-prompts/`: the components tree (`Coding.md`, `NamingThings.md`, `CodeComments.md`, `BuildingAppleProjects.md`, `AccessibilitySuperPrompt.md`), the commands (`swiftlint.md`, `3way.md`, `recheck.md`, `stupid.md`), and the Jira tooling.
+
+So "Andrew's thing" and "Andrew's Swift stuff" may refer to either the MCP server or the prompt-and-skill material, and both are his. When either is ambiguous in future, it is one person to ask rather than two things to disambiguate.
+
+**Why I got it wrong is worth keeping.** I found a contributor named Andrew, found an MCP server named for Drew, observed they were different kinds of artifact, and concluded they were different people — reasoning from artifact type to identity, which is not an inference at all. The git log gave me the email address that would have settled it and I did not use it.
 
 ## Four templates already defined
 
