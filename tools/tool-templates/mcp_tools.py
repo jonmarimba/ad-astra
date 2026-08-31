@@ -33,6 +33,8 @@ import os
 import select
 import subprocess
 import sys
+import threading
+import time
 
 # Long by design. The first tools/list against a server that gates on an approval dialog does not
 # return until the dialog is answered, and a short timeout here turns "waiting for a human" into
@@ -69,51 +71,111 @@ def probe(name, spec, timeout):
     env.update(spec.get("env") or {})
 
     p = subprocess.Popen([command] + list(args), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, text=True, bufsize=1, env=env)
+                         stderr=subprocess.PIPE, env=env)
+
+    # Drain stderr on its own thread for the child's whole life. A chatty server that
+    # fills the stderr pipe otherwise BLOCKS mid-write, which from out here is
+    # indistinguishable from the approval-dialog stall this tool exists to name honestly.
+    stderr_lines = []
+    stderr_thread = threading.Thread(
+        target=lambda: stderr_lines.extend(
+            l.decode("utf-8", "replace").rstrip("\n") for l in p.stderr),
+        daemon=True)
+    stderr_thread.start()
 
     def send(obj):
         try:
-            p.stdin.write(json.dumps(obj) + "\n")
+            p.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
             p.stdin.flush()
             return True
         except (BrokenPipeError, ValueError):
             return False
 
-    def readline(limit):
-        ready, _, _ = select.select([p.stdout], [], [], limit)
-        if not ready:
-            return None          # still open, said nothing — NOT the same as empty
-        return p.stdout.readline()
+    # RAW BYTES + OWN LINE SPLITTING, NOT select()-then-readline(). A buffered readline
+    # can swallow several lines in one os-level read; the next select() then blocks on a
+    # pipe with no NEW bytes while the answer already sits in the wrapper's buffer. That
+    # combination timed out on the very first chatty-server test this file's tests ran.
+    pending = [b""]
+
+    def next_line(deadline):
+        """One decoded line, or None on deadline, or "" on closed stdout."""
+        while True:
+            nl = pending[0].find(b"\n")
+            if nl >= 0:
+                line = pending[0][:nl]
+                pending[0] = pending[0][nl + 1:]
+                return line.decode("utf-8", "replace")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            ready, _, _ = select.select([p.stdout], [], [], remaining)
+            if not ready:
+                return None          # still open, said nothing — NOT the same as empty
+            chunk = os.read(p.stdout.fileno(), 65536)
+            if chunk == b"":
+                if pending[0]:       # closed mid-line: hand over what there is, then EOF
+                    line, pending[0] = pending[0], b""
+                    return line.decode("utf-8", "replace")
+                return ""
+            pending[0] += chunk
+
+    def read_response(want_id, limit):
+        """Read until THE RESPONSE WITH THIS ID arrives, a deadline passes, or stdout
+        closes. The old version took whatever line came next, so a startup banner or a
+        spec-legal notification arriving between request and response was misread as the
+        answer or crashed the probe — the exact class of error the module docstring
+        forbids, found independently by all three round-one colloquium brands.
+        Returns the parsed response object, None on timeout, "" on closed stdout."""
+        deadline = time.monotonic() + limit
+        while True:
+            line = next_line(deadline)
+            if line is None:
+                return None
+            if line == "":
+                return ""
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue             # a banner or log line on stdout; not ours to parse
+            if not isinstance(obj, dict) or obj.get("id") != want_id:
+                continue             # a notification, or an answer to something else
+            return obj
 
     try:
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
               "params": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
                          "clientInfo": {"name": "mcp_tools", "version": "1"}}})
-        line = readline(timeout)
-        if not line:
+        resp = read_response(1, timeout)
+        if not resp:
             return {"error": "no answer to initialize within %.0fs" % timeout}
-        init = json.loads(line).get("result") or {}
+        init = resp.get("result") or {}
 
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        line = readline(timeout)
-        if line is None:
+        resp = read_response(2, timeout)
+        if resp is None:
             return {"serverInfo": init.get("serverInfo"),
                     "error": "initialize answered but tools/list did not, within %.0fs. This is "
                              "NOT an empty tool list. A server that gates tool access behind an "
                              "approval dialog blocks here until the dialog is answered — check "
                              "for one before believing anything about this server." % timeout}
-        if line == "":
+        if resp == "":
             return {"serverInfo": init.get("serverInfo"),
                     "error": "the server closed its output after initialize rather than answering "
-                             "tools/list"}
-        tools = (json.loads(line).get("result") or {}).get("tools")
+                             "tools/list%s" % (
+                                 " — its stderr said: %s" % " ".join(stderr_lines)[-300:]
+                                 if stderr_lines else "")}
+        tools = (resp.get("result") or {}).get("tools")
         if tools is None:
             return {"serverInfo": init.get("serverInfo"),
-                    "error": "tools/list returned no result field: %s" % line.strip()[:200]}
+                    "error": "tools/list returned no result field: %s" % json.dumps(resp)[:200]}
         return {"serverInfo": init.get("serverInfo"), "tools": tools}
     finally:
         p.kill()
+        p.wait()                     # reap — a zombie per probe adds up in a long session
 
 
 def describe(info):

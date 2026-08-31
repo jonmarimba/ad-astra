@@ -13,6 +13,10 @@ argument so any test (or any other agent's harness) can shape it without editing
 --tool NAME=REPLY declares one tool; calling it returns REPLY as text content.
 --banner LINE prints LINE to stdout before serving (reproduces the class of server that
   breaks naive next-line readers).
+--notify-before-reply emits a spec-legal notification line immediately before every
+  response (a next-line reader misreads the notification as the answer).
+--stall-tools answers initialize normally and then never answers tools/list (reproduces
+  the approval-dialog gate that must read as a timeout, never as an empty tool list).
 --page-size N makes tools/list return N tools per page with a nextCursor, exercising
   per-upstream cursors.
 Python 3.9-compatible; no third-party imports.
@@ -28,6 +32,8 @@ def main():
     ap.add_argument("--version", default="1.0-stub")
     ap.add_argument("--tool", action="append", default=[], metavar="NAME=REPLY")
     ap.add_argument("--banner", default=None)
+    ap.add_argument("--notify-before-reply", action="store_true")
+    ap.add_argument("--stall-tools", action="store_true")
     ap.add_argument("--page-size", type=int, default=0)
     a = ap.parse_args()
 
@@ -41,6 +47,11 @@ def main():
                  for n in tools]
 
     def send(obj):
+        if a.notify_before_reply and "id" in obj:
+            sys.stdout.write(json.dumps({"jsonrpc": "2.0",
+                                         "method": "notifications/message",
+                                         "params": {"level": "info",
+                                                    "data": "stub %s chatter" % a.name}}) + "\n")
         sys.stdout.write(json.dumps(obj) + "\n")
         sys.stdout.flush()
 
@@ -62,6 +73,8 @@ def main():
                 "protocolVersion": msg.get("params", {}).get("protocolVersion", "2025-06-18"),
                 "capabilities": {"tools": {"listChanged": True}},
                 "serverInfo": {"name": a.name, "version": a.version}}})
+        elif method == "tools/list" and a.stall_tools:
+            continue  # never answer — the approval-dialog gate, as a stub
         elif method == "tools/list":
             if a.page_size > 0:
                 cursor = msg.get("params") or {}
