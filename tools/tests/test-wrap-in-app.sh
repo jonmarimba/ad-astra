@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: slow — launches a real .app via LaunchServices, which fails spuriously (error -600) under load: twice on 2026-08-31 while daemons restarted. GUI-class by the tier definition.
 # test-wrap-in-app.sh — wraps a real fixture script, LAUNCHES the generated app (same
 # open -g -W path the scheduler uses), and proves the whole contract by effect: output
 # lands in the log, the shim prints only what the script printed, a silent run pokes
