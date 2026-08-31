@@ -10,7 +10,11 @@ argument so any test (or any other agent's harness) can shape it without editing
     stub_mcp_server.py --name chatty --banner "starting"  # spec-illegal stdout banner line
     stub_mcp_server.py --name pager --tool a=1 --tool b=2 --page-size 1   # paginates
 
---tool NAME=REPLY declares one tool; calling it returns REPLY as text content.
+--tool NAME=REPLY declares one tool; calling it returns REPLY as text content. Two REPLY
+  prefixes change the behaviour: "env:VAR" answers with os.environ[VAR] resolved at call
+  time (proves an env pass-through by effect), and "error:MSG" answers with a JSON-RPC
+  ERROR response (an application-level error a proxy must forward, not treat as a dead
+  transport).
 --banner LINE prints LINE to stdout before serving (reproduces the class of server that
   breaks naive next-line readers).
 --notify-before-reply emits a spec-legal notification line immediately before every
@@ -19,10 +23,13 @@ argument so any test (or any other agent's harness) can shape it without editing
   the approval-dialog gate that must read as a timeout, never as an empty tool list).
 --page-size N makes tools/list return N tools per page with a nextCursor, exercising
   per-upstream cursors.
+--page-loop makes every tools/list page carry nextCursor "0" forever (a cursor cycle,
+  the upstream bug a drain must bound rather than follow to memory exhaustion).
 Python 3.9-compatible; no third-party imports.
 """
 import argparse
 import json
+import os
 import sys
 
 
@@ -35,6 +42,7 @@ def main():
     ap.add_argument("--notify-before-reply", action="store_true")
     ap.add_argument("--stall-tools", action="store_true")
     ap.add_argument("--page-size", type=int, default=0)
+    ap.add_argument("--page-loop", action="store_true")
     a = ap.parse_args()
 
     tools = {}
@@ -76,7 +84,10 @@ def main():
         elif method == "tools/list" and a.stall_tools:
             continue  # never answer — the approval-dialog gate, as a stub
         elif method == "tools/list":
-            if a.page_size > 0:
+            if a.page_loop:
+                send({"jsonrpc": "2.0", "id": mid, "result": {
+                    "tools": tool_list, "nextCursor": "0"}})
+            elif a.page_size > 0:
                 cursor = msg.get("params") or {}
                 start = int(cursor.get("cursor") or 0)
                 page = tool_list[start:start + a.page_size]
@@ -90,8 +101,15 @@ def main():
             params = msg.get("params") or {}
             name = params.get("name")
             if name in tools:
+                reply = tools[name]
+                if reply.startswith("env:"):
+                    reply = os.environ.get(reply[4:], "<unset:%s>" % reply[4:])
+                if reply.startswith("error:"):
+                    send({"jsonrpc": "2.0", "id": mid, "error": {
+                        "code": -32050, "message": reply[6:]}})
+                    continue
                 send({"jsonrpc": "2.0", "id": mid, "result": {
-                    "content": [{"type": "text", "text": tools[name]}], "isError": False}})
+                    "content": [{"type": "text", "text": reply}], "isError": False}})
             else:
                 send({"jsonrpc": "2.0", "id": mid, "error": {
                     "code": -32602, "message": "unknown tool %r on stub %s" % (name, a.name)}})

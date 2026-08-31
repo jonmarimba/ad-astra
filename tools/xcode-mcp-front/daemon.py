@@ -37,11 +37,13 @@ Runs in one of two modes, chosen by which env vars are set (see below):
 
 This is a dumb passthrough, not a real aggregator: it forwards list_tools/call_tool
 to the relevant upstream ClientSession(s) and returns whatever comes back. It does
-not interpret tool semantics. Calls to a given upstream are serialized through
-that upstream's own lock (tolerance for concurrent overlapping calls hasn't been
-tested, so this starts correctness-first — tool calls are already human-paced, so
-serialization shouldn't be felt in practice); different upstreams' calls are
-fully independent of each other.
+not interpret tool semantics. tools/call requests to a given upstream are
+serialized through that upstream's own lock; tools/list requests — client drains
+and the heartbeat alike — run WITHOUT the lock on a session snapshot, because the
+MCP session multiplexes concurrent requests by id and a list must never wait
+behind a long-running build (measured by the phase-1 panel: a client connecting
+during one upstream's slow call got no tool list at all until it finished).
+Different upstreams are fully independent of each other.
 
 VALIDATED 2026-08-14 (all live, against a real Xcode):
 - One connection tolerates many sequential calls of different shapes, no reconnect
@@ -123,7 +125,8 @@ import uvicorn
 import mcp_config
 from mcp import types
 from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.stdio import StdioServerParameters, get_default_environment, stdio_client
+from mcp.shared.exceptions import MCPError
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import ServerRequestContext
 
@@ -307,6 +310,10 @@ if FOREIGN_DIALOG_GRACE_SECONDS >= CONNECT_TIMEOUT_SECONDS:
 # stall_watchdog(). Generous on purpose: a false positive restarts a healthy daemon.
 STALL_EXIT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_STALL_EXIT", "180"))
 
+# Structural ceiling on one tools/list drain, far above any real server's page count.
+# See Upstream.list_tools for why a wall-clock bound alone is not enough.
+LIST_MAX_PAGES = int(os.environ.get("XCODE_MCP_FRONT_LIST_MAX_PAGES", "200"))
+
 # How often to look for the approval dialog while a call is blocked waiting for it. Short,
 # because the window is the length of one blocked list_tools and a missed dialog costs the
 # whole connection attempt.
@@ -457,11 +464,16 @@ class Upstream:
     share a tool name can't collide."""
 
     def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool,
-                 prefix: str = ""):
+                 prefix: str = "", env: dict | None = None):
         self.name = name
-        # Exposed-name prefix in multi-upstream mode; ignored (empty) when this daemon
-        # fronts a single upstream, which stays an unprefixed passthrough.
-        self.prefix = prefix or f"{name}__"
+        # Exposed-name prefix, VERBATIM from the spec. The daemon used to force "" for a
+        # sole upstream regardless of what the config declared, so the validator printed
+        # prefix=solo__ while the daemon served bare names — and adding a second server
+        # silently renamed every tool the first one offered (round-one colloquium defect
+        # 2; the phase-1 panel measured it still live). The env-var single mode passes ""
+        # explicitly, which keeps the deployed passthrough unprefixed.
+        self.prefix = prefix
+        self.env = dict(env) if env else None
         # Watchdog input: bumped on every connect attempt and every successful heartbeat.
         # Initialised here so the watchdog never reads a missing attribute on a slow start.
         self.last_progress = time.monotonic()
@@ -472,56 +484,105 @@ class Upstream:
         self.session: ClientSession | None = None
         self.known_broken = False
 
+    async def _mark_broken(self, why: str) -> None:
+        """Set known_broken AND drop the public session reference immediately. The codex
+        leg of the phase-1 panel caught the gap: known_broken was set but the session
+        stayed visible until stdio teardown completed, and a wedged teardown (documented
+        below in stall_watchdog) let calls keep entering a session everyone knew was
+        dead."""
+        async with self.lock:
+            self.known_broken = True
+            self.session = None
+        log.warning("[%s] marking connection broken: %s", self.name, why)
+
     async def list_tools(self, params: types.PaginatedRequestParams | None) -> types.ListToolsResult | None:
         """Returns None when this upstream is DISCONNECTED or the call failed — which is a
         different fact from a connected upstream answering with zero tools, and the two
         must never be conflated (increment 1.4: conflating them is how one missing
-        upstream used to blank the entire aggregate surface)."""
+        upstream used to blank the entire aggregate surface).
+
+        CONCURRENCY, stated plainly (the phase-1 panel caught the old file claiming full
+        serialization while the heartbeat bypassed the lock): tools/call is serialized
+        through self.lock; tools/list runs WITHOUT the lock on a session snapshot. The
+        MCP session multiplexes concurrent requests by id, and the heartbeat has listed
+        concurrently with real calls in production since 2026-08-14. Holding the lock
+        here meant a client connecting during a 10-minute build got no tool list at all
+        until the build ended — measured live by the panel's claude leg."""
         async with self.lock:
-            if self.session is None:
-                return None
-            try:
-                # DRAIN EVERY PAGE (increment 1.5). Cursors are opaque, per-server tokens,
-                # so the downstream client's cursor cannot be forwarded here — this daemon
-                # aggregates several cursor spaces into one surface and therefore serves a
-                # complete snapshot instead. Ignoring nextCursor used to silently truncate
-                # any upstream that paginates.
-                tools: list[types.Tool] = []
-                cursor: str | None = None
-                with anyio.fail_after(CALL_TIMEOUT_SECONDS):
-                    while True:
-                        page = await self.session.list_tools(
-                            params=types.PaginatedRequestParams(cursor=cursor) if cursor else None)
-                        tools.extend(page.tools)
-                        cursor = page.next_cursor
-                        if not cursor:
-                            return types.ListToolsResult(tools=tools)
-            except Exception as e:
-                # Found live, 2026-08-14: this call had NO timeout at all before
-                # this fix — a genuinely hung upstream call (confirmed: a real
-                # tool call sat for 2+ minutes with nothing in the log, no
-                # timeout, no recovery) held self.lock forever, permanently
-                # wedging this upstream for every future call, single-upstream
-                # or combined. A timeout here means a hang gets treated the
-                # same as any other failure: marked broken, reconnected fresh.
-                self.known_broken = True
-                log.warning("[%s] list_tools failed, marking connection broken: %s", self.name, e)
-                return None
+            session = None if self.known_broken else self.session
+        if session is None:
+            return None
+        try:
+            # DRAIN EVERY PAGE (increment 1.5). Cursors are opaque, per-server tokens,
+            # so the downstream client's cursor cannot be forwarded here — this daemon
+            # aggregates several cursor spaces into one surface and therefore serves a
+            # complete snapshot instead. Ignoring nextCursor used to silently truncate
+            # any upstream that paginates.
+            #
+            # The drain is bounded STRUCTURALLY, not just by wall clock (panel, all
+            # three brands): a repeated cursor is a definite upstream bug, and the page
+            # ceiling catches the fresh-cursor-forever variant — the claude leg measured
+            # 48,075 pages accumulated in ten seconds from a cycling stub. Listing is
+            # discovery, so it gets the short connect timeout, not the 600-second budget
+            # that exists for real builds.
+            tools: list[types.Tool] = []
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            pages = 0
+            with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
+                while True:
+                    page = await session.list_tools(
+                        params=types.PaginatedRequestParams(cursor=cursor) if cursor else None)
+                    tools.extend(page.tools)
+                    pages += 1
+                    cursor = page.next_cursor
+                    if not cursor:
+                        return types.ListToolsResult(tools=tools)
+                    if cursor in seen_cursors:
+                        raise RuntimeError(
+                            f"cursor {cursor!r} repeated after {pages} pages — the upstream's "
+                            f"pagination cycles and can never finish")
+                    if pages >= LIST_MAX_PAGES:
+                        raise RuntimeError(
+                            f"tools/list still paginating after {LIST_MAX_PAGES} pages — "
+                            f"refusing to follow further")
+                    seen_cursors.add(cursor)
+        except Exception as e:
+            # A failed or unbounded listing is treated like any other break: marked
+            # broken (which also clears the session reference) and reconnected fresh.
+            await self._mark_broken(f"list_tools failed: {e}")
+            return None
 
     async def call_tool(self, tool_name: str, arguments: dict) -> types.CallToolResult | None:
         """Returns None if not connected — caller decides how to report that,
         since the aggregator needs a slightly different message than the
         single-upstream case (naming which upstream is down)."""
         async with self.lock:
-            if self.session is None:
+            if self.session is None or self.known_broken:
                 return None
             log.info("[%s] call_tool %s", self.name, tool_name)
             try:
                 with anyio.fail_after(CALL_TIMEOUT_SECONDS):
                     result = await self.session.call_tool(tool_name, arguments)
+            except MCPError as e:
+                # AN APPLICATION-LEVEL JSON-RPC ERROR IS THE CALLER'S ERROR, NOT A DEAD
+                # TRANSPORT. The codex leg of the phase-1 panel caught this: the upstream
+                # answering -32602 for an unknown tool proves the connection is HEALTHY,
+                # and the old blanket except tore the session down and told the client
+                # "not connected right now, retry" — for a call that would fail
+                # identically on every retry.
+                log.info("[%s] call_tool %s: upstream returned an error (connection kept): %s",
+                         self.name, tool_name, e.message)
+                return types.CallToolResult(
+                    content=[types.TextContent(
+                        type="text",
+                        text=f"[{self.name}] upstream error for {tool_name!r}: {e.message}")],
+                    is_error=True,
+                )
             except Exception as e:
                 # See list_tools' comment — same missing-timeout bug, same fix.
                 self.known_broken = True
+                self.session = None
                 log.warning("[%s] call_tool %s failed, marking connection broken: %s", self.name, tool_name, e)
                 return None
             if not isinstance(result, types.CallToolResult):
@@ -570,10 +631,11 @@ class Upstream:
             idle = time.monotonic() - getattr(self, "last_progress", time.monotonic())
             if idle > STALL_EXIT_SECONDS:
                 log.error("[%s] no connect attempt and no successful heartbeat for %.0fs — the "
-                          "reconnect loop is wedged, almost certainly blocked in stdio_client "
-                          "teardown waiting on an mcpbridge child that will not exit. Exiting "
-                          "so launchd restarts us; staying up would serve zero tools while "
-                          "every log line claimed we were connected.", self.name, idle)
+                          "reconnect loop made no progress. Two known causes: stdio_client "
+                          "teardown waiting on a child that will not exit, or the loop waiting "
+                          "on this upstream's own lock behind a wedged call. Exiting so launchd "
+                          "restarts us; staying up would serve zero tools while every log line "
+                          "claimed we were connected.", self.name, idle)
                 os._exit(75)
 
 
@@ -585,7 +647,11 @@ class Upstream:
         clicking) on the same timer — until a call proves it's broken, then
         goes back to reconnecting. In-process, never exits on its own; a
         genuine crash is what the process supervisor (launchd) is for."""
-        params = StdioServerParameters(command=self.command, args=self.args)
+        # The config's env map is ADDITIVE over the SDK's safe default set (a six-variable
+        # allowlist) — matching Claude Code's semantics for the same file shape. Passing
+        # spec env alone would strip PATH and HOME from the child.
+        child_env = {**get_default_environment(), **self.env} if self.env else None
+        params = StdioServerParameters(command=self.command, args=self.args, env=child_env)
         while True:
             if self.require_xcode_running and not _xcode_is_running():
                 log.info("[%s] Xcode not running, waiting", self.name)
@@ -657,6 +723,10 @@ class Upstream:
                                 log.warning("[%s] heartbeat list_tools failed, marking broken: %s", self.name, e)
                                 async with self.lock:
                                     self.known_broken = True
+                                    # Drop the public reference NOW — stdio teardown can
+                                    # wedge (see stall_watchdog), and until it finishes
+                                    # the old session must not be callable.
+                                    self.session = None
                                 break
                             # The approval prompt has been observed appearing
                             # AFTER a successful initialize() — requested
@@ -687,20 +757,28 @@ def _build_upstreams() -> list[Upstream]:
         raise SystemExit(f"{SERVER_NAME}: {e}")
     return [
         Upstream(name=s.name, command=s.command, args=s.args,
-                 require_xcode_running=s.require_xcode, prefix=s.prefix)
+                 require_xcode_running=s.require_xcode, prefix=s.prefix, env=s.env)
         for s in specs
     ]
 
 
-def _not_connected_result(detail: str) -> types.CallToolResult:
+def _not_connected_result(u: "Upstream") -> types.CallToolResult:
+    # The retry text is derived from the upstream's own quirks: telling a client that
+    # Xcode is being checked and its dialog clicked, for an upstream that has nothing to
+    # do with Xcode, is a lie the phase-1 panel reproduced verbatim.
+    if u.require_xcode_running:
+        how = ("checking Xcode is running and clicking its approval prompt if one is "
+               "showing")
+    else:
+        how = "restarting its child process"
     return types.CallToolResult(
         content=[
             types.TextContent(
                 type="text",
                 text=(
-                    f"xcode-mcp-front: {detail} This daemon retries on its own every few "
-                    "seconds (checking Xcode is running and clicking its approval prompt if "
-                    "one is showing) — a retry shortly should work without any manual action."
+                    f"{SERVER_NAME}: [{u.name}] not connected right now. This daemon "
+                    f"retries on its own every few seconds ({how}) — a retry shortly "
+                    "should work without any manual action."
                 ),
             )
         ],
@@ -710,8 +788,14 @@ def _not_connected_result(detail: str) -> types.CallToolResult:
 
 def build_server(upstreams: list[Upstream]) -> Server:
     single = len(upstreams) == 1
-    prefix_of = {u: (u.prefix if not single else "") for u in upstreams}
+    # Prefixes are honoured VERBATIM — the single-upstream override that forced "" here
+    # made the daemon and the validator disagree about the same file, and made adding a
+    # second server silently rename the first one's entire surface.
+    prefix_of = {u: u.prefix for u in upstreams}
     upstream_by_prefix = {prefix_of[u]: u for u in upstreams}
+    # Bare-name passthrough exists ONLY for the deployed env-var single mode, whose spec
+    # carries an explicitly empty prefix.
+    passthrough = upstreams[0] if single and upstreams[0].prefix == "" else None
 
     # EXPLICIT DISPATCH TABLE (increment 1.3): exposed name -> (upstream, bare upstream
     # name), rebuilt every time the surface is composed in on_list_tools. Consulted
@@ -736,15 +820,33 @@ def build_server(upstreams: list[Upstream]) -> Server:
         # Upstream.list_tools), so it never issues a nextCursor — and a cursor it never
         # issued cannot be honoured. Refusing beats forwarding it into upstream cursor
         # spaces it cannot belong to, which corrupted per-upstream pagination silently.
-        if params is not None and params.cursor:
-            raise ValueError(
+        if params is not None and params.cursor is not None:
+            # MCPError so both transport paths return the spec's INVALID_PARAMS with the
+            # message intact — a raised ValueError became code 0 on the 2025 path and a
+            # message-less "Internal server error" on the modern one (panel, measured by
+            # the claude leg on both protocol versions; empty-string cursor caught by
+            # codex — "" is as unissued as any other value).
+            raise MCPError(
+                types.INVALID_PARAMS,
                 f"{SERVER_NAME} serves its full tool list in one page and issued no cursor; "
                 f"got unexpected cursor {params.cursor!r}")
+        # Upstreams are listed CONCURRENTLY: each drain is independent, and the old
+        # sequential walk meant one slow upstream withheld every later upstream's tools
+        # for its whole timeout (panel: measured 23 seconds behind a single stalled stub).
+        results: dict[Upstream, types.ListToolsResult | None] = {}
+
+        async def _collect(u: Upstream) -> None:
+            results[u] = await u.list_tools(None)
+
+        async with anyio.create_task_group() as tg:
+            for u in upstreams:
+                tg.start_soon(_collect, u)
+
         all_tools: list[types.Tool] = []
         unavailable: list[str] = []
         new_dispatch: dict[str, tuple[Upstream, str]] = {}
         for u in upstreams:
-            result = await u.list_tools(None)
+            result = results.get(u)
             if result is None:
                 unavailable.append(u.name)
                 continue
@@ -753,6 +855,12 @@ def build_server(upstreams: list[Upstream]) -> Server:
                 bare = t.name
                 if prefix:
                     t = t.model_copy(update={"name": f"{prefix}{bare}"})
+                if t.name in new_dispatch:
+                    # Reachable since 1.5: an upstream mutating its list between drained
+                    # pages can hand back the same tool twice. First one wins; say so.
+                    log.warning("list_tools: duplicate exposed name %r from upstream %s — "
+                                "keeping the first occurrence", t.name, u.name)
+                    continue
                 new_dispatch[t.name] = (u, bare)
                 all_tools.append(t)
         dispatch.clear()
@@ -763,75 +871,116 @@ def build_server(upstreams: list[Upstream]) -> Server:
                         len(all_tools), ", ".join(unavailable))
         return types.ListToolsResult(tools=all_tools)
 
+    async def _refresh_upstream_dispatch(u: Upstream) -> bool:
+        """Re-list ONE upstream and fold its tools into the dispatch table. Returns
+        False when the upstream is unavailable."""
+        result = await u.list_tools(None)
+        if result is None:
+            return False
+        prefix = prefix_of[u]
+        for t in result.tools:
+            dispatch[f"{prefix}{t.name}"] = (u, t.name)
+        return True
+
     async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
+        # ROUTING IS DISPATCH-FIRST AND NEVER FORWARDS ON FAITH. The old prefix fallback
+        # forwarded any dispatch miss to whichever upstream owned the prefix — which
+        # would quietly bypass Phase 2's deny list and keep Phase 3's renamed tools
+        # callable under their old names (panel, codex leg). A miss now refreshes that
+        # one upstream's catalogue once (covering a call that arrives before the first
+        # tools/list) and refuses if the name still is not offered.
         name = params.name
-        target = None
-        tool_name = name
-        if name in dispatch:
-            target, tool_name = dispatch[name]
-        else:
-            for prefix, u in upstream_by_prefix.items():
-                if prefix and name.startswith(prefix):
-                    target = u
-                    tool_name = name[len(prefix) :]
-                    break
-        if target is None:
-            # single-upstream mode (no prefixes at all), or a multi-upstream
-            # call that somehow arrived unprefixed — route to the sole
-            # upstream if there's only one, otherwise this is a real error.
-            if single:
-                target = upstreams[0]
+        if name not in dispatch:
+            candidate = None
+            if passthrough is not None:
+                candidate = passthrough
             else:
+                for prefix, u in upstream_by_prefix.items():
+                    if prefix and name.startswith(prefix):
+                        candidate = u
+                        break
+            if candidate is None:
                 return types.CallToolResult(
                     content=[
                         types.TextContent(
                             type="text",
-                            text=f"xcode-mcp-front: tool name '{name}' doesn't match any known upstream prefix "
+                            text=f"{SERVER_NAME}: tool name '{name}' doesn't match any known upstream prefix "
                             f"({', '.join(p for p in upstream_by_prefix if p)})",
                         )
                     ],
                     is_error=True,
                 )
+            if candidate is passthrough:
+                # Env-var single mode serves the upstream's names verbatim, so there is
+                # no daemon-side catalogue to enforce; the upstream answers for itself.
+                result = await candidate.call_tool(name, params.arguments)
+                if result is None:
+                    return _not_connected_result(candidate)
+                return result
+            if not await _refresh_upstream_dispatch(candidate):
+                return _not_connected_result(candidate)
+            if name not in dispatch:
+                bare = name[len(prefix_of[candidate]):]
+                return types.CallToolResult(
+                    content=[
+                        types.TextContent(
+                            type="text",
+                            text=(
+                                f"{SERVER_NAME}: upstream '{candidate.name}' does not currently "
+                                f"offer '{bare}' — re-list tools for the current surface."
+                            ),
+                        )
+                    ],
+                    is_error=True,
+                )
 
+        target, tool_name = dispatch[name]
         result = await target.call_tool(tool_name, params.arguments)
         if result is None:
-            return _not_connected_result(f"[{target.name}] not connected right now.")
+            return _not_connected_result(target)
         return result
 
-    names = ", ".join(u.name for u in upstreams)
+    # THE INSTRUCTIONS ARE DERIVED FROM THE CONFIG, NOT ASSUMED. The old text described
+    # every surface as Apple's Xcode bridge — the panel booted a Python stub behind this
+    # daemon and read initialize text claiming it was `xcrun mcpbridge`. The mcpbridge
+    # guidance survives, but only when an upstream actually IS mcpbridge.
+    fronts_mcpbridge = any(
+        u.command == "xcrun" and "mcpbridge" in u.args for u in upstreams)
+    mcpbridge_para = (
+        "\n\nApple's own Xcode MCP bridge (`xcrun mcpbridge`) is one of the upstreams "
+        "here. You will likely also see other Xcode-adjacent MCP servers configured "
+        "alongside — commonly xcode-mcp-server (a third-party tool, Drew's) and "
+        "XcodeBuildMCP. That overlap is INTENTIONAL, not a conflict to resolve. If a "
+        "call here fails or behaves inconsistently, try the equivalent tool on one of "
+        "the others instead of giving up — and if one consistently works better or "
+        "worse for a task, say so out loud in your response; that is wanted "
+        "information."
+        if fronts_mcpbridge else "")
     if single:
+        u0 = upstreams[0]
+        shown = f"{u0.prefix}<tool>" if u0.prefix else "the upstream's own tool names, unprefixed"
         instructions = (
-            "This is a persistent proxy in front of Apple's own Xcode MCP bridge "
-            "(`xcrun mcpbridge`) — same tools it exposes, reached over HTTP instead of "
-            "each client spawning its own copy (that used to mean a separate Xcode "
-            "approval popup per client; this way it's approved once and stays up).\n\n"
+            f"This is a persistent HTTP proxy in front of one MCP server: {u0.name} "
+            f"(`{u0.command} {' '.join(u0.args)}`), serving {shown}. One approved "
+            "daemon stays up instead of each client spawning its own copy.\n\n"
             "If a call says 'not connected right now', this daemon is already retrying "
-            "on its own every few seconds — checking Xcode is running and clicking its "
-            "approval prompt if one is showing — so a short retry should work without "
-            "any manual action.\n\n"
-            "You will likely also see other Xcode-adjacent MCP servers configured "
-            "alongside this one — commonly named xcode-mcp-server (a third-party tool, "
-            "Drew's) and XcodeBuildMCP. That overlap is INTENTIONAL, not a conflict to "
-            "resolve or a sign something's misconfigured. Different tools cover the same "
-            "ground with different tradeoffs (this one needs Xcode's own approval once; "
-            "XcodeBuildMCP runs headless; xcode-mcp-server has its own run/screenshot "
-            "path). If a call here fails or behaves inconsistently, try the equivalent "
-            "tool on one of the others instead of giving up.\n\n"
-            "If you notice one of these consistently working better (or worse) than the "
-            "others for a given task, say so out loud in your response — that's wanted "
-            "information, not noise. It may be used later to deprioritize or hide the "
-            "less reliable option."
+            "on its own every few seconds, so a short retry should work without any "
+            f"manual action.{mcpbridge_para}"
         )
     else:
+        roster = "; ".join(
+            f"{u.name} (`{u.command} {' '.join(u.args)}`, tools prefixed `{u.prefix}`)"
+            for u in upstreams)
         instructions = (
-            f"This is a persistent proxy fronting MULTIPLE Xcode-adjacent MCP servers "
-            f"behind one endpoint: {names}. Every tool is prefixed with its upstream's "
-            f"name (e.g. `{upstreams[0].name}__SomeTool`) so two upstreams that happen to "
-            "expose a same-named tool can't collide or shadow each other — always use "
-            "the prefixed name shown in the tool list, never the bare upstream name.\n\n"
+            f"This is a persistent proxy fronting MULTIPLE MCP servers behind one "
+            f"endpoint: {roster}. Prefixes keep two upstreams' same-named tools from "
+            "colliding — always use the prefixed name shown in the tool list.\n\n"
             "If a call says 'not connected right now', that specific upstream is "
             "reconnecting on its own — the others are unaffected, since each upstream "
-            "has its own independent connection. A short retry should work."
+            "has its own independent connection. A short retry should work.\n\n"
+            "The tool list reflects the upstreams available AT THE MOMENT YOU LIST. If "
+            "an upstream named above is missing from the list, it is reconnecting; "
+            f"re-run tools/list to pick it up when it returns.{mcpbridge_para}"
         )
 
     return Server(
