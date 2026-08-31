@@ -93,6 +93,23 @@ red "jsonc gets the point-at-the-generated-file message, not a bare parse error"
 red "missing config file must fail as a missing file" 66 "cannot read" \
   python3 "$LOADER" validate "$SB/does-not-exist.json"
 
+# --- the prefix set must compose into an unambiguous surface (increment 1.3) ---
+# Two upstreams sharing a prefix would collide exposed names; a prefix that is a prefix
+# of another ('a__' and 'a__b__') makes routing 'a__b__tool' order-dependent. Both are
+# config mistakes and both are rejected at load, when the author can still fix them —
+# not at call time, when they surface as a misroute.
+printf '{"mcpServers": {"one": {"command": "c", "prefix": "x__"}, "two": {"command": "c", "prefix": "x__"}}}' > "$SB/dup-prefix.json"
+red "two upstreams with the same prefix are rejected" 65 "same prefix 'x__'" \
+  python3 "$LOADER" validate "$SB/dup-prefix.json"
+
+printf '{"mcpServers": {"a": {"command": "c"}, "abi": {"command": "c", "prefix": "a__b__"}}}' > "$SB/nested-prefix.json"
+red "a prefix that is a prefix of another is rejected as order-dependent" 65 "prefix of" \
+  python3 "$LOADER" validate "$SB/nested-prefix.json"
+
+printf '{"mcpServers": {"a": {"command": "c", "prefix": ""}, "b": {"command": "c"}}}' > "$SB/empty-prefix.json"
+red "an empty prefix beside another upstream is rejected (bare names would be unroutable)" 65 "empty prefix" \
+  python3 "$LOADER" validate "$SB/empty-prefix.json"
+
 # --- resolve: how the daemon picks its upstreams (increment 1.2) ---
 # The colon/comma env format is REPLACED, not deprecated: a set XCODE_MCP_FRONT_UPSTREAMS
 # is a hard error pointing at the file, because the old parser silently corrupted a colon

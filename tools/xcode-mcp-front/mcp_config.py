@@ -107,7 +107,38 @@ def load(path):
     servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
     if not isinstance(servers, dict) or not servers:
         raise ConfigError("%s has no non-empty mcpServers object" % path)
-    return [_parse_server(name, spec) for name, spec in servers.items()]
+    specs = [_parse_server(name, spec) for name, spec in servers.items()]
+    _check_prefixes(specs)
+    return specs
+
+
+def _check_prefixes(specs):
+    """The prefix set must compose into an unambiguous surface (increment 1.3).
+
+    Two upstreams sharing a prefix collide exposed names. A prefix that is a prefix of
+    another — 'a__' and 'a__b__' — makes routing 'a__b__tool' depend on iteration order.
+    An empty prefix beside another upstream exposes bare names that cannot be routed
+    back. All three are author mistakes; reject them at load, when the author can still
+    fix them, never at call time as a misroute."""
+    if len(specs) < 2:
+        return
+    seen = {}
+    for s in specs:
+        if s.prefix == "":
+            raise ConfigError(
+                "server '%s' has an empty prefix beside other upstreams — its bare tool "
+                "names could not be routed back to it" % s.name)
+        if s.prefix in seen:
+            raise ConfigError("servers '%s' and '%s' have the same prefix '%s' — their "
+                              "exposed names would collide" % (seen[s.prefix], s.name, s.prefix))
+        seen[s.prefix] = s.name
+    ordered = sorted(specs, key=lambda s: s.prefix)
+    for a, b in zip(ordered, ordered[1:]):
+        if b.prefix.startswith(a.prefix):
+            raise ConfigError(
+                "server '%s' prefix '%s' is a prefix of server '%s' prefix '%s' — routing "
+                "a name under the longer one would be order-dependent"
+                % (a.name, a.prefix, b.name, b.prefix))
 
 
 def resolve_specs(environ):

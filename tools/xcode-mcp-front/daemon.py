@@ -696,21 +696,36 @@ def build_server(upstreams: list[Upstream]) -> Server:
     prefix_of = {u: (u.prefix if not single else "") for u in upstreams}
     upstream_by_prefix = {prefix_of[u]: u for u in upstreams}
 
+    # EXPLICIT DISPATCH TABLE (increment 1.3): exposed name -> (upstream, bare upstream
+    # name), rebuilt every time the surface is composed in on_list_tools. Consulted
+    # FIRST on tools/call; the startswith() prefix walk below survives only as a
+    # fallback for a name that has not been listed yet in this daemon's lifetime.
+    # Prefix routing alone cannot survive the tool map (Phase 3): a mapped name that
+    # drops the prefix would be advertised and then rejected as unknown. The config
+    # loader already rejects the prefix sets that would make this table ambiguous
+    # (duplicates, prefixes of each other).
+    dispatch: dict[str, tuple[Upstream, str]] = {}
+
     async def on_list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
         all_tools: list[types.Tool] = []
         results_by_upstream: dict[str, list[types.Tool]] = {}
+        new_dispatch: dict[str, tuple[Upstream, str]] = {}
         for u in upstreams:
             result = await u.list_tools(params)
             prefix = prefix_of[u]
             upstream_tools = []
             for t in result.tools:
+                bare = t.name
                 if prefix:
-                    t = t.model_copy(update={"name": f"{prefix}{t.name}"})
+                    t = t.model_copy(update={"name": f"{prefix}{bare}"})
+                new_dispatch[t.name] = (u, bare)
                 upstream_tools.append(t)
             results_by_upstream[u.name] = upstream_tools
             all_tools.extend(upstream_tools)
+        dispatch.clear()
+        dispatch.update(new_dispatch)
         # In multi-upstream mode, ALL upstreams must be connected.  Serving a
         # partial tool list silently hides the missing upstream from the client
         # — it gets half the tools and has no idea.  Return zero tools and a
@@ -727,11 +742,14 @@ def build_server(upstreams: list[Upstream]) -> Server:
         name = params.name
         target = None
         tool_name = name
-        for prefix, u in upstream_by_prefix.items():
-            if prefix and name.startswith(prefix):
-                target = u
-                tool_name = name[len(prefix) :]
-                break
+        if name in dispatch:
+            target, tool_name = dispatch[name]
+        else:
+            for prefix, u in upstream_by_prefix.items():
+                if prefix and name.startswith(prefix):
+                    target = u
+                    tool_name = name[len(prefix) :]
+                    break
         if target is None:
             # single-upstream mode (no prefixes at all), or a multi-upstream
             # call that somehow arrived unprefixed — route to the sole
