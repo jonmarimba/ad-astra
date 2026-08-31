@@ -548,9 +548,19 @@ class Upstream:
                             f"refusing to follow further")
                     seen_cursors.add(cursor)
         except Exception as e:
-            # A failed or unbounded listing is treated like any other break: marked
-            # broken (which also clears the session reference) and reconnected fresh.
-            await self._mark_broken(f"list_tools failed: {e}")
+            # REPORT UNAVAILABILITY; NEVER ADJUDICATE THE CONNECTION FROM HERE. This
+            # ran _mark_broken for one afternoon and took the deployed daemon down:
+            # clients poll tools/list constantly, each poll's drain timed out against
+            # the approval-gated mcpbridge (its first list blocks until the dialog is
+            # answered), and every timeout tore the connection down — WITHDRAWING the
+            # approval prompt before the clicker could answer it. That is the exact
+            # 2026-08-30 cancel-your-own-approval pathology, reintroduced through a
+            # new door and reproduced against a stall-tools stub under client load.
+            # The heartbeat in connection_manager — which owns the click-while-blocked
+            # helper — is the SOLE authority on connection state; a client-triggered
+            # drain that fails only means "nothing to serve from here right now".
+            log.info("[%s] list_tools unavailable this round (connection state untouched): %s",
+                     self.name, e or type(e).__name__)
             return None
 
     async def call_tool(self, tool_name: str, arguments: dict) -> types.CallToolResult | None:
@@ -738,7 +748,19 @@ class Upstream:
                             if AUTO_ALLOW:
                                 await _click_allow_if_present()
             except Exception as e:
-                log.warning("[%s] connect attempt failed (will retry): %s", self.name, e)
+                # Unwrap ExceptionGroups: "unhandled errors in a TaskGroup (1 sub-exception)"
+                # names nothing and cost a live debugging session on 2026-08-31.
+                causes = []
+                stack = [e]
+                while stack:
+                    cur = stack.pop()
+                    subs = getattr(cur, "exceptions", None)
+                    if subs:
+                        stack.extend(subs)
+                    else:
+                        causes.append(f"{type(cur).__name__}: {cur}")
+                log.warning("[%s] connect attempt failed (will retry): %s", self.name,
+                            "; ".join(causes))
 
             async with self.lock:
                 self.session = None
