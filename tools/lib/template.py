@@ -200,7 +200,14 @@ def cmd_list(_):
     for name, meta in sorted(t.items()):
         print(f"── {name}")
         print(f"     {meta.get('description','')}")
-        print(f"     tools: {', '.join(meta.get('tools', []))}")
+        if meta.get("templates"):
+            print(f"     members: {', '.join(meta['templates'])}")
+            try:
+                print(f"     tools (resolved): {', '.join(resolve_tools(t, name))}")
+            except ValueError as e:
+                print(f"     tools (UNRESOLVABLE): {e}")
+        else:
+            print(f"     tools: {', '.join(meta.get('tools', []))}")
     return 0
 
 
@@ -324,8 +331,13 @@ def cmd_status(args):
             pass
     print(f"repo: {repo}")
     print(f"  MCP servers present: {', '.join(sorted(mcp)) or 'none'}")
-    for name, meta in sorted(load()["templates"].items()):
-        want = [t for t in meta.get("tools", []) if t.startswith("mcp-")]
+    templates = load()["templates"]
+    for name, meta in sorted(templates.items()):
+        try:
+            resolved = resolve_tools(templates, name)
+        except ValueError:
+            resolved = meta.get("tools", [])
+        want = [t for t in resolved if t.startswith("mcp-")]
         have = [t for t in want if t.replace("mcp-", "", 1) in mcp]
         if want:
             state = "complete" if len(have) == len(want) else (
