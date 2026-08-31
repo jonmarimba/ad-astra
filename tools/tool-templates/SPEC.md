@@ -43,6 +43,23 @@ Two facts learned while fixing `xcode-mcp-front` today bear directly on this des
 
 **Approval serialisation is per-Xcode and does not scale.** Xcode shows one approval dialog at a time and each front daemon needs roughly six seconds of exclusive dialog time to answer its own. Two daemons serialise inside the fifteen-second connect timeout and both get through, which is verified. Three would need about eighteen seconds and would likely fail, presenting as timeouts that look like Xcode refusing to serve tools. **A template design that spins up a front daemon per tool group will hit this ceiling**, so either the connect timeout grows with the number of daemons, or approval handling moves into one shared place rather than being first-come-first-served per daemon. This number is derived from the observed six seconds, not measured at three daemons; measure before relying on it.
 
+## Step one: a generic wrapping MCP driven by `_wrapped_mcps.json`
+
+Jonathan's first milestone, 2026-08-31: "duplicate what we did with Andrew + Apple's Xcode MCP in a generic MCP. So we can have `_wrapped_mcps.json`, which can be inspired by the mcp setup for claude code."
+
+So the combined daemon stops being an Xcode tool that happens to take a second upstream, and becomes a general one-endpoint-many-upstreams front that is told what to wrap by a file. The underscore in the filename is the mogenerator convention already: that file is written by a template and overwritten on update, with a sibling the repo owns.
+
+**The format follows Claude Code's, because it already exists and he already reads it.** His `.mcp.json` today is `{"mcpServers": {"<name>": {...}}}`, where a stdio entry carries `command`, `args` and `env`, and an http entry carries `url`. Reusing that shape means no second mental model, and it means an entry can be moved between the two files by copy and paste.
+
+The wrapper needs two things Claude Code's format does not carry, and they should be additive rather than a fork of it:
+
+- **A prefix**, defaulting to the server name, since that is exactly what `xcode__` and `drews__` already do.
+- **Quirks**, as a named list per upstream. This is where `requires_app: "Xcode"` and the approval-dialog clicker go. **Keeping them per-upstream is the whole point**: today `require_xcode` is a positional boolean in the core parser, so every upstream is described in Xcode's terms whether or not it has anything to do with Xcode. As a quirk list, a template that wraps three servers gives the dialog handling to the one that needs it and the other two never inherit it.
+
+**The format it replaces is not merely ugly, it is lossy.** Upstreams are configured today through one environment variable holding `name:require_xcode:command:arg1,arg2;name2:...`, parsed with `split(":", 3)`. A command path containing a colon runs into the argument field. An argument containing a comma splits into two arguments. There is no way to express an environment variable for a child process at all, which the Claude Code format has and which any real server eventually needs. Those are silent corruptions rather than errors, so the move to JSON fixes a defect and is not a matter of taste.
+
+Everything else in the daemon is already generic and stays: the reconnect loop, the heartbeat that catches a dead upstream before a client does, the stall watchdog that exits so launchd restarts it, and tool-name prefixing with a real error for an unrecognised name.
+
 ## Open questions Jonathan left open on purpose
 
 - **How to compose the Mac set.** Three candidate shapes: wrap all three servers behind one front; wrap the two already wrapped together and then wrap that wrapper alongside `MacControlMCP.app`; or wrap the existing two and let `MacControlMCP.app` stand separately. Nothing decided.
