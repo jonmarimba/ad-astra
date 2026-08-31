@@ -54,6 +54,30 @@ def load():
         return {"templates": {}}
 
 
+def resolve_tools(templates, name, _stack=None):
+    """The COMPOSED tool list: this template's own tools plus its member templates',
+    transitively, in member-first order, deduplicated. Composition is the mechanism the
+    whole design rests on (SPEC: a Mac+Swift template is simply its members) — so a
+    cycle and an unknown member are loud, named refusals, never a silent partial
+    install. Raises ValueError; callers print it and exit 65."""
+    _stack = _stack or []
+    if name in _stack:
+        raise ValueError("template cycle: " + " -> ".join(_stack + [name]))
+    meta = templates.get(name)
+    if meta is None:
+        suffix = f" (member of '{_stack[-1]}')" if _stack else ""
+        raise ValueError(f"no such template: {name}{suffix}")
+    tools = []
+    for member in meta.get("templates", []):
+        for t in resolve_tools(templates, member, _stack + [name]):
+            if t not in tools:
+                tools.append(t)
+    for t in meta.get("tools", []):
+        if t not in tools:
+            tools.append(t)
+    return tools
+
+
 def tool_dir(name):
     d = TOOLS / name
     return d if d.is_dir() else None
@@ -157,7 +181,14 @@ def tools_still_claimed(repo, excluding):
     for name in installed_templates(repo):
         if name == excluding:
             continue
-        claimed.update(t.get(name, {}).get("tools", []))
+        try:
+            # Claims are TRANSITIVE: a composed template claims its members' tools, or
+            # uninstalling a sibling would remove tools the wrapper still needs.
+            claimed.update(resolve_tools(t, name))
+        except ValueError:
+            # A recorded template the catalogue no longer resolves still claims its
+            # FLAT list — under-claiming here is what deletes another template's tools.
+            claimed.update(t.get(name, {}).get("tools", []))
     return claimed
 
 
@@ -175,11 +206,19 @@ def cmd_list(_):
 
 def cmd_show(args):
     name = args[0] if args else ""
-    meta = load()["templates"].get(name)
+    templates = load()["templates"]
+    meta = templates.get(name)
     if not meta:
         print(f"no such template: {name}")
         return 66
     print(json.dumps(meta, indent=2))
+    try:
+        resolved = resolve_tools(templates, name)
+    except ValueError as e:
+        print(f"template.py: {e}", file=sys.stderr)
+        return 65
+    if meta.get("templates"):
+        print(f"resolved tools (own + member templates): {', '.join(resolved)}")
     return 0
 
 
@@ -196,10 +235,16 @@ def _target(args):
 
 def _apply(verb, args):
     name = args[0] if args and not args[0].startswith("-") else ""
-    meta = load()["templates"].get(name)
+    templates = load()["templates"]
+    meta = templates.get(name)
     if not meta:
         print(f"no such template: {name}", file=sys.stderr)
         return 66
+    try:
+        member_tools = resolve_tools(templates, name)
+    except ValueError as e:
+        print(f"template.py: {e}", file=sys.stderr)
+        return 65
     repo = _target(args)
 
     # UNINSTALL ONLY WHAT THE RECORD SAYS IS INSTALLED.
@@ -228,10 +273,10 @@ def _apply(verb, args):
     ok_n = fail_n = kept_n = 0
     print(f"{verb}ing template '{name}' -> {repo}")
     keep = tools_still_claimed(repo, name) if verb == "uninstall" else set()
-    for t in meta.get("tools", []):
+    for t in member_tools:
         if t in keep:
             others = [n for n in installed_templates(repo) if n != name
-                      and t in load()["templates"].get(n, {}).get("tools", [])]
+                      and t in resolve_tools(load()["templates"], n)]
             print(f"  KEPT    {t} — still required by: {', '.join(others)}")
             kept_n += 1
             continue
