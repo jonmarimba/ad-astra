@@ -50,18 +50,44 @@ assert_rc(){ # usage: assert_rc <want-rc> "<label>" cmd args...
   [ "$got" = "$want" ] && pass "$label (rc=$got)" || { fail "$label (want rc=$want got rc=$got)"; sed 's/^/        /' "$SB/.rc.err" >&2; }
 }
 
-red(){ # RED control — rule 2. The command MUST fail (nonzero rc), and fail FOR THE RIGHT REASON —
-  # not because the shell couldn't even find/run it. 126 (found, not executable) and 127 (command
-  # not found) mean a typo'd path or missing binary, not the code under test rejecting bad input;
-  # counting those as a passed RED control would let a broken invocation register as "tautology
-  # guard confirmed" without ever exercising the real code. Found by convocation review (claude
-  # leg), 2026-08-14. usage: red "<label>" cmd args...
-  local label="$1"; shift
-  "$@" >/dev/null 2>&1; local rc=$?
+red(){ # RED control — rule 2. The command MUST fail with the EXPECTED exit code AND say the
+  # EXPECTED diagnostic. The old form accepted almost any nonzero exit and discarded all output,
+  # so a control "passed" when the command died for a missing file or a typo'd flag — it proved
+  # something broke, never that the guard under test rejected the input for the claimed reason.
+  # Replaced 2026-08-31 (tool-templates increment 0.1; test-lib.sh watched the old form pass a
+  # wrong-reason failure before this landed). usage:
+  #   red "<label>" <want-rc> "<expected-diagnostic>" cmd args...
+  # <want-rc> is the exact nonzero exit code the guard produces; the diagnostic is a literal
+  # substring looked for in the command's combined stdout+stderr.
+  local label="${1-}" want_rc="${2-}" want_msg="${3-}"
+  case "$want_rc" in
+    ''|*[!0-9]*)
+      fail "red: '$label' — second arg '$want_rc' is not an exit code. Old-style call? New usage: red label rc diagnostic cmd..."
+      return ;;
+    0)
+      fail "red: '$label' — expected rc 0 is not a RED control (the command is supposed to fail)"
+      return ;;
+    126|127)
+      fail "red: '$label' — rc $want_rc means the invocation itself is broken (not found/not executable); a RED control cannot expect it"
+      return ;;
+  esac
+  if [ -z "$want_msg" ]; then
+    fail "red: '$label' — empty expected diagnostic (tautology guard: grep -F '' matches any output, fix the caller)"
+    return
+  fi
+  shift 3
+  "$@" >"$SB/.red.out" 2>"$SB/.red.err"; local rc=$?
+  cat "$SB/.red.out" "$SB/.red.err" >"$SB/.red.all"
   if [ "$rc" -eq 0 ]; then
     fail "RED control DID NOT FAIL (tautology): $label"
   elif [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ]; then
     fail "RED control failed for the WRONG reason (rc=$rc, command not found/executable — fix the invocation, this proves nothing): $label"
+  elif [ "$rc" -ne "$want_rc" ]; then
+    fail "RED control failed with rc=$rc, expected rc=$want_rc — wrong failure, this proves nothing: $label"
+    sed 's/^/        /' "$SB/.red.all" >&2
+  elif ! grep -qF -- "$want_msg" "$SB/.red.all"; then
+    fail "RED control failed (rc=$rc) but never said '$want_msg' — wrong failure, this proves nothing: $label"
+    sed 's/^/        /' "$SB/.red.all" >&2
   else
     pass "red: $label"
   fi
