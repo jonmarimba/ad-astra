@@ -135,6 +135,42 @@ printf '{"mcpServers": {"a": {"command": "c", "prefix": ""}, "b": {"command": "c
 red "an empty prefix beside another upstream is rejected (bare names would be unroutable)" 65 "empty prefix" \
   python3 "$LOADER" validate "$SB/empty-prefix.json"
 
+# --- the sieve: per-server block lists (Phase 2; deny-list only, per Jonathan) ---
+blockcfg="$SB/blockcfg.json"
+cat > "$blockcfg" <<'EOF'
+{"mcpServers": {"x": {"command": "c", "block": [
+  {"tool": "SwitchScheme", "why": "scheme switching is owned by drews per the 2026-08-31 decision"}
+]}}}
+EOF
+out="$SB/blockcfg.out"
+python3 "$LOADER" validate "$blockcfg" >"$out" 2>&1
+assert_eq "0" "$?" "a block entry with tool and why validates"
+assert_contains "$out" "SwitchScheme" "the blocked tool is shown in the validation listing"
+
+# why is DATA and it is REQUIRED at authoring time: a jsonc comment cannot be enforced,
+# and a block without a stated cause is the entry that outlives its reason and narrows
+# the surface forever (SPEC, 'the config records decisions').
+printf '{"mcpServers": {"x": {"command": "c", "block": [{"tool": "T"}]}}}' > "$SB/nowhy.json"
+red "validate rejects a block entry without a why" 65 "block entry for 'T' on server 'x' has no 'why'" \
+  python3 "$LOADER" validate "$SB/nowhy.json"
+
+printf '{"mcpServers": {"x": {"command": "c", "block": [{"tool": "T", "why": ""}]}}}' > "$SB/emptywhy.json"
+red "validate rejects an empty why the same way" 65 "block entry for 'T' on server 'x' has no 'why'" \
+  python3 "$LOADER" validate "$SB/emptywhy.json"
+
+printf '{"mcpServers": {"x": {"command": "c", "block": [{"why": "w"}]}}}' > "$SB/notool.json"
+red "a block entry without a tool name is rejected" 65 "block entry on server 'x' has no 'tool'" \
+  python3 "$LOADER" validate "$SB/notool.json"
+
+# At daemon RUNTIME the same missing why is a warning, not a startup death: rejecting at
+# load would fail the repo, at startup, for a sentence someone forgot in astra
+# (ROADMAP 2.2). The block still applies.
+out="$SB/lenient.out"
+env -u XCODE_MCP_FRONT_UPSTREAMS XCODE_MCP_FRONT_MCP_INFO="$SB/nowhy.json" \
+  python3 "$LOADER" resolve >"$out" 2>&1
+assert_eq "0" "$?" "resolve accepts the missing-why config instead of failing the repo at startup"
+assert_contains "$out" "no 'why'" "and it says out loud what the authoring check would have rejected"
+
 # --- resolve: how the daemon picks its upstreams (increment 1.2) ---
 # The colon/comma env format is REPLACED, not deprecated: a set XCODE_MCP_FRONT_UPSTREAMS
 # is a hard error pointing at the file, because the old parser silently corrupted a colon

@@ -464,7 +464,7 @@ class Upstream:
     share a tool name can't collide."""
 
     def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool,
-                 prefix: str = "", env: dict | None = None):
+                 prefix: str = "", env: dict | None = None, blocks: dict | None = None):
         self.name = name
         # Exposed-name prefix, VERBATIM from the spec. The daemon used to force "" for a
         # sole upstream regardless of what the config declared, so the validator printed
@@ -474,6 +474,12 @@ class Upstream:
         # explicitly, which keeps the deployed passthrough unprefixed.
         self.prefix = prefix
         self.env = dict(env) if env else None
+        # The sieve (Phase 2): bare tool name -> the recorded reason it is withheld.
+        # Deny-list only, per Jonathan. Applied when the surface is composed AND at
+        # tools/call — a listing filter alone is decoration, because the model knows
+        # names from its own context and previous sessions.
+        self.blocks: dict[str, str] = dict(blocks) if blocks else {}
+        self._stale_blocks_reported: set[str] = set()
         # Watchdog input: bumped on every connect attempt and every successful heartbeat.
         # Initialised here so the watchdog never reads a missing attribute on a slow start.
         self.last_progress = time.monotonic()
@@ -779,7 +785,8 @@ def _build_upstreams() -> list[Upstream]:
         raise SystemExit(f"{SERVER_NAME}: {e}")
     return [
         Upstream(name=s.name, command=s.command, args=s.args,
-                 require_xcode_running=s.require_xcode, prefix=s.prefix, env=s.env)
+                 require_xcode_running=s.require_xcode, prefix=s.prefix, env=s.env,
+                 blocks=s.blocks)
         for s in specs
     ]
 
@@ -864,6 +871,13 @@ def build_server(upstreams: list[Upstream]) -> Server:
             for u in upstreams:
                 tg.start_soon(_collect, u)
 
+        # THE EVALUATION ORDER IS FIXED AND THIS LOOP IS ITS DECLARATION (increment 2.3):
+        # per upstream — availability first (an unavailable upstream is reported, and its
+        # blocks are inert), then the source-qualified sieve while composing, then
+        # (Phase 3) renames and description rewrites, then global uniqueness, then
+        # publish. Blocks apply AFTER the availability check on purpose: the round-one
+        # colloquium's catastrophic case was the sieve meeting the old blank-on-missing
+        # logic and serving nothing from anywhere.
         all_tools: list[types.Tool] = []
         unavailable: list[str] = []
         new_dispatch: dict[str, tuple[Upstream, str]] = {}
@@ -873,8 +887,12 @@ def build_server(upstreams: list[Upstream]) -> Server:
                 unavailable.append(u.name)
                 continue
             prefix = prefix_of[u]
+            offered = set()
             for t in result.tools:
                 bare = t.name
+                offered.add(bare)
+                if bare in u.blocks:
+                    continue  # sieved; the call path refuses it too, with the why
                 if prefix:
                     t = t.model_copy(update={"name": f"{prefix}{bare}"})
                 if t.name in new_dispatch:
@@ -885,6 +903,14 @@ def build_server(upstreams: list[Upstream]) -> Server:
                     continue
                 new_dispatch[t.name] = (u, bare)
                 all_tools.append(t)
+            # A block naming a tool the upstream does not offer is a line protecting
+            # nothing, and a version bump is exactly when that happens. Once per entry,
+            # so a 5-second poll loop does not turn staleness into log spam.
+            for stale in sorted(set(u.blocks) - offered - u._stale_blocks_reported):
+                u._stale_blocks_reported.add(stale)
+                log.warning("[%s] block entry for '%s' matched nothing the upstream "
+                            "offers — the decision it records no longer applies; "
+                            "fix or remove it in the template", u.name, stale)
         dispatch.clear()
         dispatch.update(new_dispatch)
         if unavailable:
@@ -901,6 +927,8 @@ def build_server(upstreams: list[Upstream]) -> Server:
             return False
         prefix = prefix_of[u]
         for t in result.tools:
+            if t.name in u.blocks:
+                continue  # the sieve applies on every path that builds dispatch entries
             dispatch[f"{prefix}{t.name}"] = (u, t.name)
         return True
 
@@ -939,6 +967,18 @@ def build_server(upstreams: list[Upstream]) -> Server:
                 if result is None:
                     return _not_connected_result(candidate)
                 return result
+            bare = name[len(prefix_of[candidate]):]
+            if bare in candidate.blocks:
+                # The sieve at tools/call (increment 2.1): hiding a tool from the listing
+                # while leaving it callable would make the block decoration. The refusal
+                # carries the recorded why — that is what the mandatory field is FOR.
+                return types.CallToolResult(
+                    content=[types.TextContent(
+                        type="text",
+                        text=(f"{SERVER_NAME}: '{bare}' on upstream '{candidate.name}' is "
+                              f"blocked on this surface — {candidate.blocks[bare]}"))],
+                    is_error=True,
+                )
             if not await _refresh_upstream_dispatch(candidate):
                 return _not_connected_result(candidate)
             if name not in dispatch:

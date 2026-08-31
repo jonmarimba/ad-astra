@@ -29,7 +29,13 @@ cat > "$SB/_mcp_info.json" <<EOF
   "mcpServers": {
     "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong", "--tool", "build=alpha-built", "--tool", "secret=env:ASTRA_STUB_SECRET", "--tool", "bad=error:kaboom-from-alpha"], "env": {"ASTRA_STUB_SECRET": "sekrit-env-value"}},
     "beta":  {"command": "python3", "args": ["$STUB", "--name", "beta", "--tool", "ping=beta-pong"]},
-    "pager": {"command": "python3", "args": ["$STUB", "--name", "pager", "--page-size", "1", "--tool", "first=page-one", "--tool", "second=page-two"]}
+    "pager": {"command": "python3", "args": ["$STUB", "--name", "pager", "--page-size", "1", "--tool", "first=page-one", "--tool", "second=page-two"]},
+    "muzzled": {"command": "python3", "args": ["$STUB", "--name", "muzzled", "--tool", "a=muzzled-a", "--tool", "b=muzzled-b"],
+      "block": [
+        {"tool": "a", "why": "coherence: alpha owns this job on this surface"},
+        {"tool": "b", "why": "limiting: withheld on purpose"},
+        {"tool": "ghost-tool", "why": "stale entry — the upstream never offered this; the warning test wants it"}
+      ]}
   }
 }
 EOF
@@ -81,6 +87,28 @@ mcp_call tools/call '{"name":"alpha__ping","arguments":{}}' > "$SB/alpha.out"
 assert_contains "$SB/alpha.out" "alpha-pong" "alpha__ping routes to the alpha stub"
 mcp_call tools/call '{"name":"beta__ping","arguments":{}}' > "$SB/beta.out"
 assert_contains "$SB/beta.out" "beta-pong" "beta__ping routes to the beta stub, same bare name"
+
+# --- Phase 2, the sieve: blocked tools are neither listed nor callable ---
+# Blocking EVERY tool on one upstream empties only that upstream — the round-one
+# colloquium's catastrophic case was the sieve meeting the old blank-on-missing logic
+# and serving nothing from anywhere.
+assert_not_contains "$SB/list.out" "muzzled__a" "a blocked tool is absent from the listing"
+assert_not_contains "$SB/list.out" "muzzled__b" "blocking every tool on one upstream empties that upstream"
+assert_contains "$SB/list.out" "alpha__ping" "and the other upstreams keep serving through it"
+
+# A listing filter alone is decoration: the model knows names from its own context and
+# previous sessions, so the call path must refuse too, and say WHY — the recorded reason
+# is the whole point of the mandatory why field.
+mcp_call tools/call '{"name":"muzzled__a","arguments":{}}' > "$SB/muzzled.out"
+assert_contains "$SB/muzzled.out" "blocked on this surface" \
+  "a blocked tool is refused at tools/call, not just hidden from tools/list"
+assert_contains "$SB/muzzled.out" "alpha owns this job" "the refusal carries the recorded why"
+assert_not_contains "$SB/muzzled.out" "muzzled-a" "the blocked call never reached the upstream"
+
+# A block naming a tool the upstream does not offer is a line protecting nothing, and a
+# version bump is exactly when that happens: it surfaces in the log rather than rotting.
+assert_contains "$SB/daemon.log" "block entry for 'ghost-tool'" \
+  "a stale block entry is reported by name"
 
 # --- increment 1.5: a paginating upstream is drained into a full snapshot ---
 # Cursors are per-server opaque tokens, so the one downstream cursor used to be handed
@@ -143,7 +171,7 @@ cat > "$SB/_mcp_degraded.json" <<EOF
 {
   "mcpServers": {
     "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong"]},
-    "gamma": {"command": "python3", "args": ["-c", "import sys; sys.exit(1)"]},
+    "gamma": {"command": "python3", "args": ["-c", "import sys; sys.exit(1)"], "block": [{"tool": "anything", "why": "a block on a DEAD upstream must be inert — the sieve applies after the availability check"}]},
     "delta": {"command": "python3", "args": ["$STUB", "--name", "delta"]},
     "looper": {"command": "python3", "args": ["$STUB", "--name", "looper", "--page-loop", "--tool", "trap=x"]}
   }
@@ -188,7 +216,7 @@ assert_not_contains "$SB/dlist.out" "delta__" \
 mcp_call tools/call '{"name":"alpha__ping","arguments":{}}' > "$SB/alpha2.out"
 assert_contains "$SB/alpha2.out" "alpha-pong" "calls to the healthy upstream still route while gamma is down"
 
-mcp_call tools/call '{"name":"gamma__anything","arguments":{}}' > "$SB/gamma.out"
+mcp_call tools/call '{"name":"gamma__something","arguments":{}}' > "$SB/gamma.out"
 assert_contains "$SB/gamma.out" "[gamma] not connected right now" \
   "a call to the dead upstream names IT as the unavailable one"
 assert_contains "$SB/gamma.out" '"isError":true' "and is an error result, not a silent success"

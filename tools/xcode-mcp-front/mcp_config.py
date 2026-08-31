@@ -36,7 +36,7 @@ KNOWN_QUIRKS = frozenset({"require_xcode"})
 # six-variable allowlist, and Drew's server is configured through XCODEMCP_ALLOWED_FOLDERS,
 # so rejecting env left that mechanism unreachable.
 UNIMPLEMENTED_FIELDS = ("cwd", "url", "type", "transport", "headers")
-IMPLEMENTED_FIELDS = frozenset({"command", "args", "prefix", "quirks", "env"})
+IMPLEMENTED_FIELDS = frozenset({"command", "args", "prefix", "quirks", "env", "block"})
 TOP_LEVEL_FIELDS = frozenset({"mcpServers"})
 
 
@@ -45,20 +45,24 @@ class ConfigError(ValueError):
 
 
 class UpstreamSpec:
-    def __init__(self, name, command, args, prefix, quirks, env=None):
+    def __init__(self, name, command, args, prefix, quirks, env=None, blocks=None):
         self.name = name
         self.command = command
         self.args = args
         self.prefix = prefix
         self.quirks = quirks
         self.env = dict(env) if env else {}
+        # The sieve (Phase 2): bare upstream tool name -> the stated reason it is
+        # withheld. Deny-list only, per Jonathan: "KISS it. I'd rather have a collision
+        # or a little less safety than miss features."
+        self.blocks = dict(blocks) if blocks else {}
 
     @property
     def require_xcode(self):
         return "require_xcode" in self.quirks
 
 
-def _parse_server(name, spec):
+def _parse_server(name, spec, strict=True):
     if not isinstance(spec, dict):
         raise ConfigError("server %r must be an object, got %s" % (name, type(spec).__name__))
     for field in UNIMPLEMENTED_FIELDS:
@@ -96,12 +100,56 @@ def _parse_server(name, spec):
             isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
         raise ConfigError("server '%s': 'env' must be an object of string values" % name)
 
-    return UpstreamSpec(name, command, list(args), prefix, frozenset(quirks), env)
+    blocks = _parse_blocks(name, spec.get("block", []), strict)
+
+    return UpstreamSpec(name, command, list(args), prefix, frozenset(quirks), env, blocks)
 
 
-def load(path):
+def _parse_blocks(name, raw, strict):
+    """Sieve entries: [{"tool": ..., "why": ...}] -> {tool: why}.
+
+    `why` is DATA and it is REQUIRED — a jsonc comment cannot be enforced or read back,
+    and a block without a stated cause is the entry that outlives its reason and narrows
+    the surface forever. Enforcement lives at AUTHORING time (strict=True, the validate
+    CLI): the daemon's own load (strict=False) warns and applies the block anyway,
+    because failing a repo at daemon startup over a sentence someone forgot in astra is
+    the wrong place to hurt (ROADMAP 2.2)."""
+    if not isinstance(raw, list) or not all(isinstance(b, dict) for b in raw):
+        raise ConfigError("server '%s': 'block' must be a list of objects" % name)
+    blocks = {}
+    for b in raw:
+        tool = b.get("tool")
+        if not isinstance(tool, str) or not tool:
+            raise ConfigError("block entry on server '%s' has no 'tool' name" % name)
+        for key in b:
+            if key not in ("tool", "why"):
+                raise ConfigError("unknown field '%s' in block entry for '%s' on server '%s'"
+                                  % (key, tool, name))
+        why = b.get("why")
+        if not isinstance(why, str) or not why.strip():
+            msg = ("block entry for '%s' on server '%s' has no 'why' — every withheld "
+                   "tool carries its stated reason, or the block outlives its cause"
+                   % (tool, name))
+            if strict:
+                raise ConfigError(msg)
+            print("mcp_config: WARNING: %s (applying the block anyway; fix the template)"
+                  % msg, file=sys.stderr)
+            why = "(no reason recorded — fix the template)"
+        if tool in blocks:
+            raise ConfigError("duplicate block entry for '%s' on server '%s'" % (tool, name))
+        blocks[tool] = why
+    return blocks
+
+
+def load(path, strict=True):
     """-> list of UpstreamSpec, in the file's order. Raises ConfigError (bad content) or
-    OSError (unreadable file); the caller chooses the exit code."""
+    OSError (unreadable file); the caller chooses the exit code.
+
+    strict=True is the AUTHORING contract (the validate CLI, template checks): a sieve
+    entry without a why is a hard error. strict=False is the DAEMON contract
+    (resolve_specs): the same omission warns on stderr and the block still applies,
+    because failing a repo at daemon startup over a sentence someone forgot in astra is
+    the wrong place to hurt (ROADMAP 2.2)."""
     try:
         raw = open(path, encoding="utf-8").read()
     except OSError as e:
@@ -123,7 +171,7 @@ def load(path):
     for key in cfg:
         if key not in TOP_LEVEL_FIELDS:
             raise ConfigError("unknown top-level field '%s' in %s" % (key, path))
-    specs = [_parse_server(name, spec) for name, spec in servers.items()]
+    specs = [_parse_server(name, spec, strict) for name, spec in servers.items()]
     _check_prefixes(specs)
     return specs
 
@@ -175,7 +223,7 @@ def resolve_specs(environ):
             "command path containing ':' and an argument containing ',', silently.")
     info = environ.get("XCODE_MCP_FRONT_MCP_INFO")
     if info:
-        return load(info)
+        return load(info, strict=False)  # daemon runtime: warn on a missing why, still serve
     quirks = frozenset({"require_xcode"}) if environ.get(
         "XCODE_MCP_FRONT_REQUIRE_XCODE", "1") == "1" else frozenset()
     return [UpstreamSpec(
@@ -193,6 +241,8 @@ def _print_specs(upstreams):
         env = " env=" + ",".join(sorted(u.env)) if u.env else ""
         print("%s  prefix=%s  quirks=%s%s  %s %s" % (u.name, u.prefix, quirks, env,
                                                      u.command, " ".join(u.args)))
+        for tool, why in sorted(u.blocks.items()):
+            print("    blocked: %s — %s" % (tool, why))
 
 
 def main(argv):
