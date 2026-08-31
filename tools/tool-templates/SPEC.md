@@ -60,6 +60,30 @@ The wrapper needs two things Claude Code's format does not carry, and they shoul
 
 Everything else in the daemon is already generic and stays: the reconnect loop, the heartbeat that catches a dead upstream before a client does, the stall watchdog that exits so launchd restarts it, and tool-name prefixing with a real error for an unrecognised name.
 
+## The sieve: per-upstream tool filtering
+
+Jonathan, 2026-08-31: each wrapped MCP gets a list of blocked tools that are not offered to the controlling LLM — which he calls the user throughout. Two distinct purposes, and they want different defaults.
+
+**Coherence.** When two wrapped servers cover the same ground, the sieve decides which one does the job, so the user is not offered two ways to do one thing and made to choose. Note that prefixing has already removed any literal name clash — `xcode__` and `drews__` cannot collide — so this is about semantic overlap and choice paralysis, not namespace conflict.
+
+**Limiting.** Sometimes a capability should simply not be available. His example: not wanting the user able to switch schemes. Block it.
+
+### What the protocol already gives us
+
+Verified against a live `mcpbridge` on 2026-08-31: `initialize` returns `serverInfo` carrying a name and a version — `{"name": "xcode-tools", "version": "24952"}` — so a sieve entry can be pinned to a version. It also advertises `capabilities.tools.listChanged: true`. **The protocol states outright that the tool list is a moving target and offers a notification when it moves.** A sieve that reads the list once at startup is therefore knowingly wrong; it should re-apply on `listChanged`.
+
+### Three things that decide whether this works
+
+**A deny-list fails open, and for the limiting purpose that is the wrong direction.** If a server adds a tool after the block-list was written, it is offered by default. For the coherence purpose that is fine and even desirable. For the limiting purpose it is a silent failure: the capability that was deliberately withheld reappears on an upstream update and nothing says so. So the sieve probably needs both forms — a deny-list for coherence and an allow-list for limiting — or a deny-list plus an explicit "anything not named here is new, tell me" mode. **This is a policy choice, not an implementation detail, and it is Jonathan's to make.**
+
+**The sieve has to be applied at `tools/call`, not only at `tools/list`.** Filtering the listing alone hides a tool from discovery while leaving it callable by anyone who knows the name, and the controlling LLM knows names from its own context, from documentation, and from previous sessions. For the coherence purpose a listing filter is enough. For the limiting purpose a listing filter is decoration.
+
+**Stale entries must surface rather than rot.** A blocked tool that the upstream no longer offers is a line that now protects nothing, and a version bump is exactly when that happens. The wrapper knows both the configured list and the live list, so it can say so. Silence here is how a sieve comes to look protective years after it stopped being.
+
+### Expressing collisions as ownership rather than as blocks
+
+For the coherence purpose, writing per-server deny-lists means that adding a third server that also covers the same ground requires editing every other server's list, and getting one wrong reintroduces the duplicate. Saying instead that a given capability is **owned** by one named upstream puts the decision in one place and makes a third server's arrival a single edit. Both shapes are expressible in the same file; this is a recommendation, not a decision.
+
 ## Open questions Jonathan left open on purpose
 
 - **How to compose the Mac set.** Three candidate shapes: wrap all three servers behind one front; wrap the two already wrapped together and then wrap that wrapper alongside `MacControlMCP.app`; or wrap the existing two and let `MacControlMCP.app` stand separately. Nothing decided.
