@@ -31,9 +31,13 @@ import sys
 KNOWN_QUIRKS = frozenset({"require_xcode"})
 # Claude Code fields the daemon does not pass through yet. Named individually so the error
 # can say "unimplemented" — which invites implementing — rather than "unknown", which reads
-# as a typo. type/transport/headers travel with url in real .mcp.json files.
-UNIMPLEMENTED_FIELDS = ("env", "cwd", "url", "type", "transport", "headers")
-IMPLEMENTED_FIELDS = frozenset({"command", "args", "prefix", "quirks"})
+# as a typo. type/transport/headers travel with url in real .mcp.json files. env moved to
+# the implemented set in the Phase 1 hardening: the SDK's default child environment is a
+# six-variable allowlist, and Drew's server is configured through XCODEMCP_ALLOWED_FOLDERS,
+# so rejecting env left that mechanism unreachable.
+UNIMPLEMENTED_FIELDS = ("cwd", "url", "type", "transport", "headers")
+IMPLEMENTED_FIELDS = frozenset({"command", "args", "prefix", "quirks", "env"})
+TOP_LEVEL_FIELDS = frozenset({"mcpServers"})
 
 
 class ConfigError(ValueError):
@@ -41,12 +45,13 @@ class ConfigError(ValueError):
 
 
 class UpstreamSpec:
-    def __init__(self, name, command, args, prefix, quirks):
+    def __init__(self, name, command, args, prefix, quirks, env=None):
         self.name = name
         self.command = command
         self.args = args
         self.prefix = prefix
         self.quirks = quirks
+        self.env = dict(env) if env else {}
 
     @property
     def require_xcode(self):
@@ -86,7 +91,12 @@ def _parse_server(name, spec):
             raise ConfigError("unknown quirk '%s' on server '%s' (known: %s)"
                               % (q, name, ", ".join(sorted(KNOWN_QUIRKS))))
 
-    return UpstreamSpec(name, command, list(args), prefix, frozenset(quirks))
+    env = spec.get("env", {})
+    if not isinstance(env, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+        raise ConfigError("server '%s': 'env' must be an object of string values" % name)
+
+    return UpstreamSpec(name, command, list(args), prefix, frozenset(quirks), env)
 
 
 def load(path):
@@ -107,6 +117,12 @@ def load(path):
     servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
     if not isinstance(servers, dict) or not servers:
         raise ConfigError("%s has no non-empty mcpServers object" % path)
+    # Same policy as per-server keys, at the root: Phase 2's sieve and Phase 3's map land
+    # here, and a typo'd stanza that validates silently is a limiting policy that never
+    # applies (all three phase-1 panel brands flagged this gap).
+    for key in cfg:
+        if key not in TOP_LEVEL_FIELDS:
+            raise ConfigError("unknown top-level field '%s' in %s" % (key, path))
     specs = [_parse_server(name, spec) for name, spec in servers.items()]
     _check_prefixes(specs)
     return specs
@@ -174,8 +190,9 @@ def resolve_specs(environ):
 def _print_specs(upstreams):
     for u in upstreams:
         quirks = ",".join(sorted(u.quirks)) or "-"
-        print("%s  prefix=%s  quirks=%s  %s %s" % (u.name, u.prefix, quirks, u.command,
-                                                   " ".join(u.args)))
+        env = " env=" + ",".join(sorted(u.env)) if u.env else ""
+        print("%s  prefix=%s  quirks=%s%s  %s %s" % (u.name, u.prefix, quirks, env,
+                                                     u.command, " ".join(u.args)))
 
 
 def main(argv):

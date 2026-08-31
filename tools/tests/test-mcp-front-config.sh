@@ -53,7 +53,8 @@ assert_contains "$out" "/opt/we:ird/bin/serve" "a colon inside the command path 
 assert_contains "$out" "a,b,c" "a comma inside one argument stays one argument"
 
 # --- unimplemented Claude Code fields are REJECTED BY NAME, never ignored ---
-for field in env cwd url; do
+# (env graduated to implemented in the Phase 1 hardening and has its own tests below)
+for field in cwd url; do
   bad="$SB/has-$field.json"
   python3 - "$ok_cfg" "$bad" "$field" <<'PY'
 import json, sys
@@ -92,6 +93,30 @@ red "jsonc gets the point-at-the-generated-file message, not a bare parse error"
 
 red "missing config file must fail as a missing file" 66 "cannot read" \
   python3 "$LOADER" validate "$SB/does-not-exist.json"
+
+# --- env is implemented, not rejected (Phase 1 hardening, claude-leg finding 9) ---
+# The daemon's own docstring names XCODEMCP_ALLOWED_FOLDERS as Drew's auth mechanism,
+# and the SDK's default child environment is a six-variable allowlist, so with env
+# rejected there was NO way to configure it at all.
+envcfg="$SB/envcfg.json"
+cat > "$envcfg" <<'EOF'
+{"mcpServers": {"withenv": {"command": "c", "env": {"ASTRA_TEST_VAL": "sekrit"}}}}
+EOF
+out="$SB/envcfg.out"
+python3 "$LOADER" validate "$envcfg" >"$out" 2>&1
+assert_eq "0" "$?" "a server with an env map validates"
+assert_contains "$out" "ASTRA_TEST_VAL" "the env keys are shown in the validation listing"
+
+printf '{"mcpServers": {"x": {"command": "c", "env": {"A": 1}}}}' > "$SB/badenv.json"
+red "env values that are not strings are rejected" 65 "'env' must be an object of string values" \
+  python3 "$LOADER" validate "$SB/badenv.json"
+
+# --- unknown TOP-LEVEL keys are rejected too (all three phase-1 panel brands) ---
+# Phase 2's sieve and Phase 3's map land at top level; a typo'd stanza that validates
+# silently is a limiting policy that never applies.
+printf '{"mcpServers": {"x": {"command": "c"}}, "denyLisp": []}' > "$SB/topkey.json"
+red "an unknown top-level key is rejected by name" 65 "unknown top-level field 'denyLisp'" \
+  python3 "$LOADER" validate "$SB/topkey.json"
 
 # --- the prefix set must compose into an unambiguous surface (increment 1.3) ---
 # Two upstreams sharing a prefix would collide exposed names; a prefix that is a prefix
