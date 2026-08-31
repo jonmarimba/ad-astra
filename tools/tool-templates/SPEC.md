@@ -85,7 +85,7 @@ An **addition** breaks nothing and resolves everything, and can still ruin the s
 
 So "additive is safe" is wrong, and it is wrong in the specific way that matters: **the addition case cannot be detected by checking the config at all.** Checking that every sieve and map entry still resolves catches renames and removals and is blind to this. Detecting it requires re-running the cross-server comparison against the new version and asking what NEW tool now overlaps something already offered — which is the semantic pass, since Xcode's new tool need not be named anything like Drew's.
 
-That makes the comparison script part of the version-change response rather than a thing someone runs manually when they remember. The mismatch warning therefore has two halves, and they are found by different means:
+Jonathan's refinement, same conversation: on seeing a new version, **suggest that the user run the collision tool** rather than having the wrapper run it itself. That is the better middle. The wrapper notices the version change cheaply and says so; the comparison, which spawns both servers and spends a model call, stays opt-in and stays where a human can judge which collisions actually matter. Auto-running it would put an expensive, judgement-laden step on a path that fires whenever an upstream updates. The mismatch warning therefore has two halves, and they are found by different means:
 
 - **entries that no longer resolve** — from the config, cheap, catches renames and removals;
 - **new tools that collide with something already offered** — from a fresh cross-server comparison, needs the model pass, catches additions.
