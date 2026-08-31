@@ -60,6 +60,24 @@ The wrapper needs two things Claude Code's format does not carry, and they shoul
 
 Everything else in the daemon is already generic and stays: the reconnect loop, the heartbeat that catches a dead upstream before a client does, the stall watchdog that exits so launchd restarts it, and tool-name prefixing with a real error for an unrecognised name.
 
+## Build order, per Jonathan 2026-08-31
+
+1. **Glue two MCPs together from a Claude-Code-shaped `mcp.json(c)` file.** Nothing else. The wrapper reads the file, connects the upstreams, prefixes and serves. This is the existing combined daemon with its positional environment-variable config replaced.
+2. **Add the disallow list.**
+3. **Add the name mapping.**
+
+**Record the compatible upstream version in step one, not later.** Two Xcodes are installed on this machine right now — `Xcode.app` at 26.6, currently selected, and `Xcode-beta.app` at 27.0 — and the beta carries a lot that has not been tried. A wrapped server's tool list is a property of its version, so a config that names upstreams without recording which version was verified against them cannot tell "this tool is gone" from "you are pointed at a different Xcode." Both servers already supply what is needed: `initialize` returns `serverInfo`, giving `xcode-tools 24952` for Apple's bridge and `Xcode MCP Server 1.29.1` for Drew's.
+
+### The comparison script
+
+Built 2026-08-31, ahead of the rest, because the sieve and the map both need its output before they can be written: `tools/tool-templates/mcp_tools.py`.
+
+`list` prints one server's tools with its version. `compare` puts two side by side and reports exact name collisions and the same-words-different-order kind — Jonathan's `window_open` against `open_window` — which is what string comparison can honestly find. `--summarize` hands both annotated lists to the default `llm` model for the pass string comparison cannot do: pairs that do the same job under unrelated names. Note that `llm` takes its prompt positionally; `-p` is the codex and qwen convention and means something else here.
+
+It refuses two things on purpose, both learned the same day. A server that answers `initialize` and never answers `tools/list` is reported as a timeout with the approval dialog named as the likely cause, never as a server with zero tools. And `compare` refuses to run at all if either side failed to list, because a server whose tools are unknown shows up as having no overlaps, which reads as "no collisions" and is the opposite of what is known.
+
+**A worthwhile extension: point it at the running daemon rather than at a fresh child.** The config shape already carries `url` for http upstreams. Comparing through the daemon's already-approved endpoint would sidestep the per-process approval entirely, so listing Apple's tools would stop raising a dialog at whoever is at the keyboard.
+
 ## The sieve: per-upstream tool filtering
 
 Jonathan, 2026-08-31: each wrapped MCP gets a list of blocked tools that are not offered to the controlling LLM — which he calls the user throughout. Two distinct purposes, and they want different defaults.
