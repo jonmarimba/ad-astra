@@ -1,6 +1,10 @@
 # Tool templates — composable per-repo MCP and tooling setups
 
-Author: GhOST-Claude, 2026-08-31, from Jonathan's design as dictated. Status: **specification, shelved.** Nothing here is built. The name `tool-templates` is provisional.
+Author: GhOST-Claude, 2026-08-31, from Jonathan's design as dictated. Status: **specification under review.** The name `tool-templates` is provisional.
+
+**CORRECTION, 2026-08-31, found by the round-one colloquium and verified independently: this document said "nothing here is built" and that was wrong.** A template system already exists in this repo — `tools/lib/template.py`, `tools/lib/templates.json` defining `swift-ios`, `legal-pdf`, `kicker-dev` and `writing`, `tools/lib/astra-install.sh` which places everything under `<repo>/.astra/` with per-file hashes in `.astra/manifest.json`, the vendored `astra-update`, and `tools/lib/registry.py`. Seven `tools/mcp-*/tool.json` files already describe MCP tools with name, server, dependencies and provides — and a repo-wide grep finds **zero** code that reads them.
+
+So the work is **finishing what exists**, not building a parallel system. Writing a second template mechanism beside the first is the "too many systems of record" failure Jonathan named directly, arriving before either half is done. Sections below that read as greenfield design should be read as requirements against `template.py` and `tool.json`, and two of the "open questions left open on purpose" are already answered in code: overlap between templates is de-duplicated by `template.py`'s claim tracking, and installed templates are recorded in `.astra/manifest.json`. Only the version half of that question is genuinely open.
 
 ## What this is for
 
