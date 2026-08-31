@@ -41,7 +41,10 @@ from pathlib import Path
 
 ASTRA = Path(__file__).resolve().parent.parent.parent
 TOOLS = ASTRA / "tools"
-TEMPLATES = TOOLS / "lib" / "templates.json"
+# ASTRA_TEMPLATES_JSON exists for the tests: they need a template whose member is
+# guaranteed to fail without editing the real catalogue. Tools still resolve from the
+# real tools/ tree either way.
+TEMPLATES = Path(os.environ.get("ASTRA_TEMPLATES_JSON") or (TOOLS / "lib" / "templates.json"))
 
 
 def load():
@@ -239,7 +242,18 @@ def _apply(verb, args):
         else:
             print(f"  FAILED  {t}: {why}")
             fail_n += 1
-    record_template(repo, name, add=(verb == "install"))
+    # ONLY A CLEAN RUN CHANGES THE RECORD. Recording an install whose members failed
+    # would claim tools this template never placed; unrecording an uninstall whose
+    # members failed would orphan the tools that remain. Installers are idempotent
+    # re-runs, so the remedy for a partial failure is: fix the cause, run the same verb
+    # again, and the record changes when the run is clean. (Found by the round-one
+    # colloquium, codex leg — record_template ran unconditionally here.)
+    if fail_n == 0:
+        record_template(repo, name, add=(verb == "install"))
+    else:
+        print(f"NOT recording this {verb}: {fail_n} member(s) failed, and the record "
+              f"must describe what actually happened. Fix the failure and re-run "
+              f"(installers are idempotent).", file=sys.stderr)
     extra = f", {kept_n} kept (shared with another template)" if kept_n else ""
     print(f"\n{ok_n} ok, {fail_n} failed{extra}")
     return 1 if fail_n else 0
