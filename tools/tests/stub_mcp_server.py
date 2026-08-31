@@ -43,6 +43,9 @@ def main():
     ap.add_argument("--banner", default=None)
     ap.add_argument("--notify-before-reply", action="store_true")
     ap.add_argument("--stall-tools", action="store_true")
+    ap.add_argument("--emit-list-changed-on-call", default=None, metavar="TOOL",
+                    help="emit notifications/tools/list_changed before answering a call "
+                         "to TOOL (deterministic trigger for notification-relay tests)")
     ap.add_argument("--page-size", type=int, default=0)
     ap.add_argument("--page-loop", action="store_true")
     a = ap.parse_args()
@@ -107,6 +110,8 @@ def main():
             params = msg.get("params") or {}
             name = params.get("name")
             if name in tools:
+                if a.emit_list_changed_on_call == name:
+                    send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
                 reply = tools[name]
                 if reply.startswith("env:"):
                     reply = os.environ.get(reply[4:], "<unset:%s>" % reply[4:])

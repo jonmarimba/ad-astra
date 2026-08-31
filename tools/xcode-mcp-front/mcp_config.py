@@ -36,7 +36,8 @@ KNOWN_QUIRKS = frozenset({"require_xcode"})
 # six-variable allowlist, and Drew's server is configured through XCODEMCP_ALLOWED_FOLDERS,
 # so rejecting env left that mechanism unreachable.
 UNIMPLEMENTED_FIELDS = ("cwd", "url", "type", "transport", "headers")
-IMPLEMENTED_FIELDS = frozenset({"command", "args", "prefix", "quirks", "env", "block", "map"})
+IMPLEMENTED_FIELDS = frozenset({"command", "args", "prefix", "quirks", "env", "block", "map",
+                                "version"})
 TOP_LEVEL_FIELDS = frozenset({"mcpServers"})
 
 
@@ -46,7 +47,12 @@ class ConfigError(ValueError):
 
 class UpstreamSpec:
     def __init__(self, name, command, args, prefix, quirks, env=None, blocks=None, maps=None,
-                 from_env=False):
+                 from_env=False, version=None):
+        # The recorded COMPATIBLE version (serverInfo.version at authoring time), and it
+        # is ADVISORY (SPEC: "a version mismatch warns; it never refuses"). Exact string
+        # comparison only — serverInfo.version is opaque, so 'newer'/'older' cannot be
+        # classified without a per-upstream comparator (ROADMAP 4.2).
+        self.version = version
         # from_env marks the legacy single-upstream env contract, the ONLY spec allowed
         # the daemon's bare-name passthrough: env specs cannot carry blocks or maps, so
         # the passthrough cannot bypass them there. A FILE config with an empty prefix
@@ -112,6 +118,11 @@ def _parse_server(name, spec, strict=True):
             isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
         raise ConfigError("server '%s': 'env' must be an object of string values" % name)
 
+    version = spec.get("version")
+    if version is not None and not isinstance(version, str):
+        raise ConfigError("server '%s': 'version' must be a string (serverInfo.version "
+                          "is opaque text, not a number)" % name)
+
     blocks = _parse_blocks(name, spec.get("block", []), strict)
     maps = _parse_maps(name, spec.get("map", []), strict)
     for tool in maps:
@@ -129,7 +140,7 @@ def _parse_server(name, spec, strict=True):
                 "name cannot be both refused and served" % (entry.exposed, name))
 
     return UpstreamSpec(name, command, list(args), prefix, frozenset(quirks), env, blocks,
-                        maps)
+                        maps, version=version)
 
 
 class MapEntry:
@@ -333,8 +344,9 @@ def _print_specs(upstreams):
     for u in upstreams:
         quirks = ",".join(sorted(u.quirks)) or "-"
         env = " env=" + ",".join(sorted(u.env)) if u.env else ""
-        print("%s  prefix=%s  quirks=%s%s  %s %s" % (u.name, u.prefix, quirks, env,
-                                                     u.command, " ".join(u.args)))
+        ver = " version=" + u.version if u.version else ""
+        print("%s  prefix=%s  quirks=%s%s%s  %s %s" % (u.name, u.prefix, quirks, env, ver,
+                                                       u.command, " ".join(u.args)))
         for tool, why in sorted(u.blocks.items()):
             print("    blocked: %s — %s" % (tool, why))
         for tool, entry in sorted(u.maps.items()):

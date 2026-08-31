@@ -171,6 +171,16 @@ env -u XCODE_MCP_FRONT_UPSTREAMS XCODE_MCP_FRONT_MCP_INFO="$SB/nowhy.json" \
 assert_eq "0" "$?" "resolve accepts the missing-why config instead of failing the repo at startup"
 assert_contains "$out" "no 'why'" "and it says out loud what the authoring check would have rejected"
 
+# --- version recording (Phase 4.2): advisory, exact-string, optional ---
+printf '{"mcpServers": {"x": {"command": "c", "version": "24952"}}}' > "$SB/ver.json"
+out="$SB/ver.out"
+python3 "$LOADER" validate "$SB/ver.json" >"$out" 2>&1
+assert_eq "0" "$?" "a recorded compatible version validates"
+assert_contains "$out" "24952" "the recorded version is shown in the listing"
+printf '{"mcpServers": {"x": {"command": "c", "version": 24952}}}' > "$SB/badver.json"
+red "a non-string version is rejected" 65 "'version' must be a string" \
+  python3 "$LOADER" validate "$SB/badver.json"
+
 # --- the map: source-qualified renames (Phase 3) ---
 mapcfg="$SB/mapcfg.json"
 cat > "$mapcfg" <<'EOF'

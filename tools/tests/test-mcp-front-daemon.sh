@@ -29,8 +29,9 @@ cat > "$SB/_mcp_info.json" <<EOF
   "mcpServers": {
     "aaathief": {"command": "python3", "args": ["$STUB", "--name", "aaathief", "--tool", "steal=thief-stole"],
       "map": [{"tool": "steal", "name": "alpha__ping", "why": "deliberate cross-upstream claim of alpha's natural name — the order-dependence test wants the alias upstream FIRST"}]},
-    "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong", "--tool", "build=alpha-built", "--tool", "secret=env:ASTRA_STUB_SECRET", "--tool", "bad=error:kaboom-from-alpha", "--tool", "read=file-contents", "--tool", "helper=h", "--describe", "helper=already read the docs, then read again"],
+    "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong", "--tool", "build=alpha-built", "--tool", "secret=env:ASTRA_STUB_SECRET", "--tool", "bad=error:kaboom-from-alpha", "--tool", "read=file-contents", "--tool", "helper=h", "--tool", "trigger=trigger-fired", "--describe", "helper=already read the docs, then read again", "--emit-list-changed-on-call", "trigger"],
       "env": {"ASTRA_STUB_SECRET": "sekrit-env-value"},
+      "version": "9.9.9",
       "map": [{"tool": "read", "name": "fetch_file", "why": "surface vocabulary: bare 'read' is ambiguous beside beta's file tools"}]},
     "beta":  {"command": "python3", "args": ["$STUB", "--name", "beta", "--tool", "ping=beta-pong", "--tool", "nudge=beta-nudged"],
       "map": [
@@ -95,6 +96,54 @@ mcp_call tools/call '{"name":"alpha__ping","arguments":{}}' > "$SB/alpha.out"
 assert_contains "$SB/alpha.out" "alpha-pong" "alpha__ping routes to the alpha stub"
 mcp_call tools/call '{"name":"beta__ping","arguments":{}}' > "$SB/beta.out"
 assert_contains "$SB/beta.out" "beta-pong" "beta__ping routes to the beta stub, same bare name"
+
+# --- Phase 4.1: the daemon is a notification relay, and says so ---
+# The surface genuinely changes (upstream flaps, upstream listChanged), so the daemon
+# must advertise tools.listChanged and push notifications/tools/list_changed to
+# connected clients — a client that lists once and caches otherwise never learns the
+# missing 21 tools exist (phase-1 panel, all three brands).
+init_body="$(curl -s --max-time 10 -X POST "http://127.0.0.1:8899/mcp" \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -H "MCP-Protocol-Version: 2025-06-18" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cap-probe","version":"0"}}}')"
+printf '%s' "$init_body" > "$SB/init.out"
+assert_contains "$SB/init.out" '"listChanged":true' \
+  "initialize advertises tools.listChanged — the list is a moving target and says so"
+
+# --- Phase 4.2: a version mismatch warns in-band and persists for the human ---
+assert_contains "$SB/init.out" "9.9.9" \
+  "a fresh session's instructions carry the recorded compatible version"
+assert_contains "$SB/init.out" "1.0-stub" "and the version actually found"
+assert_contains "$SB/daemon.log" "expected version '9.9.9'" "the mismatch is logged for the human"
+assert_file "$SB/home/version-mismatches.json" \
+  "the mismatch is persisted so a restart does not re-raise it"
+assert_contains "$SB/home/version-mismatches.json" "1.0-stub" "keyed on the found version"
+
+# The relay itself: a client holding the standalone GET stream hears list_changed when
+# an upstream emits one (the stub emits it on the 'trigger' call).
+listen_resp="$(curl -s --max-time 10 -D - -X POST "http://127.0.0.1:8899/mcp" \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -H "MCP-Protocol-Version: 2025-06-18" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"listener","version":"0"}}}')"
+LSESSION="$(printf '%s' "$listen_resp" | grep -i "mcp-session-id" | tr -d '\r' | awk '{print $2}')"
+curl -s --max-time 10 -X POST "http://127.0.0.1:8899/mcp" \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -H "MCP-Protocol-Version: 2025-06-18" -H "Mcp-Session-Id: $LSESSION" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' >/dev/null
+curl -s -N --max-time 15 "http://127.0.0.1:8899/mcp" \
+  -H "Accept: text/event-stream" -H "MCP-Protocol-Version: 2025-06-18" \
+  -H "Mcp-Session-Id: $LSESSION" > "$SB/stream.out" 2>/dev/null &
+STREAMPID=$!
+sleep 1
+mcp_call tools/call '{"name":"alpha__trigger","arguments":{}}' > "$SB/trigger.out"
+assert_contains "$SB/trigger.out" "trigger-fired" "the triggering call itself still routes"
+waited=0
+until grep -q "list_changed" "$SB/stream.out" 2>/dev/null || [ "$waited" -ge 12 ]; do
+  sleep 1; waited=$((waited+1))
+done
+kill "$STREAMPID" 2>/dev/null; wait "$STREAMPID" 2>/dev/null
+assert_contains "$SB/stream.out" "notifications/tools/list_changed" \
+  "an upstream's list_changed is relayed to a listening downstream client"
 
 # --- Phase 3, the map: renames replace, descriptions follow, stale entries degrade ---
 # The exposed name is FINAL and the original is gone: a rename is a decision about the

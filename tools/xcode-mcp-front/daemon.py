@@ -114,6 +114,8 @@ Env overrides — both modes:
 
 import asyncio
 import contextlib
+import functools
+import json
 import logging
 import os
 import re
@@ -129,7 +131,7 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, get_default_environment, stdio_client
 from mcp.shared.exceptions import MCPError
 from mcp.server.lowlevel import Server
-from mcp.server.lowlevel.server import ServerRequestContext
+from mcp.server.lowlevel.server import NotificationOptions, ServerRequestContext
 
 
 def _load_config_file() -> None:
@@ -466,7 +468,12 @@ class Upstream:
 
     def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool,
                  prefix: str = "", env: dict | None = None, blocks: dict | None = None,
-                 maps: dict | None = None, from_env: bool = False):
+                 maps: dict | None = None, from_env: bool = False,
+                 expected_version: str | None = None):
+        # The recorded compatible serverInfo.version, advisory only: a mismatch warns
+        # (in-band via instructions, once-persisted for the human) and NEVER refuses —
+        # an Xcode update taking the whole surface down is the worse failure (SPEC).
+        self.expected_version = expected_version
         self.name = name
         # Exposed-name prefix, VERBATIM from the spec. The daemon used to force "" for a
         # sole upstream regardless of what the config declared, so the validator printed
@@ -503,6 +510,15 @@ class Upstream:
         self.known_broken = False
 
 
+    async def _on_upstream_message(self, message) -> None:
+        """The upstream notification tap (4.1): the protocol says the tool list is a
+        moving target and offers listChanged when it moves — a relay that drops it
+        leaves every downstream cache stale."""
+        if isinstance(message, types.ToolListChangedNotification):
+            log.info("[%s] upstream announced tools/list_changed — relaying downstream",
+                     self.name)
+            _fire_surface_changed(f"{self.name} listChanged")
+
     async def _mark_broken(self, why: str) -> None:
         """Set known_broken AND drop the public session reference immediately. The codex
         leg of the phase-1 panel caught the gap: known_broken was set but the session
@@ -513,6 +529,7 @@ class Upstream:
             self.known_broken = True
             self.session = None
         log.warning("[%s] marking connection broken: %s", self.name, why)
+        _fire_surface_changed(f"{self.name} broken")
 
     async def list_tools(self, params: types.PaginatedRequestParams | None) -> types.ListToolsResult | None:
         """Returns None when this upstream is DISCONNECTED or the call failed — which is a
@@ -694,13 +711,26 @@ class Upstream:
             self.last_progress = time.monotonic()
             try:
                 async with stdio_client(params) as (read, write):
-                    async with ClientSession(read, write) as session:
+                    async with ClientSession(read, write,
+                                             message_handler=self._on_upstream_message) as session:
                         with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
-                            await session.initialize()
+                            init = await session.initialize()
+                        # Version check (4.2): exact-string, advisory. serverInfo.version
+                        # is opaque, so no newer/older classification — say what was
+                        # expected, what answered, and keep serving.
+                        server_info = getattr(init, "server_info", None) or getattr(
+                            init, "serverInfo", None)
+                        found = getattr(server_info, "version", None)
+                        if self.expected_version and found and found != self.expected_version:
+                            _fire_version_mismatch(self.name, self.expected_version, found)
                         async with self.lock:
                             self.session = session
                             self.known_broken = False
                         log.info("[%s] connected — serving until this breaks", self.name)
+                        # The surface just grew: tell downstream clients holding a cached
+                        # list (4.1 — the phase-1 panel's permanently-cached-partial-
+                        # surface failure).
+                        _fire_surface_changed(f"{self.name} connected")
                         self.last_progress = time.monotonic()
                         while not self.known_broken:
                             await anyio.sleep(RECONNECT_POLL_SECONDS)
@@ -756,6 +786,7 @@ class Upstream:
                                     # wedge (see stall_watchdog), and until it finishes
                                     # the old session must not be callable.
                                     self.session = None
+                                _fire_surface_changed(f"{self.name} heartbeat broken")
                                 break
                             # The approval prompt has been observed appearing
                             # AFTER a successful initialize() — requested
@@ -799,9 +830,27 @@ def _build_upstreams() -> list[Upstream]:
     return [
         Upstream(name=s.name, command=s.command, args=s.args,
                  require_xcode_running=s.require_xcode, prefix=s.prefix, env=s.env,
-                 blocks=s.blocks, maps=s.maps, from_env=s.from_env)
+                 blocks=s.blocks, maps=s.maps, from_env=s.from_env,
+                 expected_version=s.version)
         for s in specs
     ]
+
+
+# Phase 4 plumbing: Upstream instances announce surface changes (connect, break, an
+# upstream's own listChanged) and version mismatches through these hooks; build_server
+# registers the consumers. Module-level because Upstream predates the server object.
+_surface_changed_callbacks: list = []
+_version_mismatch_callbacks: list = []
+
+
+def _fire_surface_changed(reason: str) -> None:
+    for cb in list(_surface_changed_callbacks):
+        cb(reason)
+
+
+def _fire_version_mismatch(name: str, expected: str, found: str) -> None:
+    for cb in list(_version_mismatch_callbacks):
+        cb(name, expected, found)
 
 
 def _rewrite_refs(text: str, table: dict) -> str:
@@ -883,9 +932,33 @@ def build_server(upstreams: list[Upstream]) -> Server:
     # (duplicates, prefixes of each other).
     dispatch: dict[str, tuple[Upstream, str]] = {}
 
+    # Downstream notification registry (4.1). ServerSession is a per-request proxy over
+    # a stable per-client Connection whose standalone channel carries server-initiated
+    # notifications; remembering the latest proxy per connection lets the broadcaster
+    # reach every client that has ever made a request. The `_connection` read is the one
+    # private attribute this daemon touches — the SDK offers no public registry, and the
+    # alternative was shipping no relay at all.
+    downstream_sessions: dict = {}
+
+    def _remember_downstream(ctx: ServerRequestContext) -> None:
+        conn = getattr(ctx.session, "_connection", None)
+        if conn is not None:
+            downstream_sessions[id(conn)] = ctx.session
+
+    async def broadcast_list_changed() -> None:
+        for key, session in list(downstream_sessions.items()):
+            try:
+                # A client that never opens its standalone GET stream never drains this
+                # channel; the timeout keeps one such client from wedging the broadcast.
+                with anyio.move_on_after(1):
+                    await session.send_tool_list_changed()
+            except Exception:
+                downstream_sessions.pop(key, None)  # connection gone; forget it
+
     async def on_list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
+        _remember_downstream(ctx)
         # A DISCONNECTED upstream is reported and skipped; it must NOT blank the others
         # (increment 1.4 — the defect all three colloquium brands found independently:
         # this used to serve zero tools for EVERY upstream when any one was missing, so
@@ -1054,6 +1127,7 @@ def build_server(upstreams: list[Upstream]) -> Server:
         return True
 
     async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
+        _remember_downstream(ctx)
         # ROUTING IS DISPATCH-FIRST AND NEVER FORWARDS ON FAITH. The old prefix fallback
         # forwarded any dispatch miss to whichever upstream owned the prefix — which
         # would quietly bypass Phase 2's deny list and keep Phase 3's renamed tools
@@ -1183,25 +1257,96 @@ def build_server(upstreams: list[Upstream]) -> Server:
             f"re-run tools/list to pick it up when it returns.{mcpbridge_para}"
         )
 
-    return Server(
+    server = Server(
         SERVER_NAME,
         version="0.4.0",
         instructions=instructions,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
-        lifespan=lambda app: _lifespan(app, upstreams),
+        lifespan=lambda app: _lifespan(app, upstreams, broadcast_list_changed),
     )
+
+    # ADVERTISE tools.listChanged (4.1). The runner builds initialization options with
+    # default NotificationOptions at each session's initialize; the SDK's own comment
+    # says list_changed flags "require NotificationOptions to be passed externally", and
+    # the only externally-reachable seam on the streamable-HTTP path is this bound-method
+    # override. A daemon that pushes list_changed while advertising listChanged:false
+    # invites clients to ignore it.
+    server.create_initialization_options = functools.partial(
+        Server.create_initialization_options, server,
+        notification_options=NotificationOptions(tools_changed=True))
+
+    # VERSION MISMATCH consumer (4.2). In-band: instructions are re-read at every new
+    # session's initialize, so updating them reaches each fresh model with no new
+    # mechanism. Human: one log line per distinct (upstream, expected, found), persisted
+    # so a launchd restart does not re-raise it — the 2026-08-30 lesson is that a
+    # warning per reconnect tick is twenty-one modals in an evening.
+    base_instructions = instructions
+    mismatch_notes: dict = {}
+    persisted_path = os.path.join(
+        os.environ.get("XCODE_MCP_FRONT_HOME", os.path.expanduser("~/.xcode-mcp-front")),
+        "version-mismatches.json")
+    try:
+        with open(persisted_path, encoding="utf-8") as f:
+            seen_mismatches = json.load(f)
+    except (OSError, ValueError):
+        seen_mismatches = {}
+
+    def _on_version_mismatch(name: str, expected: str, found: str) -> None:
+        mismatch_notes[name] = (
+            f"NOTE: upstream '{name}' was verified against version '{expected}' but is "
+            f"running '{found}'. Blocks and renames may reference tools that moved — "
+            f"consider having a human run the collision comparison "
+            f"(tools/tool-templates/mcp_tools.py compare) against the new version.")
+        server.instructions = base_instructions + "\n\n" + "\n".join(
+            mismatch_notes[k] for k in sorted(mismatch_notes))
+        key = f"{name}:{expected}:{found}"
+        if key in seen_mismatches:
+            return
+        seen_mismatches[key] = True
+        log.warning("[%s] expected version '%s' but the upstream reports '%s' — serving "
+                    "anyway (a mismatch warns, never refuses). Recorded in %s so this "
+                    "warns once.", name, expected, found, persisted_path)
+        try:
+            os.makedirs(os.path.dirname(persisted_path), exist_ok=True)
+            with open(persisted_path, "w", encoding="utf-8") as f:
+                json.dump(seen_mismatches, f, indent=2, sort_keys=True)
+        except OSError as e:
+            log.warning("could not persist the version-mismatch record: %s", e)
+
+    _version_mismatch_callbacks.append(_on_version_mismatch)
+
+    return server
 
 
 @contextlib.asynccontextmanager
-async def _lifespan(app: Server, upstreams: list[Upstream]):
+async def _lifespan(app: Server, upstreams: list[Upstream], broadcast):
     async with anyio.create_task_group() as tg:
+        # The notification relay's downstream half (4.1): surface-change events from the
+        # Upstreams (connect, break, upstream listChanged) wake this task, which
+        # debounces a burst and pushes tools/list_changed to every known client.
+        changed = {"event": anyio.Event()}
+
+        def _wake(reason: str) -> None:
+            changed["event"].set()
+
+        _surface_changed_callbacks.append(_wake)
+
+        async def _broadcaster() -> None:
+            while True:
+                await changed["event"].wait()
+                changed["event"] = anyio.Event()
+                await anyio.sleep(0.5)  # a reconnect burst becomes one notification
+                await broadcast()
+
         for u in upstreams:
             tg.start_soon(u.connection_manager)
             tg.start_soon(u.stall_watchdog)
+        tg.start_soon(_broadcaster)
         try:
             yield {}
         finally:
+            _surface_changed_callbacks.remove(_wake)
             tg.cancel_scope.cancel()
 
 
