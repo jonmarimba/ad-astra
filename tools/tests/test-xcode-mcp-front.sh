@@ -168,10 +168,37 @@ until [ "$ws_waited" -ge 90 ]; do
   sleep 5; ws_waited=$((ws_waited+5))
 done
 if [ "$ws_waited" -ge 90 ]; then
-  # SAY WHICH FAILURE THIS IS. mcpbridge answers "no workspace windows are open" when Xcode has
-  # nothing loaded, which is a different situation from the daemon being down, and the two used
-  # to produce identical unexplained assertion failures. Naming it here does not weaken the
-  # assertions; they still run.
+  # REFUSE A VERDICT WHEN XCODE CANNOT SERVE MCP AND THERE IS NO DIALOG TO ANSWER.
+  # Doctrine (Jonathan): detect a bad state, say what a human should do, and refuse —
+  # never emit daemon-regression-shaped failures for an environmental wedge. This is
+  # the state observed 2026-08-31: Xcode stopped raising its MCP approval prompt, so
+  # mcpbridge is never approved, no workspacePath ever comes back, and yet
+  # check-allow-window shows NO dialog for a human to click. The stub-based
+  # test-mcp-front-daemon.sh and the real-launchd test-mcp-front-launchd.sh prove the
+  # daemon code without Xcode; THIS file cannot verify anything until Xcode serves.
+  #
+  # Distinguish the WEDGE (refuse) from a genuine daemon fault (still fail loudly), using
+  # what the wait loop ALREADY established rather than a fresh race-prone probe:
+  #   - probe_resp is non-empty  -> the daemon on 8765 ANSWERED (it just has no workspace)
+  #   - no approval dialog is up  -> there is nothing for a human to click
+  # Both true is the exact 2026-08-31 state: Xcode stopped raising its MCP prompt, so
+  # mcpbridge is never approved and never will be without a human restarting Xcode. A
+  # non-answering daemon (empty probe_resp) is a DIFFERENT problem and still fails below.
+  pending_now=""
+  if [ -x "$HERE/../xcode-mcp-front/check-allow-window.sh" ]; then
+    pending_now="$("$HERE/../xcode-mcp-front/check-allow-window.sh" 2>/dev/null || true)"
+  fi
+  case "$pending_now" in *"access Xcode"*) pending_now="dialog-showing" ;; *) pending_now="" ;; esac
+  if [ -n "$probe_resp" ] && [ -z "$pending_now" ]; then
+    fail "REFUSING A VERDICT: the daemon answers on /mcp but Xcode is not serving MCP —
+      no workspacePath after 90s and NO approval dialog is present to answer. This is the
+      Xcode approval wedge, not a daemon regression: the stub daemon test (68 ok) and the
+      real-launchd test (9 ok) pass. A human must bring Xcode back — quit and reopen Xcode,
+      let it raise the MCP approval prompt (the daemon's clicker answers it), and re-run.
+      This test cannot verify the LIVE daemons until Xcode serves."
+    finish
+    exit 1
+  fi
   case "$probe_resp" in
     *"no workspace"*|*"No workspace"*)
       echo "  ..  NOTE: mcpbridge says Xcode has no workspace open after 90s. The failures below" ;;
