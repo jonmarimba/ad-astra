@@ -206,6 +206,8 @@ A middle position keeps both: the machine file stays strict JSON, since it is ge
 
 ## Two naming details to confirm before building
 
-Jonathan referred to "Andrew's thing" alongside Apple's, and separately to "Andrew's swift stuff". The MCP server actually running in `xcode-combined-front` today is **Drew's** (`drews-xcode-mcp`, prefixed `drews__`). Whether "Andrew" and "Drew" are the same tool, the same person, or two different things is not established here, and Andrew Benson is a client contact rather than a tool author, so this needs one sentence from him rather than a guess.
+**Andrew Benson is Drew — one person.** `Andrew Benson <db@nuclearcyborg.com>` wrote `drews-xcode-mcp`, the `Xcode MCP Server 1.29.1` running in the combined daemon, and he also contributes `agents-and-prompts/` to this repository — the components tree, the `swiftlint` command, and the Jira tooling. There is also a `drew-kit` tool here. So "Andrew's thing" and "Andrew's Swift stuff" may point at the MCP server or at the prompt-and-skill material, and both are his.
 
-He also listed **"ponytail"** among Swift tools to include, next to swiftlint and the dead-code and duplicate-code detectors. That name is not confirmed against a real tool. Do not guess at it — ask.
+This paragraph previously asserted they were two different people and that he was "a client contact rather than a tool author". Both wrong, and the error is instructive: I found a contributor named Andrew and a server named for Drew, saw they were different kinds of artifact, and inferred different people. Artifact type does not imply identity, and the git log carried the email address that settles it.
+
+**Ponytail is real and is already an ad astra tool.** `DietrichGebert/ponytail`, MIT — an agent skill rather than a Swift tool, being a decision ladder run before writing code. GhOST assessed it in the Apple Note "Ponytail" on 2026-08-06, downside included. This paragraph previously said the name could not be verified; the answer was in his notes and in `tools/ponytail/` the whole time. See `INVENTORY.md`.
