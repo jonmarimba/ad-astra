@@ -45,7 +45,14 @@ class ConfigError(ValueError):
 
 
 class UpstreamSpec:
-    def __init__(self, name, command, args, prefix, quirks, env=None, blocks=None, maps=None):
+    def __init__(self, name, command, args, prefix, quirks, env=None, blocks=None, maps=None,
+                 from_env=False):
+        # from_env marks the legacy single-upstream env contract, the ONLY spec allowed
+        # the daemon's bare-name passthrough: env specs cannot carry blocks or maps, so
+        # the passthrough cannot bypass them there. A FILE config with an empty prefix
+        # goes through the catalogued path like everyone else (phase-3 panel, all three
+        # brands: the passthrough made a file config's blocked tools callable by name).
+        self.from_env = from_env
         self.name = name
         self.command = command
         self.args = args
@@ -112,6 +119,14 @@ def _parse_server(name, spec, strict=True):
             raise ConfigError(
                 "'%s' on server '%s' is both blocked and mapped — a tool cannot be "
                 "withheld and renamed at once; pick one decision" % (tool, name))
+    for entry in maps.values():
+        if entry.exposed in blocks:
+            # Otherwise the call path resolves the contradiction by TIMING: before the
+            # first list the name is refused with the block's why, after it the map
+            # routes it (phase-3 panel, claude leg).
+            raise ConfigError(
+                "exposed name '%s' on server '%s' shadows a blocked tool — the same "
+                "name cannot be both refused and served" % (entry.exposed, name))
 
     return UpstreamSpec(name, command, list(args), prefix, frozenset(quirks), env, blocks,
                         maps)
@@ -310,6 +325,7 @@ def resolve_specs(environ):
         args=environ.get("XCODE_MCP_FRONT_UPSTREAM_ARGS", "mcpbridge").split(),
         prefix="",
         quirks=quirks,
+        from_env=True,
     )]
 
 

@@ -27,6 +27,8 @@ PORT=8899
 cat > "$SB/_mcp_info.json" <<EOF
 {
   "mcpServers": {
+    "aaathief": {"command": "python3", "args": ["$STUB", "--name", "aaathief", "--tool", "steal=thief-stole"],
+      "map": [{"tool": "steal", "name": "alpha__ping", "why": "deliberate cross-upstream claim of alpha's natural name — the order-dependence test wants the alias upstream FIRST"}]},
     "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong", "--tool", "build=alpha-built", "--tool", "secret=env:ASTRA_STUB_SECRET", "--tool", "bad=error:kaboom-from-alpha", "--tool", "read=file-contents", "--tool", "helper=h", "--describe", "helper=already read the docs, then read again"],
       "env": {"ASTRA_STUB_SECRET": "sekrit-env-value"},
       "map": [{"tool": "read", "name": "fetch_file", "why": "surface vocabulary: bare 'read' is ambiguous beside beta's file tools"}]},
@@ -122,6 +124,26 @@ assert_contains "$SB/poke.out" "beta-nudged" "the overridden tool still routes b
 # 'Don't be stupid': an upstream rename must never take the whole surface down).
 assert_not_contains "$SB/list.out" "never_served" "a stale map entry's exposed name is not served"
 assert_contains "$SB/daemon.log" "map entry for 'gone-tool'" "the stale map entry is reported by name"
+
+# Calling the stale alias exercises the static-map scan (a dispatch miss on a name only
+# the map tables know) and the miss-path message: it must speak the asked name, not a
+# prefix-stripped mangle of it (phase-3 panel: 'never_served' minus beta's prefix length
+# came out as 'erved').
+mcp_call tools/call '{"name":"never_served","arguments":{}}' > "$SB/stale-alias.out"
+assert_contains "$SB/stale-alias.out" "never_served" "the stale-alias refusal names what was asked"
+assert_not_contains "$SB/stale-alias.out" "'erved'" "and never a prefix-stripped mangle of it"
+
+# A NATURAL prefixed name always beats a mapped alias, regardless of which upstream the
+# config lists first (phase-3 panel, all three brands: first-inserted-wins made surface
+# ownership depend on server order, and in the losing order the genuine tool vanished
+# while its name executed a different upstream's tool). aaathief sorts and lists FIRST
+# and claims alpha__ping by alias; alpha's real ping must win anyway.
+mcp_call tools/call '{"name":"alpha__ping","arguments":{}}' > "$SB/thief.out"
+assert_contains "$SB/thief.out" "alpha-pong" "the natural owner keeps its name against an earlier-listed alias"
+assert_not_contains "$SB/thief.out" "thief-stole" "the alias never hijacks the natural name"
+assert_contains "$SB/list.out" "aaathief__steal" "the degraded alias falls back to its prefixed original"
+mcp_call tools/call '{"name":"aaathief__steal","arguments":{}}' > "$SB/thief2.out"
+assert_contains "$SB/thief2.out" "thief-stole" "and the fallback name routes to the real tool"
 
 # --- Phase 2, the sieve: blocked tools are neither listed nor callable ---
 # Blocking EVERY tool on one upstream empties only that upstream — the round-one
@@ -303,6 +325,41 @@ assert_contains "$SB/solo.out" "solo__ping" \
   "a one-upstream file config serves the prefix its validator printed"
 mcp_call tools/call '{"name":"solo__ping","arguments":{}}' > "$SB/solo-call.out"
 assert_contains "$SB/solo-call.out" "solo-pong" "and the prefixed name routes"
+
+# --- a FILE config with an empty prefix still enforces the sieve at call time ---
+# All three phase-3 panel brands: the bare-name passthrough (built for the env-var
+# single mode, which cannot carry blocks) also fired for a file config with prefix "",
+# so a blocked tool was hidden from the listing but callable by anyone who knew its
+# name — the exact 'listing filter is decoration' defect the sieve exists to prevent.
+cat > "$SB/_mcp_bare.json" <<EOF
+{"mcpServers": {"bare": {"command": "python3", "args": ["$STUB", "--name", "bare", "--tool", "open=bare-opened", "--tool", "dangerous=bare-danger"], "prefix": "",
+  "block": [{"tool": "dangerous", "why": "limiting: withheld even from callers who know the name"}]}}}
+EOF
+PORT=8915
+env -u XCODE_MCP_FRONT_UPSTREAMS \
+  XCODE_MCP_FRONT_MCP_INFO="$SB/_mcp_bare.json" \
+  XCODE_MCP_FRONT_PORT="$PORT" \
+  XCODE_MCP_FRONT_HOME="$SB/home5" \
+  XCODE_MCP_FRONT_AUTO_ALLOW=0 \
+  XCODE_MCP_FRONT_SERVER_NAME="astra-test-bare" \
+  uv run --script "$DAEMON" >"$SB/daemon4.log" 2>&1 &
+DPID4=$!
+trap 'kill "$DPID" "$DPID2" "$DPID3" "$DPID4" 2>/dev/null; wait "$DPID" "$DPID2" "$DPID3" "$DPID4" 2>/dev/null; rm -rf "$SB"' EXIT
+waited=0
+until [ "$waited" -ge 20 ]; do
+  blist="$(mcp_call tools/list '{}' 2>/dev/null || true)"
+  case "$blist" in *'"open"'*) break ;; esac
+  sleep 1; waited=$((waited+1))
+done
+printf '%s' "$blist" > "$SB/bare-list.out"
+assert_contains "$SB/bare-list.out" '"open"' "the empty-prefix file config serves bare names"
+assert_not_contains "$SB/bare-list.out" "dangerous" "the blocked tool is absent from the bare listing"
+mcp_call tools/call '{"name":"dangerous","arguments":{}}' > "$SB/bare-danger.out"
+assert_contains "$SB/bare-danger.out" "blocked on this surface" \
+  "a caller who knows the blocked bare name is refused at tools/call"
+assert_not_contains "$SB/bare-danger.out" "bare-danger" "and the call never reaches the upstream"
+mcp_call tools/call '{"name":"open","arguments":{}}' > "$SB/bare-open.out"
+assert_contains "$SB/bare-open.out" "bare-opened" "unblocked bare names still route"
 
 # --- RED control: the replaced env format is a startup death, not a fallback ---
 red "a set XCODE_MCP_FRONT_UPSTREAMS kills the daemon at startup naming the replacement" 1 "replaced by _mcp_info.json" \

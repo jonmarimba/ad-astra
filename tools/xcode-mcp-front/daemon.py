@@ -466,7 +466,7 @@ class Upstream:
 
     def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool,
                  prefix: str = "", env: dict | None = None, blocks: dict | None = None,
-                 maps: dict | None = None):
+                 maps: dict | None = None, from_env: bool = False):
         self.name = name
         # Exposed-name prefix, VERBATIM from the spec. The daemon used to force "" for a
         # sole upstream regardless of what the config declared, so the validator printed
@@ -487,15 +487,11 @@ class Upstream:
         # other name the upstream does not offer on this surface.
         self.maps: dict = dict(maps) if maps else {}
         self._stale_maps_reported: set[str] = set()
-        # One word-boundary pattern per upstream drives the mechanical description pass:
-        # every sibling description mentioning a renamed tool goes stale at the same
-        # moment, so the rename table itself substitutes them all (SPEC). A regex is
-        # used deliberately — whole-word replacement is the one job plain string
-        # scanning cannot do without reimplementing \b: the roadmap's own red case is a
-        # tool named 'read' mangling the word 'already'.
-        self._rename_pattern = (
-            re.compile(r"\b(" + "|".join(re.escape(old) for old in self.maps) + r")\b")
-            if self.maps else None)
+        # True only for the legacy env-var single-upstream contract — the one spec the
+        # bare-name passthrough is allowed for, because an env spec cannot carry blocks
+        # or maps (phase-3 panel: the passthrough let a FILE config's blocked tools be
+        # called by name).
+        self.from_env = from_env
         # Watchdog input: bumped on every connect attempt and every successful heartbeat.
         # Initialised here so the watchdog never reads a missing attribute on a slow start.
         self.last_progress = time.monotonic()
@@ -506,10 +502,6 @@ class Upstream:
         self.session: ClientSession | None = None
         self.known_broken = False
 
-    def rewrite_description(self, text: str) -> str:
-        if not text or self._rename_pattern is None:
-            return text
-        return self._rename_pattern.sub(lambda m: self.maps[m.group(1)].exposed, text)
 
     async def _mark_broken(self, why: str) -> None:
         """Set known_broken AND drop the public session reference immediately. The codex
@@ -807,9 +799,27 @@ def _build_upstreams() -> list[Upstream]:
     return [
         Upstream(name=s.name, command=s.command, args=s.args,
                  require_xcode_running=s.require_xcode, prefix=s.prefix, env=s.env,
-                 blocks=s.blocks, maps=s.maps)
+                 blocks=s.blocks, maps=s.maps, from_env=s.from_env)
         for s in specs
     ]
+
+
+def _rewrite_refs(text: str, table: dict) -> str:
+    """Whole-word substitution of old tool names with their PUBLISHED names — the
+    mechanical description pass (SPEC): every sibling description mentioning a renamed
+    tool goes stale at the same moment, so the rename table substitutes them all. The
+    table maps old bare name -> the name actually published this composition, so a
+    degraded alias rewrites to its prefixed fallback, never to a name that is not on
+    the surface. A regex is deliberate — whole-word replacement is the one job plain
+    scanning cannot do without reimplementing \\b (the roadmap's red case: a tool named
+    'read' mangling 'already'). Alternatives sorted longest-first, because Python's
+    alternation is first-match: with 'foo' before 'foo-bar', the phase-3 panel measured
+    'use foo-bar' rewriting as 'use <mapped>-bar'."""
+    if not text or not table:
+        return text
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(k) for k in sorted(table, key=len, reverse=True)) + r")\b")
+    return pattern.sub(lambda m: table[m.group(1)], text)
 
 
 def _not_connected_result(u: "Upstream") -> types.CallToolResult:
@@ -843,9 +853,25 @@ def build_server(upstreams: list[Upstream]) -> Server:
     # second server silently rename the first one's entire surface.
     prefix_of = {u: u.prefix for u in upstreams}
     upstream_by_prefix = {prefix_of[u]: u for u in upstreams}
-    # Bare-name passthrough exists ONLY for the deployed env-var single mode, whose spec
-    # carries an explicitly empty prefix.
-    passthrough = upstreams[0] if single and upstreams[0].prefix == "" else None
+    # Bare-name passthrough exists ONLY for the deployed env-var single mode: an env
+    # spec cannot carry blocks or maps, so nothing is bypassed there. A FILE config —
+    # even single-server, even with an empty prefix — goes through the catalogued path,
+    # or its sieve would filter the listing while leaving the tools callable by name
+    # (phase-3 panel, all three brands).
+    passthrough = (upstreams[0]
+                   if single and upstreams[0].prefix == "" and upstreams[0].from_env
+                   else None)
+
+    # Standing warnings (collisions, stale override descriptions) are logged once per
+    # distinct key: clients poll tools/list every few seconds, and a warning repeated
+    # forever stops being read (phase-3 panel, claude leg).
+    reported_warnings: set = set()
+
+    def warn_once(key, msg, *args):
+        if key in reported_warnings:
+            return
+        reported_warnings.add(key)
+        log.warning(msg, *args)
 
     # EXPLICIT DISPATCH TABLE (increment 1.3): exposed name -> (upstream, bare upstream
     # name), rebuilt every time the surface is composed in on_list_tools. Consulted
@@ -892,69 +918,84 @@ def build_server(upstreams: list[Upstream]) -> Server:
             for u in upstreams:
                 tg.start_soon(_collect, u)
 
-        # THE EVALUATION ORDER IS FIXED AND THIS LOOP IS ITS DECLARATION (increment 2.3):
-        # per upstream — availability first (an unavailable upstream is reported, and its
-        # blocks are inert), then the source-qualified sieve while composing, then
-        # (Phase 3) renames and description rewrites, then global uniqueness, then
-        # publish. Blocks apply AFTER the availability check on purpose: the round-one
-        # colloquium's catastrophic case was the sieve meeting the old blank-on-missing
-        # logic and serving nothing from anywhere.
+        # THE EVALUATION ORDER IS FIXED AND THESE PASSES ARE ITS DECLARATION (2.3):
+        # availability first (an unavailable upstream is reported and its decisions are
+        # inert), then the source-qualified sieve, then NATURAL prefixed names reserving
+        # the surface, then mapped aliases where the reserved surface leaves room, then
+        # descriptions rewritten from what was ACTUALLY published, then publish. Natural
+        # names go first so ownership can never depend on which upstream the config
+        # lists first — the phase-3 panel showed first-inserted-wins letting an
+        # earlier-listed alias hijack a later upstream's genuine name.
         all_tools: list[types.Tool] = []
         unavailable: list[str] = []
         new_dispatch: dict[str, tuple[Upstream, str]] = {}
-        for u in upstreams:
-            result = results.get(u)
-            if result is None:
-                unavailable.append(u.name)
-                continue
+        pending: list = []          # (upstream, bare, exposed, tool) in publish order
+        offered_by: dict[Upstream, set] = {}
+        connected = [u for u in upstreams if results.get(u) is not None]
+        unavailable = [u.name for u in upstreams if results.get(u) is None]
+
+        for u in connected:  # PASS 1 — natural names reserve the surface
             prefix = prefix_of[u]
-            offered = set()
-            for t in result.tools:
+            offered_by[u] = set()
+            for t in results[u].tools:
                 bare = t.name
-                offered.add(bare)
-                if bare in u.blocks:
-                    continue  # sieved; the call path refuses it too, with the why
-                entry = u.maps.get(bare)
-                # The map (Phase 3): a mapped name is the FINAL exposed name, replacing
-                # prefix+bare. The description travels with the name and usually should
-                # not: an explicit override wins outright; otherwise the rename table
-                # mechanically rewrites whole-word references to renamed siblings, so
-                # every description goes un-stale in the same pass that renamed them.
-                exposed = entry.exposed if entry else f"{prefix}{bare}"
-                if entry and entry.description is not None:
-                    desc = entry.description
-                    leftover = u.rewrite_description(desc)
-                    if leftover != desc:
-                        log.warning("[%s] override description for '%s' still references "
-                                    "renamed tools by their OLD names — it will mislead "
-                                    "the model; fix it in the template", u.name, exposed)
-                else:
-                    desc = u.rewrite_description(t.description or "")
+                offered_by[u].add(bare)
+                if bare in u.blocks or bare in u.maps:
+                    continue  # sieved, or renamed (admitted in pass 2)
+                exposed = f"{prefix}{bare}"
                 if exposed in new_dispatch:
-                    if entry:
-                        # A mapped name colliding with something already published is
-                        # increment 3.3's degraded state: drop the alias, keep serving
-                        # the tool under its prefixed original, report it.
-                        log.warning("[%s] mapped name '%s' collides with an already "
-                                    "published tool — dropping the alias and serving "
-                                    "'%s%s' instead", u.name, exposed, prefix, bare)
-                        exposed = f"{prefix}{bare}"
-                        if exposed in new_dispatch:
-                            continue
-                    else:
-                        # Reachable since 1.5: an upstream mutating its list between
-                        # drained pages can hand back the same tool twice.
-                        log.warning("list_tools: duplicate exposed name %r from upstream "
-                                    "%s — keeping the first occurrence", exposed, u.name)
-                        continue
-                t = t.model_copy(update={"name": exposed, "description": desc})
+                    # Reachable since 1.5: an upstream mutating its list between drained
+                    # pages can hand back the same tool twice.
+                    warn_once(("dup", u.name, exposed),
+                              "list_tools: duplicate exposed name %r from upstream %s — "
+                              "keeping the first occurrence", exposed, u.name)
+                    continue
                 new_dispatch[exposed] = (u, bare)
-                all_tools.append(t)
-            # A decision naming a tool the upstream does not offer is a line that stopped
-            # meaning anything, and a version bump is exactly when that happens. Once per
-            # entry, so a 5-second poll loop does not turn staleness into log spam. A
-            # stale MAP entry is the harsher case: the surface promised a name that would
-            # fail on first use — drop the alias, keep serving, say so (3.3).
+                pending.append((u, bare, exposed, t))
+
+        # PASS 2 — aliases, with 3.3's degradation. effective[u] maps old bare name ->
+        # the name ACTUALLY published, which is what the description pass substitutes:
+        # a degraded alias rewrites to its prefixed fallback, never to a name that is
+        # not on the surface.
+        effective: dict[Upstream, dict] = {}
+        for u in connected:
+            prefix = prefix_of[u]
+            table = effective.setdefault(u, {})
+            for t in results[u].tools:
+                bare = t.name
+                entry = u.maps.get(bare)
+                if entry is None or bare in u.blocks:
+                    continue
+                exposed = entry.exposed
+                if new_dispatch.get(exposed) == (u, bare):
+                    continue  # a duplicated copy of an already-admitted mapped tool
+                if exposed in new_dispatch:
+                    # The mapped name collides with something already published: drop
+                    # the alias, keep serving under the prefixed original, report it.
+                    warn_once(("alias", u.name, exposed),
+                              "[%s] mapped name '%s' collides with an already published "
+                              "tool — dropping the alias and serving '%s%s' instead",
+                              u.name, exposed, prefix, bare)
+                    exposed = f"{prefix}{bare}"
+                    if exposed in new_dispatch:
+                        if new_dispatch[exposed] != (u, bare):
+                            warn_once(("gone", u.name, exposed),
+                                      "[%s] fallback name '%s' is ALSO taken — tool "
+                                      "'%s' is off the surface entirely; fix the map",
+                                      u.name, exposed, bare)
+                        continue
+                new_dispatch[exposed] = (u, bare)
+                table[bare] = exposed
+                pending.append((u, bare, exposed, t))
+
+        # Staleness bookkeeping: a decision naming a tool the upstream does not offer is
+        # a line that stopped meaning anything, and a version bump is exactly when that
+        # happens. Warned once per entry; an entry whose tool REAPPEARS is forgiven so a
+        # later re-staleness warns again (phase-3 panel, qwen leg).
+        for u in connected:
+            offered = offered_by[u]
+            u._stale_blocks_reported -= offered
+            u._stale_maps_reported -= offered
             for stale in sorted(set(u.blocks) - offered - u._stale_blocks_reported):
                 u._stale_blocks_reported.add(stale)
                 log.warning("[%s] block entry for '%s' matched nothing the upstream "
@@ -968,6 +1009,22 @@ def build_server(upstreams: list[Upstream]) -> Server:
                             "template, and consider re-running the collision comparison "
                             "against this upstream's new version.",
                             u.name, stale, u.maps[stale].exposed)
+
+        # PASS 3 — descriptions, from the effective table. An explicit override wins
+        # outright (and is warned about when it still speaks old names); everything
+        # else gets the mechanical whole-word pass.
+        for u, bare, exposed, t in pending:
+            entry = u.maps.get(bare)
+            if entry is not None and entry.description is not None:
+                desc = entry.description
+                if _rewrite_refs(desc, effective.get(u, {})) != desc:
+                    warn_once(("stale-desc", u.name, exposed),
+                              "[%s] override description for '%s' still references "
+                              "renamed tools by their OLD names — it will mislead the "
+                              "model; fix it in the template", u.name, exposed)
+            else:
+                desc = _rewrite_refs(t.description or "", effective.get(u, {}))
+            all_tools.append(t.model_copy(update={"name": exposed, "description": desc}))
         dispatch.clear()
         dispatch.update(new_dispatch)
         if unavailable:
@@ -988,7 +1045,12 @@ def build_server(upstreams: list[Upstream]) -> Server:
                 continue  # the sieve applies on every path that builds dispatch entries
             entry = u.maps.get(t.name)
             exposed = entry.exposed if entry else f"{prefix}{t.name}"  # so does the map
-            dispatch[exposed] = (u, t.name)
+            # ADD-ONLY, NEVER OVERWRITE. This refresh runs outside the full composition's
+            # collision handling, so an unconditional write could hijack a name another
+            # upstream legitimately published — the phase-3 panel's worst finding, a
+            # wrong-tool execution. Names this leaves stale are corrected by the next
+            # full tools/list, which rebuilds the table with the real collision policy.
+            dispatch.setdefault(exposed, (u, t.name))
         return True
 
     async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
@@ -1016,6 +1078,12 @@ def build_server(upstreams: list[Upstream]) -> Server:
                         if prefix and name.startswith(prefix):
                             candidate = u
                             break
+            if candidate is None and single:
+                # A single-server FILE config (any prefix, including "") is catalogued
+                # like everyone else: the sole upstream is the only possible owner, so
+                # route the miss through the block check and refresh below rather than
+                # dead-ending on the prefix walk.
+                candidate = upstreams[0]
             if candidate is None:
                 return types.CallToolResult(
                     content=[
@@ -1050,7 +1118,9 @@ def build_server(upstreams: list[Upstream]) -> Server:
             if not await _refresh_upstream_dispatch(candidate):
                 return _not_connected_result(candidate)
             if name not in dispatch:
-                bare = name[len(prefix_of[candidate]):]
+                # `bare` from the guarded slice above: a mapped alias carries no prefix,
+                # and slicing one off anyway mangled the message ('never_served' minus
+                # six came out as 'erved' — phase-3 panel, claude leg).
                 return types.CallToolResult(
                     content=[
                         types.TextContent(

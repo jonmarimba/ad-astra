@@ -203,6 +203,13 @@ printf '{"mcpServers": {"one": {"command": "c", "map": [{"tool": "a", "name": "s
 red "two SERVERS claiming one exposed name are rejected at load" 65 "exposed name 'shared' is claimed by both" \
   python3 "$LOADER" validate "$SB/mapxserver.json"
 
+# An exposed name equal to a BLOCKED tool on the same server is a contradiction the
+# call path would otherwise resolve by timing: before the first list the name would be
+# refused with the block's why; after it, it would route (phase-3 panel, claude leg).
+printf '{"mcpServers": {"x": {"command": "c", "block": [{"tool": "a", "why": "w"}], "map": [{"tool": "z", "name": "a", "why": "w"}]}}}' > "$SB/mapshadow.json"
+red "an exposed name shadowing a blocked tool on the same server is rejected" 65 "exposed name 'a' on server 'x' shadows a blocked tool" \
+  python3 "$LOADER" validate "$SB/mapshadow.json"
+
 # --- resolve: how the daemon picks its upstreams (increment 1.2) ---
 # The colon/comma env format is REPLACED, not deprecated: a set XCODE_MCP_FRONT_UPSTREAMS
 # is a hard error pointing at the file, because the old parser silently corrupted a colon
