@@ -472,10 +472,14 @@ class Upstream:
         self.session: ClientSession | None = None
         self.known_broken = False
 
-    async def list_tools(self, params: types.PaginatedRequestParams | None) -> types.ListToolsResult:
+    async def list_tools(self, params: types.PaginatedRequestParams | None) -> types.ListToolsResult | None:
+        """Returns None when this upstream is DISCONNECTED or the call failed — which is a
+        different fact from a connected upstream answering with zero tools, and the two
+        must never be conflated (increment 1.4: conflating them is how one missing
+        upstream used to blank the entire aggregate surface)."""
         async with self.lock:
             if self.session is None:
-                return types.ListToolsResult(tools=[])
+                return None
             try:
                 with anyio.fail_after(CALL_TIMEOUT_SECONDS):
                     return await self.session.list_tools(params=params)
@@ -489,7 +493,7 @@ class Upstream:
                 # same as any other failure: marked broken, reconnected fresh.
                 self.known_broken = True
                 log.warning("[%s] list_tools failed, marking connection broken: %s", self.name, e)
-                return types.ListToolsResult(tools=[])
+                return None
 
     async def call_tool(self, tool_name: str, arguments: dict) -> types.CallToolResult | None:
         """Returns None if not connected — caller decides how to report that,
@@ -709,33 +713,33 @@ def build_server(upstreams: list[Upstream]) -> Server:
     async def on_list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
+        # A DISCONNECTED upstream is reported and skipped; it must NOT blank the others
+        # (increment 1.4 — the defect all three colloquium brands found independently:
+        # this used to serve zero tools for EVERY upstream when any one was missing, so
+        # during an Xcode reconnect Drew's tools, which need no Xcode, vanished too).
+        # A connected upstream answering with zero tools contributes zero tools; that is
+        # an answer, not an absence.
         all_tools: list[types.Tool] = []
-        results_by_upstream: dict[str, list[types.Tool]] = {}
+        unavailable: list[str] = []
         new_dispatch: dict[str, tuple[Upstream, str]] = {}
         for u in upstreams:
             result = await u.list_tools(params)
+            if result is None:
+                unavailable.append(u.name)
+                continue
             prefix = prefix_of[u]
-            upstream_tools = []
             for t in result.tools:
                 bare = t.name
                 if prefix:
                     t = t.model_copy(update={"name": f"{prefix}{bare}"})
                 new_dispatch[t.name] = (u, bare)
-                upstream_tools.append(t)
-            results_by_upstream[u.name] = upstream_tools
-            all_tools.extend(upstream_tools)
+                all_tools.append(t)
         dispatch.clear()
         dispatch.update(new_dispatch)
-        # In multi-upstream mode, ALL upstreams must be connected.  Serving a
-        # partial tool list silently hides the missing upstream from the client
-        # — it gets half the tools and has no idea.  Return zero tools and a
-        # loud message instead so the client retries once the daemon reconnects
-        # the dead upstream (which it does on its own, every few seconds).
-        if not single:
-            missing = [u.name for u in upstreams if not results_by_upstream.get(u.name)]
-            if missing:
-                log.warning("list_tools: refusing to serve partial tool list — missing upstreams: %s", missing)
-                return types.ListToolsResult(tools=[])
+        if unavailable:
+            log.warning("list_tools: serving %d tools WITHOUT unavailable upstream(s) %s — "
+                        "each reconnects on its own; calls to them return a per-upstream error",
+                        len(all_tools), ", ".join(unavailable))
         return types.ListToolsResult(tools=all_tools)
 
     async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:

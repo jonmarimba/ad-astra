@@ -87,4 +87,63 @@ assert_contains "$SB/unknown.out" "doesn't match any known upstream prefix" \
   "an unknown exposed name returns the routing error"
 assert_contains "$SB/unknown.out" '"isError":true' "and it is marked as an error result"
 
+# --- increment 1.4: a dead upstream must not blank the others, and connected-but-empty
+# --- is not the same thing as disconnected ---
+# All three colloquium brands found this independently: on_list_tools served ZERO tools
+# for every upstream when any one was missing, so during an Xcode reconnect Drew's tools
+# — which need no Xcode — vanished too. gamma's command dies instantly (never connects);
+# delta connects fine and genuinely has zero tools. alpha must keep serving through both.
+cat > "$SB/_mcp_degraded.json" <<EOF
+{
+  "mcpServers": {
+    "alpha": {"command": "python3", "args": ["$STUB", "--name", "alpha", "--tool", "ping=alpha-pong"]},
+    "gamma": {"command": "python3", "args": ["-c", "import sys; sys.exit(1)"]},
+    "delta": {"command": "python3", "args": ["$STUB", "--name", "delta"]}
+  }
+}
+EOF
+PORT=8901
+env -u XCODE_MCP_FRONT_UPSTREAMS \
+  XCODE_MCP_FRONT_MCP_INFO="$SB/_mcp_degraded.json" \
+  XCODE_MCP_FRONT_PORT="$PORT" \
+  XCODE_MCP_FRONT_HOME="$SB/home2" \
+  XCODE_MCP_FRONT_AUTO_ALLOW=0 \
+  XCODE_MCP_FRONT_SERVER_NAME="astra-test-degraded" \
+  uv run --script "$DAEMON" >"$SB/daemon2.log" 2>&1 &
+DPID2=$!
+trap 'kill "$DPID" "$DPID2" 2>/dev/null; wait "$DPID" "$DPID2" 2>/dev/null; rm -rf "$SB"' EXIT
+
+# Wait only for the daemon's HTTP to answer at all — waiting for alpha__ would make the
+# assertion its own precondition and turn the old blank-everything defect into a timeout.
+waited=0
+until [ "$waited" -ge 20 ]; do
+  if ! kill -0 "$DPID2" 2>/dev/null; then
+    fail "degraded daemon exited during startup — its log:"; sed 's/^/        /' "$SB/daemon2.log" >&2
+    finish; exit 1
+  fi
+  dlist="$(mcp_call tools/list '{}' 2>/dev/null || true)"
+  case "$dlist" in *'"tools"'*) break ;; esac
+  sleep 1; waited=$((waited+1))
+done
+# Give the connection managers a few extra ticks: alpha needs to be connected AND listed.
+for _ in 1 2 3 4 5 6 7 8; do
+  case "$dlist" in *alpha__ping*) break ;; esac
+  sleep 1
+  dlist="$(mcp_call tools/list '{}' 2>/dev/null || true)"
+done
+printf '%s' "$dlist" > "$SB/dlist.out"
+assert_contains "$SB/dlist.out" "alpha__ping" \
+  "a dead upstream (gamma) does not blank the healthy one's tools"
+assert_not_contains "$SB/dlist.out" "gamma__" "the dead upstream contributes nothing"
+assert_not_contains "$SB/dlist.out" "delta__" \
+  "a connected upstream with zero tools contributes zero tools, and is not treated as missing"
+
+mcp_call tools/call '{"name":"alpha__ping","arguments":{}}' > "$SB/alpha2.out"
+assert_contains "$SB/alpha2.out" "alpha-pong" "calls to the healthy upstream still route while gamma is down"
+
+mcp_call tools/call '{"name":"gamma__anything","arguments":{}}' > "$SB/gamma.out"
+assert_contains "$SB/gamma.out" "[gamma] not connected right now" \
+  "a call to the dead upstream names IT as the unavailable one"
+assert_contains "$SB/gamma.out" '"isError":true' "and is an error result, not a silent success"
+
 finish
