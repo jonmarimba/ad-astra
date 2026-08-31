@@ -68,6 +68,19 @@ Everything else in the daemon is already generic and stays: the reconnect loop, 
 
 **Record the compatible upstream version in step one, not later.** Two Xcodes are installed on this machine right now — `Xcode.app` at 26.6, currently selected, and `Xcode-beta.app` at 27.0 — and the beta carries a lot that has not been tried. A wrapped server's tool list is a property of its version, so a config that names upstreams without recording which version was verified against them cannot tell "this tool is gone" from "you are pointed at a different Xcode." Both servers already supply what is needed: `initialize` returns `serverInfo`, giving `xcode-tools 24952` for Apple's bridge and `Xcode MCP Server 1.29.1` for Drew's.
 
+### Are MCP tool lists additive? Mostly, and the exception is the interesting part
+
+Jonathan's expectation, 2026-08-31, was that MCPs are mostly additive, at least for Xcode. Measured rather than assumed, using the per-version captures published at `farkasseb/xcrun-mcpbridge-tools-list` and the live 26.6 list read from the running daemon:
+
+- **26.4.1 → 26.5: purely additive.** `XcodeGetCurrentFile` appeared; nothing was removed. Twenty tools became twenty-one.
+- **26.5 → 26.6: NOT additive.** `ExecuteSnippet` was removed and `RunCodeSnippet` added. The count stayed at twenty-one because it is a rename.
+
+The local 26.6 list, read through the approved daemon, matches the published 26.6 capture exactly, which cross-validates both the comparison tool and that repository's data. Captures are vendored under `tool-lists/` so this comparison can be repeated without a network.
+
+**So the expectation is right in the common case and wrong in the most recent one, which is exactly why the version is worth recording.** A rename is the failure mode that matters here: purely additive drift is harmless, but a rename removes a name that a sieve entry or a map entry may point at, and it does so without changing the tool count — so a config that tracked only "how many tools" would see nothing. This is the concrete argument for the map absorbing upstream renames, for the mismatch warning naming which entries no longer resolve, and for treating older-than-tested differently from newer-than-tested.
+
+Xcode 27.0 is installed here as `Xcode-beta.app` and was NOT measured. Running it requires installing system-wide components, which is an administrative change and Jonathan's to authorise; the beta was launched, presented "Install Required", and was quit without installing. That comparison is one command away whenever he wants it.
+
 ### A version mismatch warns; it never refuses
 
 Jonathan, 2026-08-31: "I also don't want to die in a fire if the mcp version changes. Just warn the user and the, uh, User." So the recorded compatible version is advisory. A wrapped server that comes back at a different version still gets wrapped, still gets served, and the mismatch is reported. Refusing to start would mean an Xcode update takes the whole surface down, which is a worse failure than serving a tool list that has shifted slightly.
