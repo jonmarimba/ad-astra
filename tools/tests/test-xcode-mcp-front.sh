@@ -76,6 +76,33 @@ if [ ! -f "$PROBE_DIR/Package.swift" ]; then
   [ -f "$PROBE_DIR/Package.swift" ] || { fail "could not scaffold the probe package in $PROBE_DIR — swift package init failed"; finish; exit 1; }
   echo "  ..  created the persistent probe package at $PROBE_DIR (kept between runs by design)"
 fi
+# A PENDING APPROVAL DIALOG INVALIDATES THE RUN, AND THIS TEST REFUSES RATHER THAN KILLS.
+# Xcode's approval dialogs do not stack, so one already-showing prompt blocks every prompt the
+# daemons raise behind it, and every mcpbridge assertion below then fails for a reason that has
+# nothing to do with the daemons. That is a run whose result means nothing, so it should not
+# produce a verdict.
+#
+# IT WOULD BE EASY TO SIGTERM XCODE HERE AND EASY IS THE PROBLEM. Jonathan, 2026-08-31: "You need
+# to be careful putting SIGTERM in test code. I don't mind you doing that manually or even
+# automatically during this testing to make it work. But I'd prefer you didn't rely on it for
+# tests after we get this stable." A suite that terminates his IDE to tidy its own preconditions
+# will one day terminate it in the middle of real work, and the test will have been the thing
+# that lost it. Detect, report what a human should do, and stop. Killing Xcode during this
+# stabilisation is a hand operation, deliberately, not a step this file performs.
+if [ -x "$HERE/../xcode-mcp-front/check-allow-window.sh" ]; then
+  pending="$("$HERE/../xcode-mcp-front/check-allow-window.sh" 2>/dev/null || true)"
+  case "$pending" in
+    *"access Xcode"*)
+      fail "Xcode already has an approval dialog showing. Its dialogs do not stack, so this one
+        blocks every prompt the daemons raise and all four mcpbridge assertions would fail for a
+        reason unrelated to them. Answer or dismiss it and re-run. Not doing it for you: a test
+        that terminates or clicks through your IDE's dialogs is a test that will eventually do
+        that to real work."
+      finish
+      exit 1 ;;
+  esac
+fi
+
 echo "  ..  opening the probe package so mcpbridge has a workspace to report"
 open -g -a "$XCODE_APP" "$PROBE_DIR/Package.swift" 2>/dev/null
 

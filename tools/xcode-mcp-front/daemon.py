@@ -268,11 +268,41 @@ async def _run_osascript(script: str) -> bytes:
 
 # How long another process's approval dialog is left alone before we clear it. Only once we
 # have been blocked for this long is it fair to assume nobody is coming to answer it.
-FOREIGN_DIALOG_GRACE_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_FOREIGN_GRACE", "45"))
+# HOW LONG A FOREIGN DIALOG MAY BLOCK US BEFORE WE CLEAR IT. This MUST be comfortably less
+# than CONNECT_TIMEOUT_SECONDS or two daemons deadlock by arithmetic rather than by bad luck.
+#
+# It was 45 against a 15-second connect timeout. Xcode's approval dialogs do not stack, so when
+# both front daemons are up, each one's clicker finds the other's dialog, correctly classifies it
+# as foreign-and-alive, and waits out a grace period three times longer than the connection
+# attempt it is holding up. Its own prompt therefore never surfaces, its list_tools times out,
+# it tears the child down — which withdraws its request — and both sides repeat forever. That is
+# the "do two bridges interfere" question Jonathan asked: they do, and this constant is why.
+#
+# Clearing a live foreign dialog is not destructive. That process re-prompts on its next attempt,
+# which for these daemons is RECONNECT_POLL_SECONDS away, so two of them alternate and both get
+# through instead of neither.
+FOREIGN_DIALOG_GRACE_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_FOREIGN_GRACE", "6"))
+
+# The relationship above is load-bearing, so it is checked rather than trusted to a comment. A
+# grace period at or beyond the connect timeout is a silent, permanent deadlock whenever a second
+# client exists, and it presents as "mcpbridge refuses to serve tools" — which is exactly how it
+# presented, for a night.
+if FOREIGN_DIALOG_GRACE_SECONDS >= CONNECT_TIMEOUT_SECONDS:
+    raise SystemExit(
+        "xcode-mcp-front: XCODE_MCP_FRONT_FOREIGN_GRACE (%.1fs) must be less than "
+        "XCODE_MCP_FRONT_CONNECT_TIMEOUT_S (%.1fs). A foreign approval dialog that outlives the "
+        "connection attempt it is blocking can never be cleared in time, so two daemons deadlock "
+        "and every symptom looks like Xcode refusing to serve tools."
+        % (FOREIGN_DIALOG_GRACE_SECONDS, CONNECT_TIMEOUT_SECONDS))
 
 # How long an upstream may make NO progress before we let launchd restart us. See
 # stall_watchdog(). Generous on purpose: a false positive restarts a healthy daemon.
 STALL_EXIT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_STALL_EXIT", "180"))
+
+# How often to look for the approval dialog while a call is blocked waiting for it. Short,
+# because the window is the length of one blocked list_tools and a missed dialog costs the
+# whole connection attempt.
+ALLOW_CLICK_POLL_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CLICK_POLL", "1.5"))
 
 # Set the first time we see a foreign dialog while we are not connected; cleared whenever we
 # see no dialog or our own. Module-level rather than per-upstream because Xcode shows one
@@ -555,9 +585,44 @@ class Upstream:
                             # Without this, a killed Xcode leaves the daemon
                             # sitting "connected" until a real client call
                             # fails — minutes of silently serving zero tools.
+                            # CLICK WHILE THE CALL IS BLOCKED, NOT AFTER IT RETURNS. This is
+                            # the deadlock that kept the suite at 6/10 and looked for a whole
+                            # night like Apple's bridge refusing to serve tools.
+                            #
+                            # Xcode raises "Allow <x> to access Xcode?" lazily, on the first real
+                            # list_tools rather than at the handshake — the comment below has
+                            # said so since 2026-08-14. So list_tools BLOCKS until that dialog is
+                            # answered. The clicker that answers it was placed after the await.
+                            # It therefore ran only once list_tools had already returned, and on
+                            # the timeout path the except branch marks the upstream broken and
+                            # breaks out before reaching it at all. The one thing that could
+                            # unblock the call was scheduled to run only after the call unblocked.
+                            #
+                            # Worse, the teardown withdraws the prompt: the dialog is bound to the
+                            # live connecting process, so killing the child on timeout retracts
+                            # the question. With a 5s reconnect loop the daemon spent all night
+                            # asking Xcode for permission and cancelling the request before anyone
+                            # could say yes — which is why no dialog was ever found on screen, and
+                            # why running a single bridge by hand and simply leaving it alive
+                            # produced the prompt immediately and 21 tools once it was answered.
+                            #
+                            # Two daemons made it twice as fast, which is the "do two bridges
+                            # interfere" question: they do, but only by doubling the churn. One
+                            # daemon alone reproduces it.
                             try:
                                 with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
-                                    await session.list_tools()
+                                    async with anyio.create_task_group() as _tg:
+                                        async def _click_while_blocked():
+                                            # Poll rather than click once: the dialog appears a
+                                            # moment AFTER the request goes out, so a single
+                                            # attempt at the start reliably finds nothing.
+                                            while True:
+                                                if AUTO_ALLOW:
+                                                    await _click_allow_if_present()
+                                                await anyio.sleep(ALLOW_CLICK_POLL_SECONDS)
+                                        _tg.start_soon(_click_while_blocked)
+                                        await session.list_tools()
+                                        _tg.cancel_scope.cancel()
                                 self.last_progress = time.monotonic()
                             except Exception as e:
                                 log.warning("[%s] heartbeat list_tools failed, marking broken: %s", self.name, e)
