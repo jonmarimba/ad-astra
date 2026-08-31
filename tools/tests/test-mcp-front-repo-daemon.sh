@@ -19,6 +19,9 @@ need python3 "xcode-select --install"
 INSTALLER="$HERE/../xcode-mcp-front/repo-daemon-install.sh"
 STUB="$HERE/stub_mcp_server.py"
 
+RPID=""; RPID2=""; OCCUPY=""   # referenced by the EXIT trap; under set -u an unset
+                               # variable would fail the trap itself and leak daemons
+
 REPO="$SB/fakerepo"
 mkdir -p "$REPO"
 git -C "$REPO" init -q
@@ -31,8 +34,16 @@ assert_file "$REPO/.astra/mcp-front/run.sh" "the per-repo run script is installe
 assert_file "$REPO/.astra/mcp-front/launchd.plist" "a launchd plist is generated"
 plutil -lint "$REPO/.astra/mcp-front/launchd.plist" >/dev/null 2>&1 \
   && pass "the generated plist parses" || fail "the generated plist does not parse"
-assert_contains "$REPO/.astra/mcp-front/launchd.plist" "<true/>" \
-  "KeepAlive is bare true (the SuccessfulExit variant silently stays dead on EADDRINUSE)"
+# Read the KEY, not the file text: RunAtLoad's <true/> satisfied a substring check even
+# with KeepAlive absent (phase-5 panel, codex leg — a genuinely tautological assertion).
+ka="$(/usr/libexec/PlistBuddy -c "Print :KeepAlive" "$REPO/.astra/mcp-front/launchd.plist" 2>/dev/null)"
+assert_eq "true" "$ka" "KeepAlive is bare true (the SuccessfulExit variant silently stays dead on EADDRINUSE)"
+
+# --- the unservable placeholder dies BEFORE any side effect ---
+red "launching on the placeholder config refuses with the reason" 78 "no servable mcpServers" \
+  bash "$REPO/.astra/mcp-front/run.sh"
+assert_no_file "$REPO/.astra/mcp-front/port" "no port file was written by the refused launch"
+assert_no_file "$REPO/.mcp.json" "and .mcp.json was not pointed at a dead endpoint"
 
 red "the installer refuses a target under HOME itself" 64 "refusing" \
   bash "$INSTALLER" --into "$HOME"
@@ -120,10 +131,24 @@ printf '%s' "$body1_again" > "$SB/repo1-again.out"
 assert_contains "$SB/repo1-again.out" "alpha__ping" "the first repo's daemon is untouched — autonomy holds"
 
 # --- relaunching THIS repo's daemon preempts the stale copy and keeps the port ---
+# The port file is REMOVED first and the old pid captured, so these assertions cannot
+# be satisfied by run 1's leftovers (phase-5 panel, claude leg: the whole relaunch
+# section passed against a run.sh that did nothing). A bystander process that merely
+# carries the daemon path in its argv must survive the preempt — pgrep -f matched a
+# tail -f on the installed file (verified live by the panel).
+OLDPID="$(cat "$REPO/.astra/mcp-front/pid")"
+rm -f "$REPO/.astra/mcp-front/port"
+tail -f "$REPO/.astra/mcp-front/daemon.py" >/dev/null 2>&1 &
+BYSTANDER=$!
 bash "$REPO/.astra/mcp-front/run.sh" >"$SB/run1b.log" 2>&1 &
 RPID=$!
 sleep 3
-PORT1B="$(cat "$REPO/.astra/mcp-front/port")"
+kill -0 "$BYSTANDER" 2>/dev/null && pass "a bystander holding the daemon path in argv survives the preempt" \
+  || fail "the preempt killed an innocent tail -f on the installed daemon.py"
+kill "$BYSTANDER" 2>/dev/null; wait "$BYSTANDER" 2>/dev/null
+kill -0 "$OLDPID" 2>/dev/null && fail "the stale daemon (pid $OLDPID) survived the relaunch" \
+  || pass "the stale daemon was really preempted (pid $OLDPID is gone)"
+PORT1B="$(cat "$REPO/.astra/mcp-front/port" 2>/dev/null)"
 assert_eq "$PORT" "$PORT1B" "a relaunch self-preempts and keeps the deterministic port stable"
 waited=0; body3=""
 until [ "$waited" -ge 15 ]; do

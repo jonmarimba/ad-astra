@@ -15,7 +15,7 @@
 #   launchctl bootstrap gui/$(id -u) <repo>/.astra/mcp-front/launchd.plist
 #
 # Usage: repo-daemon-install.sh --into <repo>
-set -uo pipefail
+set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -35,7 +35,10 @@ case "$REPO" in
     echo "repo-daemon-install: refusing target '$REPO' — per-repo means a repo, never HOME or a global config dir" >&2
     exit 64 ;;
 esac
-[ -d "$REPO/.git" ] || { echo "repo-daemon-install: '$REPO' is not a git repo (no .git)" >&2; exit 65; }
+# git rev-parse, not [ -d .git ]: a worktree's .git is a FILE, and the checkout set
+# here includes one (phase-5 panel, codex leg — js-lp-members-site).
+git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || { echo "repo-daemon-install: '$REPO' is not a git repo" >&2; exit 65; }
 
 DEST="$REPO/.astra/mcp-front"
 mkdir -p "$DEST"

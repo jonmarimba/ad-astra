@@ -129,7 +129,9 @@ import mcp_config
 from mcp import types
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, get_default_environment, stdio_client
+from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler
 from mcp.shared.exceptions import MCPError
+from mcp.shared.subscriptions import ToolsListChanged
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import NotificationOptions, ServerRequestContext
 
@@ -519,18 +521,6 @@ class Upstream:
                      self.name)
             _fire_surface_changed(f"{self.name} listChanged")
 
-    async def _mark_broken(self, why: str) -> None:
-        """Set known_broken AND drop the public session reference immediately. The codex
-        leg of the phase-1 panel caught the gap: known_broken was set but the session
-        stayed visible until stdio teardown completed, and a wedged teardown (documented
-        below in stall_watchdog) let calls keep entering a session everyone knew was
-        dead."""
-        async with self.lock:
-            self.known_broken = True
-            self.session = None
-        log.warning("[%s] marking connection broken: %s", self.name, why)
-        _fire_surface_changed(f"{self.name} broken")
-
     async def list_tools(self, params: types.PaginatedRequestParams | None) -> types.ListToolsResult | None:
         """Returns None when this upstream is DISCONNECTED or the call failed — which is a
         different fact from a connected upstream answering with zero tools, and the two
@@ -603,6 +593,18 @@ class Upstream:
         """Returns None if not connected — caller decides how to report that,
         since the aggregator needs a slightly different message than the
         single-upstream case (naming which upstream is down)."""
+        # The surface-change fire happens OUT HERE, after the lock is released. The
+        # phase-5 panel caught the call-path break never announcing the contraction:
+        # every downstream client kept its cached full list for the whole outage — the
+        # exact failure 4.1 exists to close — because the fastest break-detection path
+        # was the one path that stayed silent.
+        was_broken = self.known_broken
+        result = await self._call_tool_locked(tool_name, arguments)
+        if self.known_broken and not was_broken:
+            _fire_surface_changed(f"{self.name} call broken")
+        return result
+
+    async def _call_tool_locked(self, tool_name: str, arguments: dict) -> types.CallToolResult | None:
         async with self.lock:
             if self.session is None or self.known_broken:
                 return None
@@ -721,8 +723,17 @@ class Upstream:
                         server_info = getattr(init, "server_info", None) or getattr(
                             init, "serverInfo", None)
                         found = getattr(server_info, "version", None)
-                        if self.expected_version and found and found != self.expected_version:
-                            _fire_version_mismatch(self.name, self.expected_version, found)
+                        if self.expected_version:
+                            if found != self.expected_version:
+                                # A missing serverInfo.version is NOT a pass — the
+                                # operator believes the check ran (phase-5 panel).
+                                _fire_version_mismatch(self.name, self.expected_version,
+                                                       found or "(unreported)")
+                            else:
+                                # Back on the expected version: retract the advisory so
+                                # new sessions stop being told about a mismatch that
+                                # healed (phase-5 panel: the note outlived its cause).
+                                _fire_version_match(self.name)
                         async with self.lock:
                             self.session = session
                             self.known_broken = False
@@ -853,6 +864,14 @@ def _fire_version_mismatch(name: str, expected: str, found: str) -> None:
         cb(name, expected, found)
 
 
+_version_match_callbacks: list = []
+
+
+def _fire_version_match(name: str) -> None:
+    for cb in list(_version_match_callbacks):
+        cb(name)
+
+
 def _rewrite_refs(text: str, table: dict) -> str:
     """Whole-word substitution of old tool names with their PUBLISHED names — the
     mechanical description pass (SPEC): every sibling description mentioning a renamed
@@ -939,21 +958,44 @@ def build_server(upstreams: list[Upstream]) -> Server:
     # private attribute this daemon touches — the SDK offers no public registry, and the
     # alternative was shipping no relay at all.
     downstream_sessions: dict = {}
+    # An abandoned session's send neither raises nor drains on the legacy transport
+    # (the SDK drops server-initiated messages for a session with no open GET stream),
+    # so the registry cannot rely on failure for eviction — it is BOUNDED instead, and
+    # insertion order makes the dict its own LRU: oldest-registered goes first. 128 is
+    # far above the concurrent-client count here (a handful of harness sessions plus
+    # kicker nodes), so eviction only ever removes the long-abandoned (phase-5 panel,
+    # all three brands, on the unbounded leak).
+    DOWNSTREAM_CAP = 128
 
     def _remember_downstream(ctx: ServerRequestContext) -> None:
         conn = getattr(ctx.session, "_connection", None)
-        if conn is not None:
-            downstream_sessions[id(conn)] = ctx.session
+        if conn is None:
+            return
+        key = id(conn)
+        # Re-registering moves the entry to the newest position; entries hold the
+        # session (which holds the connection) strongly, so a live key cannot be
+        # reused by a new connection.
+        downstream_sessions.pop(key, None)
+        downstream_sessions[key] = ctx.session
+        while len(downstream_sessions) > DOWNSTREAM_CAP:
+            downstream_sessions.pop(next(iter(downstream_sessions)))
 
     async def broadcast_list_changed() -> None:
-        for key, session in list(downstream_sessions.items()):
+        # Concurrent, one timeout each: serial sends made broadcast latency scale with
+        # the registry (phase-5 panel), and one stuck client must not delay the rest.
+        async def _send_one(key, session):
             try:
-                # A client that never opens its standalone GET stream never drains this
-                # channel; the timeout keeps one such client from wedging the broadcast.
                 with anyio.move_on_after(1):
                     await session.send_tool_list_changed()
             except Exception:
                 downstream_sessions.pop(key, None)  # connection gone; forget it
+
+        async with anyio.create_task_group() as tg:
+            for key, session in list(downstream_sessions.items()):
+                tg.start_soon(_send_one, key, session)
+        # Modern-protocol (2026-07-28+) clients hear changes on subscriptions/listen
+        # streams instead; the bus fans this out to every active listener there.
+        await subscription_bus.publish(ToolsListChanged())
 
     async def on_list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
@@ -1257,12 +1299,20 @@ def build_server(upstreams: list[Upstream]) -> Server:
             f"re-run tools/list to pick it up when it returns.{mcpbridge_para}"
         )
 
+    # The modern (2026-07-28+) wire has no standing GET stream: clients hear changes on
+    # subscriptions/listen response streams, and the SDK derives the modern
+    # tools.listChanged capability from whether that method is served — the
+    # NotificationOptions override below covers only the handshake era (phase-5 panel,
+    # codex leg, probed both paths). Serving the listen handler closes the modern half.
+    subscription_bus = InMemorySubscriptionBus()
+
     server = Server(
         SERVER_NAME,
         version="0.4.0",
         instructions=instructions,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
+        on_subscriptions_listen=ListenHandler(subscription_bus),
         lifespan=lambda app: _lifespan(app, upstreams, broadcast_list_changed),
     )
 
@@ -1291,6 +1341,12 @@ def build_server(upstreams: list[Upstream]) -> Server:
             seen_mismatches = json.load(f)
     except (OSError, ValueError):
         seen_mismatches = {}
+    if not isinstance(seen_mismatches, dict):
+        # A malformed ledger must degrade to warning twice, never to failing every
+        # reconnect with a TypeError (phase-5 panel, codex leg).
+        log.warning("%s did not hold an object — starting the mismatch ledger fresh",
+                    persisted_path)
+        seen_mismatches = {}
 
     def _on_version_mismatch(name: str, expected: str, found: str) -> None:
         mismatch_notes[name] = (
@@ -1315,6 +1371,15 @@ def build_server(upstreams: list[Upstream]) -> Server:
             log.warning("could not persist the version-mismatch record: %s", e)
 
     _version_mismatch_callbacks.append(_on_version_mismatch)
+
+    def _on_version_match(name: str) -> None:
+        if mismatch_notes.pop(name, None) is not None:
+            server.instructions = base_instructions + (
+                ("\n\n" + "\n".join(mismatch_notes[k] for k in sorted(mismatch_notes)))
+                if mismatch_notes else "")
+            log.info("[%s] back on the expected version — mismatch advisory retracted", name)
+
+    _version_match_callbacks.append(_on_version_match)
 
     return server
 
