@@ -12,6 +12,17 @@ Synthesised by GhOST-Claude, 2026-08-31, from a three-brand colloquium: Claude, 
 2. **Prefix routing cannot survive the tool map.** Routing is `name.startswith(prefix)`, so a mapped name that drops the prefix is advertised and then rejected as unknown. Prefixes also change when the upstream *count* changes, because a single upstream is unprefixed — so adding a second server silently renames every tool the first one offered.
 3. **`mcp_tools.py`, which I wrote this morning, misreads any server that says anything unexpected.** It assumes the next stdout line answers the request just sent. A banner line or a spec-legal notification arriving first is misread or crashes it. Its own docstring forbids exactly this class of error.
 
+## Jonathan's answers, 2026-08-31 — these override the panel where they differ
+
+- **Sieve: deny-list only, to begin with.** "KISS it. I'd like to avoid having updating to new versions of MCPs silently ignore new tools. I'd rather have a collision or a little less safety than miss features." So no allow-list mode is built. Phase 2 shrinks.
+- **Per-repo autonomous daemons, NOT one broker with profile routes.** He rejected the panel's shared-broker answer directly: "I'd strongly prefer each install in a given repo to be autonomous. That way, one thing failing doesn't fuck all my projects at once." A repo launchds its own copy of the wrapper, cloned into `.astra` with APFS clones, and **the daemon detects and resolves port collisions at launch**. Blast radius beats efficiency here.
+- **A repo's config MAY add upstreams.** "You're overindexing on security. Again. This is a tool for software developers. Sharper edges can cut off fingers, that's fine."
+- **Homebrew where it can be, uv and npm where needed.** The point is fewer dependency mechanisms and reasonable consistency, not brew-only. Our own tooling — the `.app` wrappers — is fair game and was never the problem I made it out to be.
+- **Stale map entry: drop the alias, keep serving.** ("Don't be stupid.")
+- **Xcode 27 is in scope later**, and he wants to know what it adds, specifically so scheme-switching can be compared between Drew's server and Apple's.
+
+**One consequence of the per-repo decision, stated once and not argued.** N repo daemons reintroduce the approval-serialisation ceiling that the shared broker would have dissolved: each needs roughly six seconds of exclusive Xcode dialog time and they queue, against a fifteen-second connect timeout. Two fit today. The mitigation is that the connect timeout is configurable and the foreign-dialog grace is now asserted to be below it, so the ceiling can be raised deliberately rather than discovered. Worth measuring at three before a third repo depends on it.
+
 ## Ordered increments
 
 TDD throughout. **An increment whose test cannot fail is not an increment**, so each states how its test goes red. Small on purpose; time is not the constraint, correctness is.

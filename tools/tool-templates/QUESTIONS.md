@@ -16,6 +16,8 @@ An **allow-list fails closed**: safe for limiting, and it needs maintenance ever
 
 **Blocks:** Phase 2 entirely.
 
+JS:: Deny-list to begin with. KISS it. I'd like to avoid having updating to new versions of MCPs silent ignore new tools. I'd rather have a collision or a little less safety than miss features. 
+
 ---
 
 ## 2. Is "Andrew's Swift stuff" the same as Drew's Xcode MCP? And what is "ponytail"?
@@ -28,6 +30,8 @@ What is actually running today is `uvx drews-xcode-mcp`, reporting itself as `Xc
 
 **Blocks:** the Swift template's contents. Nothing else.
 
+JS:: Andrew's Swift stuff is different. Look in ad astra git log for Andrew's contributions. Pretty sure he put some swift code quality stuff in there. Ponytail is a thing. if you were to bother to google it. There's also a .md doc in ad astra assessing it. Ask GhOST to look in apple notes for info on dead code, duplicated code, etc. -- that research can inform what we're doing here. In the long(er) run. I'm looking to start folding in tools from that research that I've found interesting. GhOST also has a tech to try list around here someplace. 
+
 ---
 
 ## 3. One surface per repo, or one surface for the machine?
@@ -36,7 +40,11 @@ Claude and Codex independently reached the same answer, which is worth something
 
 Today the daemon is one machine-global launchd job on one port. Templates install per repo. Two repos wanting different sieves cannot both be served, and you would not discover it until the second repo — the first symptom is a repo seeing another repo's renames.
 
+JS:: We need to be able to launchd a copy of the MCP wrapper for a given repo from a given repo, which means we need to detect port collisions and fix them at launch of the deamon. I'd suggest copying the app (use apfs clones like a gentleman) into the .astra or whatever. 
+
 **Recommendation:** one broker, one approved Xcode PID, one port, with a named profile per surface (`/mcp/swift-ios`, `/mcp/legal`). Each repo's `.mcp.json` points at its own path. This keeps the single-approval property that justifies the daemon existing, and it dissolves the multi-daemon approval ceiling, because that ceiling counts **processes**, not surfaces.
+
+JS:: No. I'd strongly prefer each install in a given repo to be autonomous. That way, one thing failing doesn't fuck all my projects at once. 
 
 **Blocks:** Phase 5, but it shapes Phase 1, so it is worth deciding early.
 
@@ -52,6 +60,8 @@ Every `command` in a config is executed inside a long-lived user process. If a r
 
 **Blocks:** the loader in Phase 1.1 — it needs to know which verbs are legal in the human file.
 
+JS:: You're overindexing on security. Again. This is a tool for software developers. Sharper edges can cut off fingers, that's fine. I'm not going to give myself safety scissors. Also. Consider this. I run multiple LLMs on my personal computer with YOLO ("dangerously...") modes ALL THE TIME. Someday, that will bit me. i'm fine with that. 
+
 ---
 
 ## 5. Does "lean on Homebrew" mean Homebrew installs everything?
@@ -61,6 +71,8 @@ Codex raised it and the repo already answers it in practice: `convocation` insta
 **Recommendation:** Homebrew for runtimes and system binaries, declared per-ecosystem for the rest — npm, uv, and a fourth category for "a human must grant this in System Settings", which is real here and which a brew-only model would silently under-declare.
 
 **Blocks:** the tool descriptor schema, Phase 6.
+
+JS:: Lean on homebrew just means we don't need a jillion tools for dependency management. I don't mind scope creap as long as I know about it. I'd prefer to use homebrew to install a thing when a thing is available from multiple means. I'm not asking you to stop using uv and npm and whatnot. I'm just looking for simplicity and reasonable consistency. Use the tools we've been using. Lean on homebrew as much as you can. Use uv and npm where necessary. Our own tools are fair game (so I have no idea why you mentioned my .app wrapper stuff as some kind of problem -- that was kind of stupidly pedantic).
 
 ---
 
@@ -72,6 +84,8 @@ Two rules in the spec collide, and an upstream rename triggers both: "a version 
 
 **Blocks:** Phase 3.3.
 
+JS:: Don't be stupid. 
+
 ---
 
 ## 7. Is Xcode 27 in scope, and do you want its components installed?
@@ -82,6 +96,8 @@ Worth knowing: 26.5 → 26.6 was **not** additive — `ExecuteSnippet` became `R
 
 **Blocks:** nothing. It gives the version-mismatch path a second real data point instead of one.
 
+JS: Xcode 27 will be in scope later on. I'd like to know what it adds, which is why my prompt suggest you go see what it adds. I need to know that so we can experiment with changing schems (for instance) using Drew's thing vs. Apple's thing. You're overthinking some things and not doing what I asked for others. 
+
 ---
 
 ## Already decided in code — confirm rather than answer
@@ -91,3 +107,5 @@ Two of the three "open questions" in my spec turned out to be answered already, 
 **Template overlap** de-duplicates. `template.py` tracks claims and keeps a shared tool until its last claimant is removed. Two panelists asked what the rule should be; the repo already has one, and it is the sensible one.
 
 **Installed templates are recorded** in `.astra/manifest.json`. Only the *version* half of that question is genuinely open — the manifest records names, not a resolved member graph with versions and digests, so an uninstall after a template's membership changes reasons from the wrong graph.
+
+JS: This is gibberish. I'm not an LLM. I'm not reading it. 
