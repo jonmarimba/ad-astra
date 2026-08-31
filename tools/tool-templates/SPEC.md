@@ -80,6 +80,24 @@ Verified against a live `mcpbridge` on 2026-08-31: `initialize` returns `serverI
 
 **Stale entries must surface rather than rot.** A blocked tool that the upstream no longer offers is a line that now protects nothing, and a version bump is exactly when that happens. The wrapper knows both the configured list and the live list, so it can say so. Silence here is how a sieve comes to look protective years after it stopped being.
 
+### The tool map
+
+Jonathan, same conversation: the same file also carries a **tool map**. Where the sieve subtracts, the map renames and redirects, and together they are the full control over the surface the user sees.
+
+An entry maps an **exposed name** to an upstream and the tool's name on that upstream. That gives three things at once:
+
+- **A canonical name across servers.** Two upstreams that both read a file can be presented as one `read_file`, with the map naming which upstream actually serves it. This is the ownership idea from the section below, made concrete — the map is where it gets expressed, so it need not be a separate mechanism.
+- **A stable name over a moving upstream.** When a server renames a tool between versions, the map absorbs it and the user's vocabulary does not change. Without that, every upstream rename is a change to how the controlling LLM has learned to work.
+- **A name that fits the surface rather than the vendor.** A mapped name is the final exposed name, so it need not carry the `xcode__` style prefix. The prefix is a good default for unmapped tools and a poor one for a curated surface.
+
+Three things it has to get right:
+
+**Translate back on the way in.** The map is applied to `tools/list` going out and must be reversed on `tools/call` coming in, or a renamed tool is advertised and then rejected as unknown. Same failure shape as applying the sieve to only one of the two.
+
+**The description travels with the name, and usually should not.** Tool descriptions are written by the upstream and mention the upstream's own tool names, so renaming `XcodeGrep` to `search` while keeping a description that says "use XcodeGrep to…" hands the model a contradiction between the name it can call and the name it is told to call. **The map should be able to override the description text**, and a map entry that renames without addressing the description deserves a warning rather than silence.
+
+**A map entry naming a tool the upstream does not have is a hard error, not a skip.** It means the surface promised something that will fail on first use, and unlike a stale sieve entry — which merely stops protecting — a stale map entry actively breaks a call the user was told it could make.
+
 ### Expressing collisions as ownership rather than as blocks
 
 For the coherence purpose, writing per-server deny-lists means that adding a third server that also covers the same ground requires editing every other server's list, and getting one wrong reintroduces the duplicate. Saying instead that a given capability is **owned** by one named upstream puts the decision in one place and makes a third server's arrival a single edit. Both shapes are expressible in the same file; this is a recommendation, not a decision.
