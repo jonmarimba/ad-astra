@@ -45,6 +45,10 @@ def main():
     ap.add_argument("--blank-before-reply", action="store_true",
                     help="emit one empty line before every response (must NOT read as EOF)")
     ap.add_argument("--stall-tools", action="store_true")
+    ap.add_argument("--stall-log", default=None, metavar="FILE",
+                    help="with --stall-tools: append one line to FILE on EVERY tools/list "
+                         "request before refusing to answer. The line count is the fire count — "
+                         "how many times the client (re)issued tools/list — asserted by effect.")
     ap.add_argument("--emit-list-changed-on-call", default=None, metavar="TOOL",
                     help="emit notifications/tools/list_changed before answering a call "
                          "to TOOL (deterministic trigger for notification-relay tests)")
@@ -95,6 +99,10 @@ def main():
                 "capabilities": {"tools": {"listChanged": True}},
                 "serverInfo": {"name": a.name, "version": a.version}}})
         elif method == "tools/list" and a.stall_tools:
+            if a.stall_log:
+                with open(a.stall_log, "a") as f:
+                    f.write("tools/list %s\n" % mid)
+                    f.flush()
             continue  # never answer — the approval-dialog gate, as a stub
         elif method == "tools/list":
             if a.page_loop:

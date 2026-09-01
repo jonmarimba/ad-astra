@@ -188,6 +188,20 @@ CONNECT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CONNECT_TIMEOUT_
 # actively misleading once this fires, since the build was killed mid-flight,
 # not merely delayed; a retry starts it over, it doesn't resume it.
 CALL_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CALL_TIMEOUT_S", "600"))
+# The reconnect loop backs off on repeated failed connects instead of hammering a
+# flat RECONNECT_POLL_SECONDS. A fresh connect to a require_xcode upstream spawns a
+# fresh mcpbridge, which raises a fresh approval dialog; a flat 5s loop therefore asks
+# Xcode for permission every 5s all night (found live 2026-08-31, Xcode 27 beta). Delay
+# doubles per consecutive failure up to this cap, and resets the moment a connect
+# succeeds — so a genuinely-down upstream is polled rarely, a healthy one recovers fast.
+RECONNECT_BACKOFF_MAX_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_RECONNECT_BACKOFF_MAX_S", "300"))
+# How long to hold the FIRST list_tools in-flight while an approval-gated upstream (Xcode)
+# waits for a human to answer its one approval dialog. Human-scale on purpose: the request
+# is never cancelled during this window (cancelling it sends notifications/cancelled over
+# the wire on mcp>=2.0.0, withdrawing the request and re-raising a fresh dialog — the
+# measured storm). Long enough that a person has ample time to click Allow once; bounded
+# so a genuinely dead child is still caught and reconnected (with backoff), not held forever.
+APPROVAL_WAIT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_APPROVAL_WAIT_S", "600"))
 SERVER_NAME = os.environ.get("XCODE_MCP_FRONT_SERVER_NAME", "xcode-mcp-front")
 
 logging.basicConfig(level=logging.INFO, format=f"%(asctime)s {SERVER_NAME} %(message)s")
@@ -316,6 +330,18 @@ def _check_dialog_grace(specs) -> None:
             "the connection attempt it is blocking can never be cleared in time, so two daemons "
             "deadlock and every symptom looks like Xcode refusing to serve tools."
             % (FOREIGN_DIALOG_GRACE_SECONDS, CONNECT_TIMEOUT_SECONDS))
+    # The POST-approval health check is bounded by CONNECT_TIMEOUT and only refreshes
+    # last_progress on success, so it must be able to time out and reconnect BEFORE the
+    # stall_watchdog blunt-restarts the process. If CONNECT_TIMEOUT >= STALL_EXIT the watchdog
+    # os._exit()s mid-heartbeat, killing the child and re-raising the approval dialog — the
+    # storm by another door. (The FIRST approval wait is exempt: its sidecar keeps last_progress
+    # fresh, so APPROVAL_WAIT_SECONDS is deliberately allowed to exceed STALL_EXIT.)
+    if CONNECT_TIMEOUT_SECONDS >= STALL_EXIT_SECONDS:
+        raise SystemExit(
+            "xcode-mcp-front: XCODE_MCP_FRONT_CONNECT_TIMEOUT_S (%.1fs) must be less than "
+            "XCODE_MCP_FRONT_STALL_EXIT (%.1fs), so a post-approval heartbeat can time out and "
+            "reconnect before the stall watchdog restarts the whole process mid-call."
+            % (CONNECT_TIMEOUT_SECONDS, STALL_EXIT_SECONDS))
 
 # How long an upstream may make NO progress before we let launchd restart us. See
 # stall_watchdog(). Generous on purpose: a false positive restarts a healthy daemon.
@@ -516,6 +542,15 @@ class Upstream:
         self.lock = anyio.Lock()
         self.session: ClientSession | None = None
         self.known_broken = False
+        # Reconnect backoff: seconds to wait before the NEXT connect attempt. Doubles on
+        # each consecutive failed connect (capped), resets to the base the moment a connect
+        # succeeds. Stops the flat-5s dialog storm on an approval-gated upstream.
+        self.reconnect_delay = RECONNECT_POLL_SECONDS
+        # True once this CONNECTION has had one successful list_tools — i.e. Xcode's approval
+        # dialog (if any) has been answered. A first-approval timeout must NOT tear the
+        # connection down (that withdraws the open dialog and re-asks); a timeout AFTER
+        # approval is a real stall. Reset to False on every fresh connect.
+        self.approved_once = False
 
 
     async def _on_upstream_message(self, message) -> None:
@@ -743,6 +778,11 @@ class Upstream:
                         async with self.lock:
                             self.session = session
                             self.known_broken = False
+                        # Connect succeeded: reset the backoff, and mark this connection as
+                        # not-yet-approved so the first list_tools timeout holds instead of
+                        # tearing down.
+                        self.reconnect_delay = RECONNECT_POLL_SECONDS
+                        self.approved_once = False
                         log.info("[%s] connected — serving until this breaks", self.name)
                         # The surface just grew: tell downstream clients holding a cached
                         # list (4.1 — the phase-1 panel's permanently-cached-partial-
@@ -751,42 +791,82 @@ class Upstream:
                         self.last_progress = time.monotonic()
                         while not self.known_broken:
                             await anyio.sleep(RECONNECT_POLL_SECONDS)
-                            # Health-check: a silent list_tools call catches a
-                            # dead upstream before any client discovers it.
-                            # Without this, a killed Xcode leaves the daemon
-                            # sitting "connected" until a real client call
-                            # fails — minutes of silently serving zero tools.
-                            # CLICK WHILE THE CALL IS BLOCKED, NOT AFTER IT RETURNS. This is
-                            # the deadlock that kept the suite at 6/10 and looked for a whole
-                            # night like Apple's bridge refusing to serve tools.
+                            # Xcode raises "Allow <x> to access Xcode?" LAZILY on the first real
+                            # list_tools (not at the handshake) and BLOCKS the call until it is
+                            # answered. Two distinct storm mechanisms were measured on 2026-08-31
+                            # against the Xcode 27 beta, and this loop is split to avoid BOTH:
                             #
-                            # Xcode raises "Allow <x> to access Xcode?" lazily, on the first real
-                            # list_tools rather than at the handshake — the comment below has
-                            # said so since 2026-08-14. So list_tools BLOCKS until that dialog is
-                            # answered. The clicker that answers it was placed after the await.
-                            # It therefore ran only once list_tools had already returned, and on
-                            # the timeout path the except branch marks the upstream broken and
-                            # breaks out before reaching it at all. The one thing that could
-                            # unblock the call was scheduled to run only after the call unblocked.
+                            #  1. Killing the child on a timeout withdraws the dialog it is bound
+                            #     to; the next connect re-raises it — a fresh dialog every cycle.
+                            #  2. Cancelling the list_tools REQUEST is NOT local. The pinned
+                            #     mcp>=2.0.0 SDK sends notifications/cancelled over the wire, the
+                            #     child cancels its handler, and the re-issue fires a FRESH handler
+                            #     (proven by effect: a fake server's handler count went 1->2 across
+                            #     one cancelled + one re-issued list_tools). So even a bounded-then-
+                            #     reissue heartbeat re-asks Xcode on a timer.
                             #
-                            # Worse, the teardown withdraws the prompt: the dialog is bound to the
-                            # live connecting process, so killing the child on timeout retracts
-                            # the question. With a 5s reconnect loop the daemon spent all night
-                            # asking Xcode for permission and cancelling the request before anyone
-                            # could say yes — which is why no dialog was ever found on screen, and
-                            # why running a single bridge by hand and simply leaving it alive
-                            # produced the prompt immediately and 21 tools once it was answered.
-                            #
-                            # Two daemons made it twice as fast, which is the "do two bridges
-                            # interfere" question: they do, but only by doubling the churn. One
-                            # daemon alone reproduces it.
+                            # Therefore: the FIRST approval wait keeps exactly ONE list_tools
+                            # in-flight and NEVER cancels it, so nothing crosses the wire and the
+                            # single dialog stays up until answered once. Only AFTER approval does
+                            # the loop fall through to a short, cancel-on-timeout health check,
+                            # where a hang really is a stall.
+                            if self.require_xcode_running and not self.approved_once:
+                                try:
+                                    with anyio.fail_after(APPROVAL_WAIT_SECONDS):
+                                        async with anyio.create_task_group() as _tg:
+                                            async def _wait_sidecar():
+                                                # This is a deliberate human wait, not a wedge:
+                                                # keep last_progress fresh so the stall_watchdog
+                                                # does not os._exit mid-wait (which would kill the
+                                                # child and re-raise the dialog — storm mechanism
+                                                # 1 by another door), and poll the clicker so an
+                                                # AUTO_ALLOW grant answers it hands-free.
+                                                while True:
+                                                    self.last_progress = time.monotonic()
+                                                    if AUTO_ALLOW:
+                                                        await _click_allow_if_present()
+                                                    await anyio.sleep(ALLOW_CLICK_POLL_SECONDS)
+                                            _tg.start_soon(_wait_sidecar)
+                                            # NOT wrapped in a cancel-on-timeout: the ONE thing
+                                            # that must never happen to this request is a
+                                            # cancellation reaching the child.
+                                            await session.list_tools()
+                                            _tg.cancel_scope.cancel()
+                                    self.approved_once = True
+                                    self.last_progress = time.monotonic()
+                                    log.info("[%s] first list_tools approved — serving", self.name)
+                                except Exception as e:
+                                    # APPROVAL_WAIT_SECONDS elapsed with no answer, OR the child
+                                    # died mid-wait. Either way the connection is spent: tear down
+                                    # and let the outer loop reconnect with backoff (so an upstream
+                                    # nobody ever approves is re-asked rarely, not every 5s).
+                                    # Unwrap ExceptionGroups so the log names the REAL sub-cause
+                                    # (a bare "ExceptionGroup" cost a live session on 2026-08-31).
+                                    _causes = []
+                                    _stack = [e]
+                                    while _stack:
+                                        _cur = _stack.pop()
+                                        _subs = getattr(_cur, "exceptions", None)
+                                        if _subs:
+                                            _stack.extend(_subs)
+                                        else:
+                                            _causes.append(f"{type(_cur).__name__}: {_cur}")
+                                    log.warning("[%s] first approval not completed (%s) — reconnecting",
+                                                self.name, "; ".join(_causes) or type(e).__name__)
+                                    async with self.lock:
+                                        self.known_broken = True
+                                        self.session = None
+                                    _fire_surface_changed(f"{self.name} approval wait ended")
+                                    break
+                                continue
+                            # POST-approval health check: a silent list_tools catches a dead
+                            # upstream before any client call discovers it. The dialog is already
+                            # answered, so a hang here is a REAL stall — bound it and, on any
+                            # failure, tear down and reconnect.
                             try:
                                 with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
                                     async with anyio.create_task_group() as _tg:
                                         async def _click_while_blocked():
-                                            # Poll rather than click once: the dialog appears a
-                                            # moment AFTER the request goes out, so a single
-                                            # attempt at the start reliably finds nothing.
                                             while True:
                                                 if AUTO_ALLOW:
                                                     await _click_allow_if_present()
@@ -796,24 +876,16 @@ class Upstream:
                                         _tg.cancel_scope.cancel()
                                 self.last_progress = time.monotonic()
                             except Exception as e:
-                                log.warning("[%s] heartbeat list_tools failed, marking broken: %s", self.name, e)
+                                log.warning("[%s] post-approval heartbeat failed, marking broken: %s",
+                                            self.name, e)
                                 async with self.lock:
                                     self.known_broken = True
-                                    # Drop the public reference NOW — stdio teardown can
-                                    # wedge (see stall_watchdog), and until it finishes
-                                    # the old session must not be callable.
+                                    # Drop the public reference NOW — stdio teardown can wedge
+                                    # (see stall_watchdog), and until it finishes the old session
+                                    # must not be callable.
                                     self.session = None
                                 _fire_surface_changed(f"{self.name} heartbeat broken")
                                 break
-                            # The approval prompt has been observed appearing
-                            # AFTER a successful initialize() — requested
-                            # lazily, apparently on the first real list_tools
-                            # call rather than at the handshake. So keep
-                            # checking even once connected, not just while
-                            # reconnecting — safe every tick regardless, since
-                            # it only ever acts on our own pid or a dead one.
-                            if AUTO_ALLOW:
-                                await _click_allow_if_present()
             except Exception as e:
                 # Unwrap ExceptionGroups: "unhandled errors in a TaskGroup (1 sub-exception)"
                 # names nothing and cost a live debugging session on 2026-08-31.
@@ -831,8 +903,12 @@ class Upstream:
 
             async with self.lock:
                 self.session = None
-            log.info("[%s] not connected, retrying in %ss", self.name, RECONNECT_POLL_SECONDS)
-            await anyio.sleep(RECONNECT_POLL_SECONDS)
+            log.info("[%s] not connected, retrying in %ss", self.name, self.reconnect_delay)
+            await anyio.sleep(self.reconnect_delay)
+            # Back off for the NEXT attempt if this one keeps failing; a successful connect
+            # resets this to the base. Bounds the approval-dialog re-ask rate on a persistently
+            # unreachable require_xcode upstream instead of a flat every-5s storm.
+            self.reconnect_delay = min(self.reconnect_delay * 2, RECONNECT_BACKOFF_MAX_SECONDS)
 
 
 def _build_upstreams() -> list[Upstream]:
