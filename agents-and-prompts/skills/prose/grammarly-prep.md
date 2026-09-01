@@ -2,7 +2,7 @@
 
 The mechanical cleanup that runs last, after asd-ste100 has set the structure and the humanizer has set the voice. Its only job is to leave a draft Grammarly has little to say about, so Jonathan's editing pass is judgement rather than punctuation.
 
-This is not Grammarly. Grammarly is where he edits, by hand, as the last step before pasting into email. Nothing here replaces that.
+This is not Grammarly. The Grammarly pass itself comes after this one - either Jonathan by hand, or the grammarly-pass skill driving the real web editor with his accept/reject rules (added 2026-09-01). Either way he owns the final read; this pass just makes sure Grammarly has little left to say.
 
 ## What to fix
 
