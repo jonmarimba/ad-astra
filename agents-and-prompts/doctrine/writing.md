@@ -2,6 +2,10 @@
 
 These rules govern what belongs in a document, how to address a recipient, and how to structure asks. The ASD-STE100 skill handles sentence mechanics. This file handles everything above the sentence.
 
+## Run the tools. Your opinion of your own prose is not evidence. (Jonathan, 2026-09-01)
+
+Before any prose reaches a human — email draft, client document, README a person will read — run the installed writing tools: the prose skill (which chains asd-ste100 and the humanizer), then check-prose. This is not optional and not conditional on how good you judge the draft to be. Every model rates its own prose as fantastic; the AI tells the humanizer catches are precisely the ones the model that produced them cannot see. A draft presented without the tools having run is an unreviewed draft, and saying so afterward does not cure it. If the tools are not installed in the repo, say that instead of skipping silently.
+
 ## A client email is a relationship document, not a bug report (Jonathan, 2026-08-14)
 
 The ASD-STE100 rules govern sentences. These govern what belongs in the document at all. Written after Jonathan rewrote a draft end to end, where the gap was not prose polish but audience: the draft was a findings list addressed to nobody, his rewrite was a letter to four named people that happened to contain findings.

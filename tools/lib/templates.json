@@ -24,6 +24,7 @@
   "mac-swift": {
    "description": "Mac application development: simply the Xcode, Swift and Mac templates as members, because that is what Mac app work actually requires.",
    "templates": [
+    "base",
     "xcode",
     "swift",
     "mac"
@@ -33,6 +34,7 @@
   "swift-ios": {
    "description": "iOS/Swift app work \u2014 the Maharam repos. The Xcode, Swift and Mac templates plus simulator UI driving: the axe CLI and the ios-ui-driving skill (identifiers mandatory, AX-tree targeting, probes ad-hoc, XCUITest-by-identifier promoted for flows a feature iterates on) alongside the ios-simulator MCP. (Keeps its historical name: repos' manifests already record it. mobile-mcp removed 2026-09-01 \u2014 arrived undecided in kicker's 2026-07-07 bundle, broken on first real use, and idb covers the job.)",
    "templates": [
+    "base",
     "xcode",
     "swift",
     "mac"
@@ -44,10 +46,12 @@
    ]
   },
   "legal-pdf": {
-   "description": "Legal repos \u2014 speedway, hoa, grandparentLegal. PDF to searchable text sidecars, OCR for scans, metadata provenance, plus the prose checker. NOTE: grandparentLegal wants `git config jsutils.metadataPolicy all` for every-PDF provenance; the default 'pattern' only does meeting-named files.",
+   "description": "Legal repos \u2014 speedway, hoa, grandparentLegal. PDF to searchable text sidecars, OCR for scans, metadata provenance, plus the full writing stack via base. NOTE: grandparentLegal wants `git config jsutils.metadataPolicy all` for every-PDF provenance; the default 'pattern' only does meeting-named files.",
    "tools": [
-    "pdf-sidecars",
-    "check-prose"
+    "pdf-sidecars"
+   ],
+   "templates": [
+    "base"
    ]
   },
   "kicker-dev": {
@@ -67,6 +71,15 @@
     "prose",
     "writing-doctrine",
     "grammarly-pass"
+   ]
+  },
+  "base": {
+   "description": "What EVERY repo gets regardless of kind (Jonathan, 2026-09-01): the writing discipline (any repo eventually produces prose a human reads, and the doctrine's standing order \u2014 run the tools, your opinion of your own prose is not evidence \u2014 only fires if it is installed) and convocation (cross-brand panels, whose doctrine carries the convoq-first rule: search the record before reconstructing or asking). convoq itself is machine-level tooling in js-project-GhOST; the per-repo piece is the doctrine that orders bots to use it.",
+   "templates": [
+    "writing"
+   ],
+   "tools": [
+    "convocation"
    ]
   }
  }
