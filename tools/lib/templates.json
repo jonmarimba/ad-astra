@@ -59,9 +59,13 @@
    ]
   },
   "writing": {
-   "description": "Prose discipline \u2014 the ASD-STE100 standard plus the mechanical checker. Wanted by anything a human reads: the legal repos, the HOA site, client email drafts.",
+   "description": "Prose discipline, complete: the ASD-STE100 skill (sentence mechanics), the humanizer skill (upstream 35-pattern AI-tell detection + voice calibration, pulled fresh per repo), the prose orchestrator (runs them in the one order that works, ends with the pre-Grammarly pass), the writing doctrine (.doctrine/writing.md, above-the-sentence rules), and the mechanical check-prose gate. Wanted by anything a human reads: the legal repos, the HOA site, client email drafts.",
    "tools": [
-    "check-prose"
+    "check-prose",
+    "asd-ste100",
+    "humanizer",
+    "prose",
+    "writing-doctrine"
    ]
   }
  }
