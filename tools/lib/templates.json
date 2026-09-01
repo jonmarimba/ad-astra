@@ -1,61 +1,68 @@
 {
-  "_comment": "Named groups of astra tools fit for a KIND of project. Non-exclusive: installing one adds its tools and never removes another's, and two templates may overlap freely — swift-ios and legal-pdf both pull the writing tools, and installing one after the other must leave both intact. A template may also list other TEMPLATES as members ('templates'), resolved transitively; the composed leaves follow Jonathan's dictated structure (SPEC.md, 2026-08-31): Xcode, Swift and Mac as building blocks, higher-level templates as compositions of them.",
-  "templates": {
-    "xcode": {
-      "description": "Drive Xcode, every way it can be driven: Apple's own bridge (needs a one-time approval), Drew's server, and headless XcodeBuildMCP.",
-      "tools": [
-        "mcp-xcode",
-        "mcp-xcode-mcp-server",
-        "mcp-XcodeBuildMCP"
-      ]
-    },
-    "swift": {
-      "description": "Swift code quality: the ponytail decision ladder, periphery for dead code, dedup-scan for duplicate code. (Drew's prompt-and-skill material lives in agents-and-prompts and has no installer yet.)",
-      "tools": [
-        "ponytail",
-        "periphery",
-        "dedup-scan"
-      ]
-    },
-    "mac": {
-      "description": "Run and drive Mac applications — windows, clicks, keys, screen capture, the accessibility tree.",
-      "tools": [
-        "mcp-mac-control-mcp"
-      ]
-    },
-    "mac-swift": {
-      "description": "Mac application development: simply the Xcode, Swift and Mac templates as members, because that is what Mac app work actually requires.",
-      "templates": ["xcode", "swift", "mac"],
-      "tools": []
-    },
-    "swift-ios": {
-      "description": "iOS/Swift app work — the Maharam repos. The Xcode, Swift and Mac templates plus simulator and physical-device control. (Keeps its historical name: repos' manifests already record it.)",
-      "templates": ["xcode", "swift", "mac"],
-      "tools": [
-        "mcp-ios-simulator",
-        "mcp-mobile-mcp"
-      ]
-    },
-    "legal-pdf": {
-      "description": "Legal repos — speedway, hoa, grandparentLegal. PDF to searchable text sidecars, OCR for scans, metadata provenance, plus the prose checker. NOTE: grandparentLegal wants `git config jsutils.metadataPolicy all` for every-PDF provenance; the default 'pattern' only does meeting-named files.",
-      "tools": [
-        "pdf-sidecars",
-        "check-prose"
-      ]
-    },
-    "kicker-dev": {
-      "description": "Working on kicker itself — its own daemon surface plus the mac and Xcode tooling. Left flat on purpose: composing it with the new xcode template would silently grow what kicker repos install.",
-      "tools": [
-        "mcp-kickerd",
-        "mcp-mac-control-mcp",
-        "mcp-xcode"
-      ]
-    },
-    "writing": {
-      "description": "Prose discipline — the ASD-STE100 standard plus the mechanical checker. Wanted by anything a human reads: the legal repos, the HOA site, client email drafts.",
-      "tools": [
-        "check-prose"
-      ]
-    }
+ "_comment": "Named groups of astra tools fit for a KIND of project. Non-exclusive: installing one adds its tools and never removes another's, and two templates may overlap freely \u2014 swift-ios and legal-pdf both pull the writing tools, and installing one after the other must leave both intact. A template may also list other TEMPLATES as members ('templates'), resolved transitively; the composed leaves follow Jonathan's dictated structure (SPEC.md, 2026-08-31): Xcode, Swift and Mac as building blocks, higher-level templates as compositions of them.",
+ "templates": {
+  "xcode": {
+   "description": "Drive Xcode through the ONE combined aggregator: Apple's bridge + Drew's server + a narrow XcodeBuildMCP slice (build_run_sim, test_sim, coverage, session defaults \u2014 the headless capabilities nothing else has) behind a single approved HTTP endpoint with a measured sieve/map. No direct spawns: mcp-xcode, mcp-xcode-mcp-server and mcp-XcodeBuildMCP remain as standalone tools but no template installs them (XcodeBuildMCP folded into the aggregator 2026-09-01).",
+   "tools": [
+    "mcp-xcode-combined"
+   ]
+  },
+  "swift": {
+   "description": "Swift code quality: the ponytail decision ladder, periphery for dead code, dedup-scan for duplicate code. (Drew's prompt-and-skill material lives in agents-and-prompts and has no installer yet.)",
+   "tools": [
+    "ponytail",
+    "periphery",
+    "dedup-scan"
+   ]
+  },
+  "mac": {
+   "description": "Run and drive Mac applications \u2014 windows, clicks, keys, screen capture, the accessibility tree.",
+   "tools": [
+    "mcp-mac-control-mcp"
+   ]
+  },
+  "mac-swift": {
+   "description": "Mac application development: simply the Xcode, Swift and Mac templates as members, because that is what Mac app work actually requires.",
+   "templates": [
+    "xcode",
+    "swift",
+    "mac"
+   ],
+   "tools": []
+  },
+  "swift-ios": {
+   "description": "iOS/Swift app work \u2014 the Maharam repos. The Xcode, Swift and Mac templates plus simulator UI driving: the axe CLI and the ios-ui-driving skill (identifiers mandatory, AX-tree targeting, probes ad-hoc, XCUITest-by-identifier promoted for flows a feature iterates on) alongside the ios-simulator MCP. (Keeps its historical name: repos' manifests already record it. mobile-mcp removed 2026-09-01 \u2014 arrived undecided in kicker's 2026-07-07 bundle, broken on first real use, and idb covers the job.)",
+   "templates": [
+    "xcode",
+    "swift",
+    "mac"
+   ],
+   "tools": [
+    "mcp-ios-simulator",
+    "axe",
+    "ios-ui-driving"
+   ]
+  },
+  "legal-pdf": {
+   "description": "Legal repos \u2014 speedway, hoa, grandparentLegal. PDF to searchable text sidecars, OCR for scans, metadata provenance, plus the prose checker. NOTE: grandparentLegal wants `git config jsutils.metadataPolicy all` for every-PDF provenance; the default 'pattern' only does meeting-named files.",
+   "tools": [
+    "pdf-sidecars",
+    "check-prose"
+   ]
+  },
+  "kicker-dev": {
+   "description": "Working on kicker itself \u2014 its own daemon surface plus the mac and Xcode tooling. Left flat on purpose: composing it with the new xcode template would silently grow what kicker repos install.",
+   "tools": [
+    "mcp-kickerd",
+    "mcp-mac-control-mcp",
+    "mcp-xcode"
+   ]
+  },
+  "writing": {
+   "description": "Prose discipline \u2014 the ASD-STE100 standard plus the mechanical checker. Wanted by anything a human reads: the legal repos, the HOA site, client email drafts.",
+   "tools": [
+    "check-prose"
+   ]
   }
+ }
 }
