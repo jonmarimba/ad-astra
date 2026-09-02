@@ -120,7 +120,12 @@ if (BANNED.length === 0 && SELF_REFERENTIAL.length === 0 && CANDOR.length === 0)
 }
 
 function sentences(text) {
-    return text.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+    // A closing quote or bracket may sit between the terminator and the space:
+    // `... "isolated surface stains." It went on ...`. Without them in the
+    // lookbehind the two sentences merge and report as one long one, which is a
+    // false positive on exactly the quotation-heavy prose this repo is full of.
+    // Found 2026-09-01 by an A/B on identical text with and without the quotes.
+    return text.split(/(?<=[.!?]["'\u2019\u201d\)\]]?)\s+/).map(s => s.trim()).filter(Boolean);
 }
 
 function check(file) {
