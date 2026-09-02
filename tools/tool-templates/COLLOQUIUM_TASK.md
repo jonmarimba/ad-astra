@@ -23,7 +23,7 @@ Facts established today by direct measurement, which the design leans on:
 - Tool lists are mostly additive across Xcode versions but not always: 26.4.1→26.5 added one tool and removed none; 26.5→26.6 **renamed** one (`ExecuteSnippet` → `RunCodeSnippet`) with the count unchanged at 21.
 - Two front daemons deadlocked because a foreign-dialog grace period (45s) exceeded the connect timeout (15s). Fixed; the relationship is now asserted at startup.
 
-## The owner's constraints, in his words where it matters
+## The owner's constraints, in his own words where the wording carries weight
 
 **Build order.** First, a generic aggregator driven by a Claude-Code-shaped `mcp.json(c)` file that reproduces what the hard-coded one does for Drew + Apple. Then the disallow list ("sieve"). Then the name mapping. Then the wider template system.
 

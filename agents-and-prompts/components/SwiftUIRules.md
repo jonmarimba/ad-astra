@@ -1,6 +1,6 @@
 # SwiftUI rules
 - ALWAYS prefer @Observable and ObservableObject over singletons and NotificationCenter for driving data updates that are reflected in the UI. These are the proper way to manage shared state updates
-- NEVER put .sheet or .alert ahead of .onReceive, .onChange, .onAppear, .onDisappear or .task, unless the .onReceive, .onChange, .onAppear, .onDisappear or .task is intended to be triggered only on the .sheet or .alert content, accordingly. Doing this wrong can cause these change handlers, etc. not to fire, causing unexpected bugs and incorrect behaviors.
+- NEVER put .sheet or .alert ahead of .onReceive, .onChange, .onAppear, .onDisappear or .task. The exception is when the .onReceive, .onChange, .onAppear, .onDisappear or .task is intended to be triggered only on the .sheet or .alert content, accordingly. Doing this wrong can cause these change handlers, etc. not to fire, causing unexpected bugs and incorrect behaviors.
 - NEVER put didSet or willSet property observers on @State or @Binding properties. These will not operate as expected.
 - NEVER use `.onTap` when a `Button` will work. Button is quite flexible and gives us improved accessibility automatically, so use it whenever possible.
 - AVOID initializing @State and @Binding properties based on values passed in the View initializer. This often results in unexpected behaviors.

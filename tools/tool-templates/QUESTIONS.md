@@ -92,7 +92,7 @@ JS:: Don't be stupid.
 
 Measuring the beta's tool list needs its system-wide components installed, which is an administrative change I will not make on your behalf. I launched it, it showed "Install Required", and I quit it.
 
-Worth knowing: 26.5 → 26.6 was **not** additive — `ExecuteSnippet` became `RunCodeSnippet` — so a major-version jump is worth measuring rather than assuming.
+Worth knowing: 26.5 → 26.6 was **not** additive — `ExecuteSnippet` became `RunCodeSnippet` — so a major-version jump has to be measured.
 
 **Blocks:** nothing. It gives the version-mismatch path a second real data point instead of one.
 

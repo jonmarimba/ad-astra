@@ -74,7 +74,7 @@ Everything else in the daemon is already generic and stays: the reconnect loop, 
 
 ### Are MCP tool lists additive? Mostly, and the exception is the interesting part
 
-Jonathan's expectation, 2026-08-31, was that MCPs are mostly additive, at least for Xcode. Measured rather than assumed, using the per-version captures published at `farkasseb/xcrun-mcpbridge-tools-list` and the live 26.6 list read from the running daemon:
+Jonathan's expectation, 2026-08-31, was that MCPs are mostly additive, at least for Xcode. The measurement, from the per-version captures published at `farkasseb/xcrun-mcpbridge-tools-list` and the live 26.6 list read from the running daemon:
 
 - **26.4.1 → 26.5: purely additive.** `XcodeGetCurrentFile` appeared; nothing was removed. Twenty tools became twenty-one.
 - **26.5 → 26.6: NOT additive.** `ExecuteSnippet` was removed and `RunCodeSnippet` added. The count stayed at twenty-one because it is a rename.
@@ -87,7 +87,7 @@ A **rename** removes a name that a sieve or map entry may point at, without chan
 
 An **addition** breaks nothing and resolves everything, and can still ruin the surface. Jonathan's example, 2026-08-31: Drew's server already offers scheme switching, and Xcode 27 adds it. Nothing is missing, no entry has gone stale, the config is still entirely valid — and the aggregate now offers two ways to do one job, which is precisely the incoherence the sieve exists to prevent. It arrived on an upstream update, and nothing in a config of decisions can notice, because a decision written when only one server offered a capability says nothing about a second server that has just started offering it.
 
-So "additive is safe" is wrong, and it is wrong in the specific way that matters: **the addition case cannot be detected by checking the config at all.** Checking that every sieve and map entry still resolves catches renames and removals and is blind to this. Detecting it requires re-running the cross-server comparison against the new version and asking what NEW tool now overlaps something already offered — which is the semantic pass, since Xcode's new tool need not be named anything like Drew's.
+So "additive is safe" is wrong, and it is wrong in the specific way that hurts: **the addition case cannot be detected by checking the config at all.** Checking that every sieve and map entry still resolves catches renames and removals and is blind to this. Detecting it requires re-running the cross-server comparison against the new version and asking what NEW tool now overlaps something already offered — which is the semantic pass, since Xcode's new tool need not be named anything like Drew's.
 
 Jonathan's refinement, same conversation: on seeing a new version, **suggest that the user run the collision tool** rather than having the wrapper run it itself. That is the better middle. The wrapper notices the version change cheaply and says so; the comparison, which spawns both servers and spends a model call, stays opt-in and stays where a human can judge which collisions actually matter. Auto-running it would put an expensive, judgement-laden step on a path that fires whenever an upstream updates. The mismatch warning therefore has two halves, and they are found by different means:
 
@@ -118,7 +118,7 @@ Distinguish the two directions too. Newer than tested is the common case and usu
 
 Built 2026-08-31, ahead of the rest, because the sieve and the map both need its output before they can be written: `tools/tool-templates/mcp_tools.py`.
 
-`list` prints one server's tools with its version. `compare` puts two side by side and reports exact name collisions and the same-words-different-order kind — Jonathan's `window_open` against `open_window` — which is what string comparison can honestly find. `--summarize` hands both annotated lists to the default `llm` model for the pass string comparison cannot do: pairs that do the same job under unrelated names. Note that `llm` takes its prompt positionally; `-p` is the codex and qwen convention and means something else here.
+`list` prints one server's tools with its version. `compare` puts two side by side and reports exact name collisions and the same-words-different-order kind — Jonathan's `window_open` against `open_window` — which is all that string comparison can find. `--summarize` hands both annotated lists to the default `llm` model for the pass string comparison cannot do: pairs that do the same job under unrelated names. Note that `llm` takes its prompt positionally; `-p` is the codex and qwen convention and means something else here.
 
 It refuses two things on purpose, both learned the same day. A server that answers `initialize` and never answers `tools/list` is reported as a timeout with the approval dialog named as the likely cause, never as a server with zero tools. And `compare` refuses to run at all if either side failed to list, because a server whose tools are unknown shows up as having no overlaps, which reads as "no collisions" and is the opposite of what is known.
 
@@ -180,7 +180,7 @@ It also makes staleness auditable instead of invisible. Run the comparison scrip
 
 **Every block and every rename carries a reason, and the reason should be a field rather than a comment.** Jonathan's requirement is that each entry says WHY. That is the right requirement and it is the thing that rots first — without it, a later session cannot tell a block that still protects something from one that outlived its cause, and the safe-looking move is always to leave it, so the surface silently narrows forever.
 
-The tension: he also asked for jsonc so we can comment, and a jsonc comment cannot be enforced or read back. Any parser discards it, so nothing can require it, nothing can grep it, and any tool that rewrites the file loses it. If the reason matters enough to be mandatory — and the argument above says it does — it has to be data: a required `why` string on every sieve and map entry, rejected at load time when missing or empty. Comments stay allowed for everything else, which is where they are genuinely better than a field, such as explaining a group of related entries or leaving a note about an upstream bug.
+The tension: he also asked for jsonc so we can comment, and a jsonc comment cannot be enforced or read back. Any parser discards it, so nothing can require it, nothing can grep it, and any tool that rewrites the file loses it. If the reason is important enough to be mandatory — and the argument above says it does — it has to be data: a required `why` string on every sieve and map entry, rejected at load time when missing or empty. Comments stay allowed for everything else, which is where they are genuinely better than a field, such as explaining a group of related entries or leaving a note about an upstream bug.
 
 So: `why` required and enforced; jsonc comments permitted alongside it. That keeps his intent, which is that no entry exists without a stated cause, and makes it survive a machine reading the file.
 
@@ -194,7 +194,7 @@ So the human file should carry **verbs rather than values** — block and unbloc
 
 It also gives the installer something to check. A human `unblock` naming a tool the template no longer blocks, or a `map` for a tool that no longer exists, is a departure that has quietly become a no-op — exactly the staleness the sieve and map sections already say must surface rather than rot.
 
-**On jsonc.** The human file is where someone records *why* a tool is blocked, and that reason is the first thing lost without comments, so comments belong there. Two costs to weigh. Standard tooling does not read it: `jq` fails on comments, and Python's `json` module fails on them, which matters here because the house rule is to reach for `jq` on JSON rather than write Python for it. And Claude Code's own `.mcp.json`, whose shape this format deliberately borrows, is strict JSON — so a jsonc human file could no longer be copy-pasted into it, which was one of the stated reasons for borrowing the shape.
+**On jsonc.** The human file is where someone records *why* a tool is blocked, and that reason is the first thing lost without comments, so comments belong there. Two costs to weigh. Standard tooling does not read it: `jq` fails on comments, and Python's `json` module fails on them, which bites here because the house rule is to reach for `jq` on JSON rather than write Python for it. And Claude Code's own `.mcp.json`, whose shape this format deliberately borrows, is strict JSON — so a jsonc human file could no longer be copy-pasted into it, which was one of the stated reasons for borrowing the shape.
 
 A middle position keeps both: the machine file stays strict JSON, since it is generated and its provenance header can be a normal string field, and only the human file allows comments. Whoever implements it then needs a comment-tolerant parser on exactly one path, and every existing tool still works on the generated file.
 

@@ -8,7 +8,7 @@ metadata:
 
 # The Grammarly pass, automated
 
-Push a finished draft through the real Grammarly web editor and triage its suggestions by Jonathan's standing rules. This automates the pass he historically did by hand; he still owns the final read, and any suggestion this skill is unsure about stays UNAPPLIED and gets reported instead.
+Push a finished draft through the real Grammarly web editor and triage its suggestions by Jonathan's standing rules. This automates the pass he historically did by hand. He still owns the final read, and any suggestion this skill is unsure about stays UNAPPLIED and gets reported instead.
 
 ## Preconditions
 
@@ -27,13 +27,13 @@ Push a finished draft through the real Grammarly web editor and triage its sugge
 
 ## Decision rules
 
-**Accept - mechanical correctness.** Spelling and typos. Subject-verb agreement. Comma splices. Missing or doubled punctuation. Repeated words. Apostrophe placement. Wrong homophone where context is unambiguous. These are the classes the pre-Grammarly pass targets; Grammarly catching a leftover means the pass missed one - accept it and say so.
+The **Accept** rule covers mechanical correctness. Spelling and typos. Subject-verb agreement. Comma splices. Missing or doubled punctuation. Repeated words. Apostrophe placement. Wrong homophone where context is unambiguous. These are the classes the pre-Grammarly pass targets; Grammarly catching a leftover means the pass missed one - accept it and say so.
 
-**Reject - voice flattening.** Everything Jonathan overrides every time, per the prose doctrine: removing contractions. "Sound more formal / confident / friendly" tone rewrites. Word-choice swaps sold as engagement or variety. Deleting a sentence-initial "And" or "But". Softening profanity. Hedge insertions. Any full-sentence rewrite (including anything from Grammarly's generative features - mechanical suggestions only, never the AI rewrites). Any replacement whose text lands on the banned-phrases list (js-project-GhOST/policy/banned-phrases.txt) - a smoother phrasing that lands on that list is worse than the original.
+The **Reject** rule covers voice flattening. Everything Jonathan overrides every time, per the prose doctrine: removing contractions. "Sound more formal / confident / friendly" tone rewrites. Word-choice swaps sold as engagement or variety. Deleting a sentence-initial "And" or "But". Softening profanity. Hedge insertions. Any full-sentence rewrite (including anything from Grammarly's generative features - mechanical suggestions only, never the AI rewrites). Any replacement whose text lands on the banned-phrases list (js-project-GhOST/policy/banned-phrases.txt) - a smoother phrasing that lands on that list is worse than the original.
 
-**Reject unconditionally - quoted material.** If the flagged span is inside quotation marks or a quoted block (an email being cited, a text message, a court document, a contractor's words), dismiss without consideration. Quotes are evidence; fixing someone's grammar inside a quotation is falsifying it.
+The **Reject unconditionally** rule covers quoted material. If the flagged span is inside quotation marks or a quoted block, dismiss without consideration. Quoted blocks include an email being cited, a text message, a court document, and a contractor's words. Quotes are evidence; fixing someone's grammar inside a quotation is falsifying it.
 
-**Leave and report - judgement calls.** Conciseness trims and clarity rewrites that do not change meaning but do change rhythm. Do not apply these; list them in the report with Grammarly's proposal so Jonathan can take the ones he likes in his own read.
+The **Leave and report** rule covers judgement calls. Conciseness trims and clarity rewrites that do not change meaning but do change rhythm. Do not apply these; list them in the report with Grammarly's proposal so Jonathan can take the ones he likes in his own read.
 
 ## Reporting
 

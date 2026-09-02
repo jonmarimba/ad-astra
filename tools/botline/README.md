@@ -1,6 +1,6 @@
 # botline
 
-Generic two-way text bridge: **any local bot can text Jonathan, and his replies route back to the bot that messaged him.** Built on `imsg` — no GhOST dependency, portable (point the config at any recipient).
+Generic two-way text bridge: **any local bot can text Jonathan, and his replies route back to the bot that messaged him**. It is built on `imsg` — no GhOST dependency, portable (point the config at any recipient).
 
 ## A bot's whole integration (minimal setup)
 ```sh

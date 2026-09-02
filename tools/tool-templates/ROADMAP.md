@@ -71,7 +71,7 @@ Security boundary, raised by Codex and worth stating plainly: every `command` in
 
 ### Phase 6 — the ad astra tool format
 
-Build on `tool.json`, which exists and has no reader, rather than inventing a third format. Give it a reader first — that single increment converts seven dead files into a validated registry. Declare dependencies **by ecosystem**, not brew-only: the repo already installs via npm, `uv` and Homebrew, and `xcode-mcp-front` additionally needs an Automator `.app`, a launchd plist and TCC grants a human clicks. A brew-only model under-declares more than half of what is here, silently.
+Build on `tool.json`, which exists and has no reader; do not invent a third format. Give it a reader first — that single increment converts seven dead files into a validated registry. Declare dependencies **by ecosystem**, not brew-only: the repo already installs via npm, `uv` and Homebrew, and `xcode-mcp-front` additionally needs an Automator `.app`, a launchd plist and TCC grants a human clicks. A brew-only model under-declares more than half of what is here, silently.
 
 Third-party adoption without submodules: a descriptor naming source coordinate, pinned version and artifact digest, with a local checkout path as an optional development override. Note that `astra-install.sh` currently records an **absolute** source path that `astra-update` later requires to exist, so a cloned repo cannot update on another machine — that must change for third-party tools to work at all.
 

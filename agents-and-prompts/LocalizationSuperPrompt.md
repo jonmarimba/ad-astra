@@ -223,7 +223,7 @@ grepping the English values for the term.
   Phase 4). Loanword-vs-native gets decided once per concept *here*, as data — not re-decided by
   each translation agent mid-sentence (sk "Čipmank" vs "Veverička" happened exactly that way).
 - **Translate the glossary FIRST**: one small agent wave over just the concept terms, then a native
-  review of only those. It's the highest-leverage review in the whole job — these words repeat on
+  review of only those. It's the review that pays back the most in the whole job — these words repeat on
   every surface.
 - The filled glossary is **binding input** to every Phase 4/5 agent; pure-concept keys are applied
   mechanically in Phase 6; Phase 7 lints the catalog against it.
@@ -450,7 +450,7 @@ hardcoded final onboarding screen). After each phase:
   not English.
 - **The home-screen widget and Share/Action extensions run out-of-process** — the app's UI-test
   target can't launch or drive them; review their localized layouts in their own host contexts.
-- Limit to state honestly: frame-overflow is detectable; pixel-level ellipsis truncation *within* a
+- Limit to state plainly: frame-overflow is detectable; pixel-level ellipsis truncation *within* a
   frame still needs the screenshots for visual review.
 
 ## Phase 9 — Translation-quality validation (structure validated ≠ quality validated)

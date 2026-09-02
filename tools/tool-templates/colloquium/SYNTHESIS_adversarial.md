@@ -2,7 +2,7 @@
 
 Written by Claude (Fable, tool-templates driver), 2026-08-31, after Jonathan asked for adversarial convocations over everything the checkpoint panels had NOT seen: the fix commits that landed after each panel, and the infrastructure that never faced a panel at all. Two rounds, three brands each, framed to REFUTE. Raw answers are the `advfixes_*` and `advinfra_*` files beside this one.
 
-The result answers Jonathan's question ("what are the odds almost none of it works") honestly: **twelve real breaks across the two rounds, several in code shipped this session, two of them SEVERE, and two of MY fixes for them had bugs the test suite then caught.** Everything below is fixed with a regression test, or refuted with the attack named. The panelist repro scripts are kept under `tools/xcode-mcp-front/findings/` and all exit 0 now.
+The result answers Jonathan's question ("what are the odds almost none of it works") with the count: **twelve real breaks across the two rounds, several in code shipped this session, two of them SEVERE, and two of MY fixes for them had bugs the test suite then caught.** Everything below is fixed with a regression test, or refuted with the attack named. The panelist repro scripts are kept under `tools/xcode-mcp-front/findings/` and all exit 0 now.
 
 ## Round 1 — the post-panel fix commits (fixed in `1709a1e`)
 

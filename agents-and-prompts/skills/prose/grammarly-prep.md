@@ -2,21 +2,21 @@
 
 The mechanical cleanup that runs last, after asd-ste100 has set the structure and the humanizer has set the voice. Its only job is to leave a draft Grammarly has little to say about, so Jonathan's editing pass is judgement rather than punctuation.
 
-This is not Grammarly. The Grammarly pass itself comes after this one - either Jonathan by hand, or the grammarly-pass skill driving the real web editor with his accept/reject rules (added 2026-09-01). Either way he owns the final read; this pass just makes sure Grammarly has little left to say.
+This is not Grammarly. The Grammarly pass itself comes after this one. It is either Jonathan by hand, or the grammarly-pass skill driving the real web editor with his accept/reject rules (added 2026-09-01). Either way he owns the final read; this pass just makes sure Grammarly has little left to say.
 
 ## What to fix
 
-**Passive voice where an actor exists.** "The report was sent" becomes "Dan sent the report." Keep the passive where the actor is genuinely unknown or deliberately unnamed — which is common in the legal drafts and is a choice, not an error.
+Fix **passive voice where an actor exists**. "The report was sent" becomes "Dan sent the report." Keep the passive where the actor is genuinely unknown or deliberately unnamed. That is common in the legal drafts and is a choice, not an error.
 
-**Sentences past about 25 words.** Split them. The ASD-STE100 ceiling already says this; here it is enforced mechanically.
+Split **sentences past about 25 words**. The ASD-STE100 ceiling already says this; here it is enforced mechanically.
 
-**Comma splices.** Two independent clauses joined by a comma get a full stop, a semicolon, or a conjunction.
+Fix **comma splices**. Two independent clauses joined by a comma get a full stop, a semicolon, or a conjunction.
 
-**Dangling and misplaced modifiers.** "Walking the site, the drainage was obviously wrong" has nobody walking. Name the actor.
+Fix **dangling and misplaced modifiers**. "Walking the site, the drainage was obviously wrong" has nobody walking. Name the actor.
 
 **"There is" and "there are" openings.** They bury the subject. "There are three things outstanding" becomes "Three things are outstanding."
 
-**Noun stacks.** "Site drainage system outfall elevation verification" is five nouns deep. Break it with prepositions.
+Fix **noun stacks**. "Site drainage system outfall elevation verification" is five nouns deep. Break it with prepositions.
 
 **Inconsistent tense inside a paragraph**, and **subject-verb disagreement** in long sentences where the subject and verb drifted apart.
 

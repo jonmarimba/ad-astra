@@ -41,7 +41,7 @@ So "Andrew's thing" and "Andrew's Swift stuff" may refer to either the MCP serve
 
 `mcp-bundle` describes itself as "the first astra tool that is really a bundle of tools." It configures the same server set for three agents that each store configuration differently: Claude Code via `.mcp.json`, Qwen Code via `.qwen/settings.json`, Codex CLI via `.codex/config.toml`.
 
-This matters for the roadmap in two ways. The per-repo install mechanism is not the missing piece. And **any aggregator design must account for three consumer formats**, not just Claude Code's — a point no panelist raised, because none of them looked at `mcp-bundle` either.
+This changes the roadmap in two ways. The per-repo install mechanism is not the missing piece. And **any aggregator design must account for three consumer formats**, not just Claude Code's — a point no panelist raised, because none of them looked at `mcp-bundle` either.
 
 ## What is genuinely missing
 
