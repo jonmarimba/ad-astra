@@ -15,7 +15,7 @@ Re-running the same command is the update path. Installers pull their external d
 
 ## Which template
 
-The `base` template installs what every repo gets: the writing discipline (skills that check and de-AI prose, plus a doctrine file that orders bots to use them) and convocation (cross-brand review panels). The kind templates compose `base` in, so you normally install one of these and never think about `base`:
+The `base` template installs what every repo gets: the writing discipline and convocation (cross-brand review panels). The writing discipline is a set of skills that check and de-AI prose, plus a doctrine file that orders bots to use them. The kind templates compose `base` in, so you normally install one of these and never think about `base`:
 
 - `swift-ios` is for iOS app work. It adds the Xcode aggregator, Swift code-quality tools, Mac and simulator control, the axe CLI, and the ios-ui-driving skill.
 - `mac-swift` is for Mac app work. It is the same minus the iOS simulator pieces.
@@ -32,13 +32,13 @@ Restart your agent session after an install. Agents read the config files at ses
 
 ## The Xcode aggregator
 
-The template does not install separate Xcode MCP servers into your repo. It writes one HTTP entry, `xcode-combined`, pointing at a single daemon on this machine (port 8767). That daemon fronts Apple's Xcode bridge, Drew's server, and a slice of XcodeBuildMCP behind one endpoint, with the overlapping tools resolved by measurement: each capability appears once, under one name, from the vendor that won a head-to-head on real projects. The daemon runs under launchd, survives reboots, and waits for Xcode on its own. Xcode's approval prompt is answered once, for the daemon, and no per-session bridge ever spawns to ask again.
+The template does not install separate Xcode MCP servers into your repo. It writes one HTTP entry, `xcode-combined`, pointing at a single daemon on this machine (port 8767). That daemon fronts Apple's Xcode bridge, Drew's server, and a slice of XcodeBuildMCP behind one endpoint. A head-to-head on real projects resolved the overlaps: each capability appears once, under one name, from the vendor that won. The daemon runs under launchd, survives reboots, and waits for Xcode on its own. Xcode's approval prompt is answered once, for the daemon, and no per-session bridge ever spawns to ask again.
 
 The practical consequences: build with the `build` tool (it returns warnings inline with file and line). When Xcode is not running you still get `xbm__build_run_sim`, `xbm__test_sim`, and the coverage tools, because that slice is headless. The tool named for what you want is the right one; there are no duplicate vendor variants to choose between.
 
 ## What is installed, where
 
-Each repo answers for itself: `.astra/manifest.json` records which templates the repo has, the full resolved tool list, and the exact content hashes of every installed file. There is no central registry by design. The first push-based design let a bug in this repo damage other repos, so the direction was inverted: each repo pulls, and this repo never reaches into anyone.
+Each repo answers for itself. `.astra/manifest.json` records which templates the repo has, the full resolved tool list, and the exact content hashes of every installed file. There is no central registry by design. The first push-based design let a bug in this repo damage other repos, so the direction was inverted. Each repo pulls, and this repo never reaches into anyone.
 
 ## How updates happen
 
@@ -51,4 +51,4 @@ chmod +x YourApp/.git/hooks/post-commit
 
 ## How bots know their tooling is current
 
-They mostly do not need to. The post-commit hook keeps a working repo fresh, and MCP servers are read at session start, so a new session is a new snapshot of current config. For a long-running session in a repo nobody commits to, `.astra/astra-update --pull` is safe to run at any time; `.astra/update.log` says what the last run did. A locally modified file blocks its own update and appears in that log, which is the one staleness case that needs a human decision.
+They mostly do not need to. The post-commit hook keeps a working repo fresh, and MCP servers are read at session start. So a new session is a new snapshot of current config. For a long-running session in a repo nobody commits to, `.astra/astra-update --pull` is safe to run at any time; `.astra/update.log` says what the last run did. A locally modified file blocks its own update and appears in that log, which is the one staleness case that needs a human decision.
