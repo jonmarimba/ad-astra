@@ -19,8 +19,8 @@ The `base` template installs what every repo gets: the writing discipline and co
 
 - `swift-ios` is for iOS app work. It adds the Xcode aggregator, Swift code-quality tools, Mac and simulator control, the axe CLI, and the ios-ui-driving skill.
 - `mac-swift` is for Mac app work. It is the same minus the iOS simulator pieces.
-- `legal-pdf` is for document repos. It adds PDF-to-text sidecars on top of `base`.
-- `writing` alone gives just the prose stack.
+- `legal-pdf` is for document repos. It adds PDF-to-text sidecars on top of `base`. QUICKSTART-pdf.md covers it.
+- `writing` alone gives just the prose stack. QUICKSTART-writing.md describes each piece.
 
 Run `python3 template.py list` to see all of them with descriptions.
 
