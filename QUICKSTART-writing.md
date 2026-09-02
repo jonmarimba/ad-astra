@@ -9,7 +9,11 @@ cd js-db-ad-astra/tools/lib
 python3 template.py install writing --into ~/path/to/YourRepo
 ```
 
-Every kind template (`swift-ios`, `mac-swift`, `legal-pdf`) already includes `writing` through `base`, so run this only for a repo that gets no kind template. Re-running the same command is the update path. Restart your agent session afterward, because skills are read at session start.
+Every kind template (`swift-ios`, `mac-swift`, `legal-pdf`) already includes `writing` through `base`, so run this only for a repo that gets no kind template. Restart your agent session afterward, because skills are read at session start.
+
+## Update
+
+Re-run the same install command. Installers pull their external dependencies fresh every time, so a re-run also upgrades the tools themselves. From inside your repo, `.astra/astra-update --pull` does the same without leaving your checkout. The astra post-commit hook runs that update in the background on every commit. Anything you edited locally is reported and never overwritten.
 
 ## What lands where
 
