@@ -25,8 +25,6 @@ The **humanizer** skill removes AI tells and then adds a specific person's voice
 
 The **check-prose** tool is the mechanical gate. `node .astra/check-prose/check-prose.js <file>` flags banned words and phrases, candor disclaimers, label-plus-fragment shapes, sentences about the document itself, and sentences past 25 words. It exits nonzero on any finding, so it works in scripts and hooks. The rules are data in `rules.json` beside the script, and a repo extends them without forking by adding `.check-prose.json` at its root.
 
-The **grammarly-pass** skill drives a real browser (claude-in-chrome or the Safari MCP) through Grammarly's web editor with a finished draft. It accepts mechanical corrections, rejects voice-flattening rewrites, never touches quoted material, and leaves judgement calls unapplied but reported. It needs a browser that is already signed in to Grammarly, and it stops at any login wall. It is the newest piece of the stack and has not yet had a live run.
-
 The **writing-doctrine** tool installs `.doctrine/writing.md`, the rules that sit above the sentence. Those rules cover what belongs in a client email and why the action goes first while corrections wait. They also cover how to ask a paid expert for a decision. And the doctrine carries the standing order that makes the rest of the stack fire: run the tools before any prose reaches a human. A model's opinion of its own prose is not evidence.
 
 ## Day to day
