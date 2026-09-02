@@ -18,7 +18,7 @@ Re-running the same command is the update path. Installers pull their external d
 The `base` template installs what every repo gets: the writing discipline and convocation (cross-brand review panels). The writing discipline is a set of skills that check and de-AI prose, plus a doctrine file that orders bots to use them. The kind templates compose `base` in, so you normally install one of these and never think about `base`:
 
 - `swift-ios` is for iOS app work. It adds the Xcode aggregator, Swift code-quality tools, Mac and simulator control, the axe CLI, and the ios-ui-driving skill.
-- `mac-swift` is for Mac app work. It is the same minus the iOS simulator pieces.
+- `mac-swift` is for Mac app work. It is the same minus the iOS simulator pieces. QUICKSTART-ios.md covers both.
 - `legal-pdf` is for document repos. It adds PDF-to-text sidecars on top of `base`. QUICKSTART-pdf.md covers it.
 - `writing` alone gives just the prose stack. QUICKSTART-writing.md describes each piece.
 
