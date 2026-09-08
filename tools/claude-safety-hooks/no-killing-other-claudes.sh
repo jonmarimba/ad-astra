@@ -140,6 +140,7 @@ basename_of() {
 # word's targets never leak past its own segment boundary.
 reason=""
 pkill_or_killall_hit=0
+substitution_kill_hit=0
 found_unsafe_arg=""
 claude_pids=""
 
@@ -151,6 +152,31 @@ while IFS= read -r segment; do
   case "$trimmed" in
     "git commit"*|"git tag"*|"git merge"*|"git notes"*) continue ;;
   esac
+
+  # UNCONDITIONAL FAIL-CLOSED ON SUBSTITUTION + KILL-WORD ANYWHERE IN THE SAME SEGMENT.
+  # Prior fixes handled command substitution GLUED directly onto "kill" with an enumerable
+  # prefix shape (a bare $(/`/( opener, a wrapping quote, a var= assignment). But bash lets
+  # arbitrary text precede $( with no delimiter at all -- `echo prefix$(kill $pid)` -- and no
+  # amount of prefix-enumeration can anticipate every such shape. Rather than continue a
+  # losing arms race against ever more creative gluing, this segment is refused
+  # UNCONDITIONALLY (same treatment as pkill/killall) the moment it contains BOTH a
+  # substitution opener ($( or a backtick) AND a kill-family word anywhere in it -- because
+  # this hook cannot safely resolve what such a segment actually targets, full stop. Found
+  # by peer review, 2026-09-08, as the third round on this exact evasion shape. Traded off
+  # deliberately: this can false-positive on a segment that merely mentions "kill" in prose
+  # near an unrelated substitution, which costs an occasional unnecessary block -- the same
+  # trade this file already makes everywhere else (fail closed over prove-danger).
+  case "$segment" in
+    *'$('*|*'`'*)
+      case "$segment" in
+        *kill*)
+          substitution_kill_hit=1
+          continue
+          ;;
+      esac
+      ;;
+  esac
+
   seg_kill_word=""
   seg_pkill_or_killall=0
   for word in $segment; do
@@ -245,6 +271,8 @@ EOF_SEGMENTS
 # pre-validated against arbitrary regex text — see finding #3 above.
 if [ "$pkill_or_killall_hit" -eq 1 ]; then
   reason="pkill/killall match processes by NAME PATTERN, which this hook cannot safely verify does not match a live claude process (regex can always be written to evade a substring check). Blocked unconditionally."
+elif [ "$substitution_kill_hit" -eq 1 ]; then
+  reason="this segment contains a command/process substitution (\$( or a backtick) alongside a kill-family word, and this hook cannot safely resolve what such a segment actually targets -- text of any shape can precede a substitution opener with no delimiter, so no prefix-stripping can enumerate every case. Blocked unconditionally, the same as pkill/killall."
 elif [ -n "$found_unsafe_arg" ]; then
   reason="the target '$found_unsafe_arg' is not a literal PID this hook can resolve and verify (a variable, command substitution, or name) -- refused by default rather than assumed safe."
 elif [ -n "$claude_pids" ]; then
