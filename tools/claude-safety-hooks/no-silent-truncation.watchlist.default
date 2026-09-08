@@ -1,0 +1,19 @@
+# no-silent-truncation.sh watchlist — one substring per line, matched against the raw
+# Bash command text. Any command CONTAINING one of these lines as a substring is treated
+# as "a search over protected data," and piping it through head/tail/sed -n/--limit gets
+# blocked (see the hook's own comments for why).
+#
+# install.sh copies this file to .claude/hooks/no-silent-truncation.watchlist in the
+# target repo and stops there — it does NOT try to guess your tools. Edit the installed
+# copy to name the things that actually search your protected data: a mail indexer, a
+# notes search, a call log, a transcript search, grep over specific data directories,
+# whatever exists in this repo. Lines starting with # are comments; blank lines ignored.
+#
+# Starter examples (uncomment/adapt, or delete and write your own):
+# mailq
+# notesq
+# shotq
+# imsgq
+# callq
+# recall
+# convoq
