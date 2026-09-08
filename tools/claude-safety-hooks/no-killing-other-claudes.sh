@@ -77,6 +77,11 @@ except Exception: print('')
 
 [ -z "$cmd" ] && exit 0
 
+# Bash removes a backslash followed by a physical newline before it recognizes
+# words. Do the same before segmenting; otherwise `k\\` followed by `ill` is
+# inspected as two harmless lines even though Bash executes `kill`.
+cmd="$(printf '%s' "$cmd" | python3 -c 'import sys; sys.stdout.write(sys.stdin.read().replace(chr(92) + chr(10), ""))')"
+
 # PROSE IS NOT A KILL CALL, BUT THIS EXEMPTION MUST NOT BE GLOBAL. This hook's own commit
 # message describes what it does and says "kill/pkill/killall" in plain English — which
 # would otherwise block ITS OWN commit, the same self-referential trap
@@ -178,6 +183,7 @@ basename_of() {
 reason=""
 pkill_or_killall_hit=0
 substitution_kill_hit=0
+dynamic_command_hit=0
 found_unsafe_arg=""
 claude_pids=""
 
@@ -188,6 +194,16 @@ while IFS= read -r segment; do
   trimmed="${segment#"${segment%%[![:space:]]*}"}"
   case "$trimmed" in
     "git commit"*|"git tag"*|"git merge"*|"git notes"*) continue ;;
+  esac
+
+  # A variable-expanded command name cannot be resolved without evaluating
+  # command text. Refuse the direct form and common transparent wrappers;
+  # literal `kill $pid` is handled below as an unsafe target instead.
+  case "$trimmed" in
+    '$'*|'"$'*|"'$"*|command[[:space:]]*'$'*|env[[:space:]]*'$'*|nice[[:space:]]*'$'*)
+      dynamic_command_hit=1
+      continue
+      ;;
   esac
 
   # UNCONDITIONAL FAIL-CLOSED ON SUBSTITUTION + KILL-WORD ANYWHERE IN THE SAME SEGMENT.
@@ -314,6 +330,8 @@ if [ "$pkill_or_killall_hit" -eq 1 ]; then
   reason="pkill/killall match processes by NAME PATTERN, which this hook cannot safely verify does not match a live claude process (regex can always be written to evade a substring check). Blocked unconditionally."
 elif [ "$substitution_kill_hit" -eq 1 ]; then
   reason="this segment contains a command/process substitution (\$( or a backtick) alongside a kill-family word, and this hook cannot safely resolve what such a segment actually targets -- text of any shape can precede a substitution opener with no delimiter, so no prefix-stripping can enumerate every case. Blocked unconditionally, the same as pkill/killall."
+elif [ "$dynamic_command_hit" -eq 1 ]; then
+  reason="this segment uses a variable-expanded command name the hook cannot decode without evaluating command text. Blocked rather than assuming it is safe."
 elif [ -n "$found_unsafe_arg" ]; then
   reason="the target '$found_unsafe_arg' is not a literal PID this hook can resolve and verify (a variable, command substitution, or name) -- refused by default rather than assumed safe."
 elif [ -n "$claude_pids" ]; then
