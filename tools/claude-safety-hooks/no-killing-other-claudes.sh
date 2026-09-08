@@ -101,6 +101,19 @@ except Exception: print('')
 # spelling "kill" in a way the exact-match never recognizes as the word "kill" at all.
 basename_of() {
   local w="$1"
+  # QUOTE-SPLICING. Bash removes matched quote pairs during word expansion and
+  # CONCATENATES what is left, including empty ones -- k''ill is a single word that Bash
+  # hands the real `kill` command exactly as if it had been typed unquoted, but as a raw
+  # string it is spelled "k''ill", which no exact-match on "kill" (or any of the
+  # prefix/opener stripping above and below) ever recognizes. Bash allows a quote pair
+  # ANYWHERE inside a word, not just at its edges, so no amount of edge-stripping closes
+  # this -- the fix has to remove quote characters from the WHOLE word, not just a prefix.
+  # Found by peer review, 2026-09-08, round five on this evasion class. Strip every ' and "
+  # character from the word before anything else runs; this is a blunt normalization (it
+  # does not model escaped quotes inside a quoted string, which is a real but much rarer
+  # shape), but it is the same fail-closed trade this file makes throughout -- better to
+  # over-normalize a rare edge case than under-normalize the common evasion.
+  w="$(printf '%s' "$w" | tr -d "'\"")"
   # A bare `var=$(kill ...)` glues the assignment directly onto the substitution with no
   # space -- bash's own inline-assignment-before-command syntax -- so the opener check below
   # would miss it too if the word still starts with "var=". Strip one leading
