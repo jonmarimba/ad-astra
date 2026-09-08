@@ -90,9 +90,39 @@ except Exception: print('')
 # exempts a segment that ITSELF begins with git commit/tag/merge/notes -- never a whole
 # command merely because one of its chained segments happens to be a git operation.
 
-# basename(1) without a subprocess per token: strip everything up to the last '/'.
+# basename(1) without a subprocess per token: strip everything up to the last '/'. ALSO
+# strips a leading command-substitution or subshell opener ($(, a backtick, or a bare open
+# paren) first -- `out=$(kill <pid>)` word-splits as the single token "$(kill" (no space
+# between the opener and the word), so a plain basename/exact-match on "kill" never fires and
+# the whole segment's kill-word detection is skipped entirely, letting every argument through
+# unscanned rather than merely one unsafe token. Found by peer review, 2026-09-08 -- the
+# earlier per-segment git-commit fix closed one bypass but this word-tokenization gap was
+# separate and just as real: it is not about WHERE in the command a kill sits, but about
+# spelling "kill" in a way the exact-match never recognizes as the word "kill" at all.
 basename_of() {
   local w="$1"
+  # A bare `var=$(kill ...)` glues the assignment directly onto the substitution with no
+  # space -- bash's own inline-assignment-before-command syntax -- so the opener check below
+  # would miss it too if the word still starts with "var=". Strip one leading
+  # identifier-looking "name=" prefix first, if the remainder looks like a substitution
+  # opener; a token that merely CONTAINS "=" without a $(/`/( right after it (an ordinary
+  # argument, not an assignment-glued substitution) is left alone.
+  case "$w" in
+    [A-Za-z_]*=*)
+      rest="${w#*=}"
+      case "$rest" in
+        '$('*|'`'*|'('*) w="$rest" ;;
+      esac
+      ;;
+  esac
+  while :; do
+    case "$w" in
+      '$('*) w="${w#\$\(}" ;;
+      '`'*)  w="${w#\`}" ;;
+      '('*)  w="${w#\(}" ;;
+      *) break ;;
+    esac
+  done
   printf '%s' "${w##*/}"
 }
 
