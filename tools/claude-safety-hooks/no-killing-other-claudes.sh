@@ -160,14 +160,18 @@ while IFS= read -r segment; do
   # amount of prefix-enumeration can anticipate every such shape. Rather than continue a
   # losing arms race against ever more creative gluing, this segment is refused
   # UNCONDITIONALLY (same treatment as pkill/killall) the moment it contains BOTH a
-  # substitution opener ($( or a backtick) AND a kill-family word anywhere in it -- because
-  # this hook cannot safely resolve what such a segment actually targets, full stop. Found
-  # by peer review, 2026-09-08, as the third round on this exact evasion shape. Traded off
-  # deliberately: this can false-positive on a segment that merely mentions "kill" in prose
-  # near an unrelated substitution, which costs an occasional unnecessary block -- the same
-  # trade this file already makes everywhere else (fail closed over prove-danger).
+  # substitution/redirection opener AND a kill-family word anywhere in it -- because this
+  # hook cannot safely resolve what such a segment actually targets, full stop. Covers
+  # command substitution ($( or a backtick) AND Bash PROCESS substitution (<( or >( -- `cat
+  # <(kill $pid)` runs the kill inside the process-substitution subshell exactly like $(...)
+  # does, and round 3 of this fix only checked for $( and the backtick, missing this
+  # syntactically distinct but equally live form; found by peer review, 2026-09-08, as round
+  # four on this exact evasion shape). Traded off deliberately: this can false-positive on a
+  # segment that merely mentions "kill" in prose near an unrelated substitution/redirection,
+  # which costs an occasional unnecessary block -- the same trade this file already makes
+  # everywhere else (fail closed over prove-danger).
   case "$segment" in
-    *'$('*|*'`'*)
+    *'$('*|*'`'*|*'<('*|*'>('*)
       case "$segment" in
         *kill*)
           substitution_kill_hit=1
