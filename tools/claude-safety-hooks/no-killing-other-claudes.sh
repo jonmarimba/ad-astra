@@ -187,6 +187,24 @@ dynamic_command_hit=0
 found_unsafe_arg=""
 claude_pids=""
 
+# Return success when the executable word itself contains a dynamic expansion.
+# Do not evaluate it: an expansion can manufacture `kill` from arbitrary text.
+# Leading literal assignments are not executable words, so `x=i; k${x}ll` must
+# inspect the second word rather than treating the assignment as the command.
+dynamic_executable_word() {
+  local word
+  for word in $1; do
+    case "$word" in
+      [A-Za-z_]*=*) continue ;;
+    esac
+    case "$word" in
+      *'$'*|*'`'*|*'<('*|*'>('* ) return 0 ;;
+    esac
+    return 1
+  done
+  return 1
+}
+
 while IFS= read -r segment; do
   [ -z "$segment" ] && continue
   # Per-segment git-commit-prose exemption: only when THIS segment itself starts with the
@@ -195,6 +213,11 @@ while IFS= read -r segment; do
   case "$trimmed" in
     "git commit"*|"git tag"*|"git merge"*|"git notes"*) continue ;;
   esac
+
+  if dynamic_executable_word "$trimmed"; then
+    dynamic_command_hit=1
+    continue
+  fi
 
   # A variable-expanded command name cannot be resolved without evaluating
   # command text. Refuse the direct form and common transparent wrappers;
