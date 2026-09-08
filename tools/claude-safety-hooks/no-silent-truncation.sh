@@ -127,8 +127,21 @@ stage_executable() {
         continue
         ;;
       env)
+        # `env -u NAME` (or --unset NAME) unsets a variable and takes NAME as a SEPARATE
+        # argument -- same shape for -C/--chdir (change directory) and -S/--split-string.
+        # The old blanket "-*) shift" treated every flag as taking no argument, so
+        # `env -u PATH head -10` shifted "-u" alone and left "PATH" to be mistaken for the
+        # wrapped executable, never reaching "head". Found by peer review, 2026-09-08. Skip
+        # these flags' own separate argument the same way nice's -n is skipped above.
         while [ "$#" -gt 0 ]; do
-          case "$1" in --) shift; break ;; -*) shift ;; *=*) shift ;; *) break ;; esac
+          case "$1" in
+            --) shift; break ;;
+            -u|--unset|-C|--chdir|-S|--split-string) shift; shift ;;
+            -u*|--unset=*|-C*|--chdir=*|-S*|--split-string=*) shift ;;
+            *=*) shift ;;
+            -*) shift ;;
+            *) break ;;
+          esac
         done
         continue
         ;;
