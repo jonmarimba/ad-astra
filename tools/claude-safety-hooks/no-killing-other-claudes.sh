@@ -43,10 +43,15 @@
 # argument shape) is refused by default — this hook does not try to prove a command is
 # dangerous before blocking it; it requires proof a command is SAFE before allowing it.
 #
-# CONFIGURATION. Optional: set REAP_MECHANISM_HINT below (or export it before this hook
-# runs) to name YOUR repo's tested, scoped reap path, if one exists, so the block message can
-# point at it instead of a generic "ask a human first." Leave it empty for a plain refusal.
-REAP_MECHANISM_HINT="${REAP_MECHANISM_HINT:-}"
+# CONFIGURATION. Optional: install.sh can write a one-line hint naming YOUR repo's tested,
+# scoped reap path (if one exists) to no-killing-other-claudes.reap-hint next to this script,
+# so the block message points at it instead of a generic "ask a human first." Read as DATA
+# from a file, not embedded in this script's source: an earlier version had install.sh
+# sed-substitute the hint text directly into a shell variable assignment in the installed
+# copy, escaping only '/' and '&' -- a hint containing a '"' or a newline could break the
+# installed script's syntax or inject shell code that runs on every invocation. Found by peer
+# review, 2026-09-08. A plain file read has no such injection surface: whatever the file
+# contains is used as inert text in an error message, never re-parsed as shell.
 #
 # KNOWN LIMIT, stated plainly rather than left implicit: this hook inspects only the literal
 # Bash tool_input command TEXT, same as its sibling no-silent-truncation.sh. `bash
@@ -57,6 +62,11 @@ REAP_MECHANISM_HINT="${REAP_MECHANISM_HINT:-}"
 # direct, careless `kill <pid>` typed straight into a Bash call).
 set -uo pipefail
 
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REAP_HINT_FILE="$HOOK_DIR/no-killing-other-claudes.reap-hint"
+REAP_MECHANISM_HINT=""
+[ -f "$REAP_HINT_FILE" ] && REAP_MECHANISM_HINT="$(cat "$REAP_HINT_FILE")"
+
 payload="$(cat)"
 cmd="$(printf '%s' "$payload" | python3 -c "
 import json,sys
@@ -66,13 +76,19 @@ except Exception: print('')
 
 [ -z "$cmd" ] && exit 0
 
-# PROSE IS NOT A KILL CALL. This hook's own commit message describes what it does and says
-# "kill/pkill/killall" in plain English — which would otherwise block ITS OWN commit, the
-# same self-referential trap no-silent-truncation.sh documents. A git commit/tag/merge/notes
-# command is never itself a process kill.
-case "$cmd" in
-  *"git commit"*|*"git tag"*|*"git merge"*|*"git notes"*) exit 0 ;;
-esac
+# PROSE IS NOT A KILL CALL, BUT THIS EXEMPTION MUST NOT BE GLOBAL. This hook's own commit
+# message describes what it does and says "kill/pkill/killall" in plain English — which
+# would otherwise block ITS OWN commit, the same self-referential trap
+# no-silent-truncation.sh documents. A git commit/tag/merge/notes command is never itself a
+# process kill.
+#
+# BUT a command-text SUBSTRING check for "git commit" here, applied to the WHOLE command
+# before any segmentation, is a real hole: `kill <live-claude-pid>; git commit --allow-empty
+# -m x` contains the substring "git commit" and would exit 0 here, skipping analysis of the
+# kill call entirely. Found by peer review, 2026-09-08. Fixed: this check now runs PER
+# SEGMENT, after splitting on `;|&` (same segmentation the kill scan already uses), and only
+# exempts a segment that ITSELF begins with git commit/tag/merge/notes -- never a whole
+# command merely because one of its chained segments happens to be a git operation.
 
 # basename(1) without a subprocess per token: strip everything up to the last '/'.
 basename_of() {
@@ -93,6 +109,12 @@ claude_pids=""
 
 while IFS= read -r segment; do
   [ -z "$segment" ] && continue
+  # Per-segment git-commit-prose exemption: only when THIS segment itself starts with the
+  # git operation (leading whitespace trimmed), not merely contains the substring anywhere.
+  trimmed="${segment#"${segment%%[![:space:]]*}"}"
+  case "$trimmed" in
+    "git commit"*|"git tag"*|"git merge"*|"git notes"*) continue ;;
+  esac
   seg_kill_word=""
   seg_pkill_or_killall=0
   for word in $segment; do
@@ -110,32 +132,74 @@ while IFS= read -r segment; do
     continue
   fi
 
-  # kill: walk THIS SEGMENT's own tokens only. Any non-flag argument that is not a literal
-  # decimal integer is unsafe-by-default. Any literal integer PID is resolved via a live ps
-  # lookup; block if it is currently running claude.
+  # kill: walk THIS SEGMENT's own tokens only, WITH LOOKAHEAD -- `kill -9 1234` uses -9 as a
+  # signal NUMBER (always followed by at least one more target token), while a bare negative
+  # number with NOTHING after it (`kill -1234`) is kill's process-GROUP form, semantically
+  # identical to a positive PID target but for the whole group. Positional indexing (not a
+  # plain `for tok in $segment`) is required to tell these apart: whether a `-N` token is a
+  # signal flag or a process-group target depends on whether another token follows it in the
+  # SAME kill invocation, not on its shape alone. Found by peer review, 2026-09-08 (the first
+  # fix here treated ALL `-<digits>` as unsafe, which also blocked plain `kill -9 <pid>`).
   seg_seen_kill=0
-  for tok in $segment; do
+  # shellcheck disable=SC2086
+  set -- $segment
+  n=$#
+  i=1
+  while [ "$i" -le "$n" ]; do
+    tok="${!i}"   # bash indirect positional-parameter expansion -- no eval, no re-parsing
     b="$(basename_of "$tok")"
     if [ "$b" = "kill" ]; then
       seg_seen_kill=1
+      i=$((i + 1))
       continue
     fi
-    [ "$seg_seen_kill" -eq 0 ] && continue
+    if [ "$seg_seen_kill" -eq 0 ]; then
+      i=$((i + 1))
+      continue
+    fi
+    has_next=0
+    [ "$i" -lt "$n" ] && has_next=1
     case "$tok" in
-      -*) continue ;;                 # a flag (e.g. -9, -TERM): not a target
+      0)
+        # kill 0 signals EVERY process in the caller's own process group -- which can
+        # include a live claude process sharing that group. Not "not a real PID"; the
+        # single most dangerous bare target there is. Fail closed.
+        found_unsafe_arg="$tok"
+        ;;
+      -*)
+        rest="${tok#-}"
+        case "$rest" in
+          ''|*[!0-9]*) ;;   # a named signal flag (-TERM, -KILL, -s): not a target, ignore
+          *)
+            if [ "$has_next" -eq 1 ]; then
+              : # a numeric signal flag (-9, -15) followed by a real target -- not itself
+                # a target, ignore; the target token is scanned on its own iteration
+            else
+              # A bare negative number with NOTHING after it is kill's process-GROUP form
+              # (kill -1234 signals every process in group 1234), not a signal number.
+              # Fail closed, same as kill 0 above.
+              found_unsafe_arg="$tok"
+            fi
+            ;;
+        esac
+        ;;
       ''|*[!0-9]*)
         # Not a bare non-negative integer -- a variable, $(...), a name, etc.
         # We cannot resolve what this actually targets. Fail closed.
         found_unsafe_arg="$tok"
         ;;
       *)
-        [ "$tok" -lt 100 ] 2>/dev/null && continue  # tiny numbers: not real PIDs
+        # Resolve EVERY literal positive PID via ps, regardless of magnitude -- a ps lookup
+        # is cheap and correct at any PID value, so there is no reason to skip verifying any
+        # of them (an earlier version skipped small numbers "because they're not real PIDs,"
+        # which is exactly what let kill 0 through unexamined).
         proc="$(ps -p "$tok" -o command= 2>/dev/null || true)"
         case "$proc" in
           *claude*) claude_pids="$claude_pids $tok ($proc)" ;;
         esac
         ;;
     esac
+    i=$((i + 1))
   done
 done <<EOF_SEGMENTS
 $(printf '%s' "$cmd" | tr ';|&' '\n')

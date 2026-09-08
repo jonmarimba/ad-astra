@@ -77,16 +77,45 @@ esac
 # check just because the `| head` landed on its own line), then test.
 flat="$(printf '%s' "$cmd" | tr '\n\t' '  ' | tr -s ' ')"
 
+# PATH-QUALIFIED TRUNCATORS. A plain substring test for "| head" misses "| /usr/bin/head",
+# which runs the identical truncation while never containing the literal substring "head"
+# preceded by a pipe-and-space in the exact shape being matched. Found by peer review,
+# 2026-09-08. Fixed the same way the sibling kill-guard resolves path-qualified kill calls:
+# split on '|' into pipeline stages, take each stage's FIRST word, and compare its BASENAME
+# (strip everything up to the last '/') against the real command name -- so /usr/bin/head,
+# ./head, and a bare head are all recognized identically.
+basename_of() {
+  local w="$1"
+  printf '%s' "${w##*/}"
+}
+
 found=""
-case "$flat" in
-  *"| head"*|*"|head"*)   found="head" ;;
-esac
-case "$flat" in
-  *"| tail"*|*"|tail"*)   found="${found:+$found and }tail" ;;
-esac
-case "$flat" in
-  *"sed -n"*)             found="${found:+$found and }a sed line range" ;;
-esac
+IFS='|' read -ra _stages <<< "$flat"
+_stage_idx=0
+for _stage in "${_stages[@]}"; do
+  # shellcheck disable=SC2086
+  set -- $_stage
+  _first="${1:-}"
+  _b="$(basename_of "$_first")"
+  # head/tail only count when FED BY A PIPE (this stage is not the first) -- that is the
+  # shape that truncates a search's output. A first/only-stage head/tail reading its own
+  # file argument was never in this guard's scope.
+  if [ "$_stage_idx" -gt 0 ]; then
+    case "$_b" in
+      head) found="${found:+$found and }head" ;;
+      tail) found="${found:+$found and }tail" ;;
+    esac
+  fi
+  # sed -n truncates via ITS OWN file/line-range argument, piped or not -- unlike head/tail
+  # it does not need to be pipe-fed to slice a search's output down, so every stage is
+  # checked, including the first/only one.
+  if [ "$_b" = "sed" ]; then
+    case "$_stage" in
+      *" -n"*|*"-n "*) found="${found:+$found and }a sed line range" ;;
+    esac
+  fi
+  _stage_idx=$((_stage_idx + 1))
+done
 case "$flat" in
   *"LIMIT "*|*"--limit"*) found="${found:+$found and }an explicit limit" ;;
 esac

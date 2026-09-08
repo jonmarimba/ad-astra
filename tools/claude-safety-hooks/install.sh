@@ -12,9 +12,12 @@
 #   2. Seeds <target>/.claude/hooks/no-silent-truncation.watchlist from the .default file
 #      HERE, but only if the target doesn't already have one — never overwrites a repo's
 #      own tuned watchlist on a re-run.
-#   3. If --reap-hint is given, bakes it into the installed no-killing-other-claudes.sh as
-#      REAP_MECHANISM_HINT (a sed replace on the installed copy only — this repo's own
-#      copy of the hook stays generic).
+#   3. If --reap-hint is given, writes it as plain text to
+#      <target>/.claude/hooks/no-killing-other-claudes.reap-hint, which the installed hook
+#      reads as inert data at run time. (An earlier version sed-substituted the hint directly
+#      into the installed script's shell source, escaping only '/' and '&' — a hint
+#      containing '"' or a newline could break the installed script's syntax or inject code.
+#      A plain data file has no such surface.)
 #   4. Merges PreToolUse/Bash hook entries into <target>/.claude/settings.local.json via
 #      jq, additively — an existing PreToolUse/Bash hook list is preserved, and re-running
 #      this installer does not duplicate entries already present.
@@ -56,11 +59,9 @@ cp "$HERE/no-killing-other-claudes.sh" "$HOOKS_DIR/no-killing-other-claudes.sh"
 chmod +x "$HOOKS_DIR/no-silent-truncation.sh" "$HOOKS_DIR/no-killing-other-claudes.sh"
 
 if [ -n "$REAP_HINT" ]; then
-  # Only touch the INSTALLED copy -- this repo's own source stays generic. The default is
-  # REAP_MECHANISM_HINT="${REAP_MECHANISM_HINT:-}" on one line; replace just that line.
-  esc_hint="$(printf '%s' "$REAP_HINT" | sed -e 's/[\/&]/\\&/g')"
-  sed -i '' "s/^REAP_MECHANISM_HINT=\"\${REAP_MECHANISM_HINT:-}\"\$/REAP_MECHANISM_HINT=\"\${REAP_MECHANISM_HINT:-$esc_hint}\"/" \
-    "$HOOKS_DIR/no-killing-other-claudes.sh"
+  # Plain data, never interpolated into shell source -- see the header comment above and
+  # the hook's own CONFIGURATION comment for why this replaced a sed-into-source approach.
+  printf '%s' "$REAP_HINT" > "$HOOKS_DIR/no-killing-other-claudes.reap-hint"
 fi
 
 WATCHLIST="$HOOKS_DIR/no-silent-truncation.watchlist"
