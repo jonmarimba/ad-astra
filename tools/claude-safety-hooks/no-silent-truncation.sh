@@ -35,6 +35,7 @@
 #     (naming head/tail/a grep while explaining a fix) would otherwise trip its own pattern
 #     match and block its own repair commit. Found live, twice in a row, fixing this file.
 set -uo pipefail
+set -f
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WATCHLIST="$HOOK_DIR/no-silent-truncation.watchlist"
@@ -89,14 +90,39 @@ basename_of() {
   printf '%s' "${w##*/}"
 }
 
+# Inspect a pipeline stage without evaluating it. Transparent command wrappers and leading
+# environment assignments do not change which executable receives the piped search output.
+stage_executable() {
+  # shellcheck disable=SC2086
+  set -- $1
+  while [ "$#" -gt 0 ]; do
+    local word="$1"
+    shift
+    case "$word" in
+      *=*) continue ;;
+      command)
+        while [ "$#" -gt 0 ]; do
+          case "$1" in --) shift; break ;; -*) shift ;; *) break ;; esac
+        done
+        continue
+        ;;
+      env)
+        while [ "$#" -gt 0 ]; do
+          case "$1" in --) shift; break ;; -*) shift ;; *=*) shift ;; *) break ;; esac
+        done
+        continue
+        ;;
+      exec|builtin|nice|nohup|time) continue ;;
+      *) basename_of "$word"; return ;;
+    esac
+  done
+}
+
 found=""
 IFS='|' read -ra _stages <<< "$flat"
 _stage_idx=0
 for _stage in "${_stages[@]}"; do
-  # shellcheck disable=SC2086
-  set -- $_stage
-  _first="${1:-}"
-  _b="$(basename_of "$_first")"
+  _b="$(stage_executable "$_stage")"
   # head/tail only count when FED BY A PIPE (this stage is not the first) -- that is the
   # shape that truncates a search's output. A first/only-stage head/tail reading its own
   # file argument was never in this guard's scope.
