@@ -105,18 +105,24 @@ basename_of() {
   # space -- bash's own inline-assignment-before-command syntax -- so the opener check below
   # would miss it too if the word still starts with "var=". Strip one leading
   # identifier-looking "name=" prefix first, if the remainder looks like a substitution
-  # opener; a token that merely CONTAINS "=" without a $(/`/( right after it (an ordinary
-  # argument, not an assignment-glued substitution) is left alone.
+  # opener (with or without a wrapping double-quote -- `out="$(kill ...)"` is exactly as
+  # common as the unquoted form, and peer review 2026-09-08 caught that the opener check
+  # only recognized $(/`/( and never a leading quote in front of one of those, so the
+  # quoted form -- "$(kill" -- matched none of the three patterns and slipped through
+  # untouched); a token that merely CONTAINS "=" without a quote/$(/`/( right after it (an
+  # ordinary argument, not an assignment-glued substitution) is left alone.
   case "$w" in
     [A-Za-z_]*=*)
       rest="${w#*=}"
       case "$rest" in
-        '$('*|'`'*|'('*) w="$rest" ;;
+        '"'*|"'"*|'$('*|'`'*|'('*) w="$rest" ;;
       esac
       ;;
   esac
   while :; do
     case "$w" in
+      '"'*)  w="${w#\"}" ;;
+      "'"*)  w="${w#\'}" ;;
       '$('*) w="${w#\$\(}" ;;
       '`'*)  w="${w#\`}" ;;
       '('*)  w="${w#\(}" ;;

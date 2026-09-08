@@ -22,10 +22,15 @@
 #   .claude/hooks/no-silent-truncation.watchlist
 # One substring per line, matched against the raw command text (plain string containment, no
 # regex — nobody reads regex easily). A command is treated as "a search over protected data"
-# if it contains ANY watchlist line as a substring. install.sh seeds this file with a starter
-# list and comments explaining the format; edit it per-repo to name YOUR search tools (a mail
-# indexer, a notes search, a transcript search, `grep` over specific data directories, etc.)
-# — this hook's own code has no repo-specific tool names baked in.
+# if it contains ANY watchlist line as a substring. A line may also be a compound AND
+# condition, written as two or more substrings separated by ` && ` (space-ampersand-
+# ampersand-space) -- ALL parts must be present for that line to match. This exists for
+# cases like "grep, but only when it's over one of my specific data directories" -- a single
+# tool name (grep) is too broad to watch on its own (it fires on every unrelated grep call
+# anywhere), but "grep && ~/my-data-dir" is exactly the right shape. install.sh seeds this
+# file with a starter list and comments explaining the format; edit it per-repo to name YOUR
+# search tools (a mail indexer, a notes search, a transcript search, `grep` over specific
+# data directories, etc.) — this hook's own code has no repo-specific tool names baked in.
 #
 # WHAT IT DOES NOT BLOCK, deliberately, because a guard that cries wolf gets disabled:
 #   * head/tail on LOGS and state files — following a log tail is what tails are for
@@ -57,14 +62,29 @@ case "$cmd" in
 esac
 
 # Is this a search over protected data? Plain substring tests against the configured
-# watchlist, no regex.
+# watchlist, no regex. A line containing ' && ' is a compound AND condition -- every part
+# must be present in $cmd, not just one -- see the CONFIGURATION comment above for why.
 searches_protected_data=0
 if [ -f "$WATCHLIST" ]; then
   while IFS= read -r pattern; do
     pattern="$(printf '%s' "$pattern" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     [ -z "$pattern" ] && continue
     case "$pattern" in \#*) continue ;; esac
-    case "$cmd" in *"$pattern"*) searches_protected_data=1 ;; esac
+    case "$pattern" in
+      *" && "*)
+        all_present=1
+        IFS='&' read -ra _parts <<< "$pattern"
+        for _part in "${_parts[@]}"; do
+          _part="$(printf '%s' "$_part" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          [ -z "$_part" ] && continue
+          case "$cmd" in *"$_part"*) ;; *) all_present=0 ;; esac
+        done
+        [ "$all_present" -eq 1 ] && searches_protected_data=1
+        ;;
+      *)
+        case "$cmd" in *"$pattern"*) searches_protected_data=1 ;; esac
+        ;;
+    esac
   done < "$WATCHLIST"
 fi
 [ "$searches_protected_data" -eq 0 ] && exit 0
@@ -112,7 +132,25 @@ stage_executable() {
         done
         continue
         ;;
-      exec|builtin|nice|nohup|time) continue ;;
+      nice)
+        # `nice` takes its OWN flags before the wrapped command -- `-n 10`/`-n10`/
+        # `--adjustment=10`, or a bare `-10` legacy form -- and skipping only the word
+        # "nice" itself (as exec/builtin/nohup/time correctly do, since none of THEM take
+        # flags) left the very next token, "-n", to be treated as the executable on the
+        # next loop iteration. `mailq search x | nice -n 10 head -10` therefore reported
+        # "-n" as the pipeline's command, never reached "head", and passed the guard.
+        # Found by peer review, 2026-09-08. Skip nice's own argument shape properly.
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            -n|--adjustment) shift; shift ;;   # -n 10 (separate value)
+            -n*|--adjustment=*) shift ;;       # -n10 / --adjustment=10 (glued)
+            -*) shift ;;                        # legacy bare -10, or any other flag
+            *) break ;;
+          esac
+        done
+        continue
+        ;;
+      exec|builtin|nohup|time) continue ;;
       *) basename_of "$word"; return ;;
     esac
   done

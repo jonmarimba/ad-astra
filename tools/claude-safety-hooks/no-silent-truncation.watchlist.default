@@ -9,6 +9,11 @@
 # notes search, a call log, a transcript search, grep over specific data directories,
 # whatever exists in this repo. Lines starting with # are comments; blank lines ignored.
 #
+# A line containing ' && ' (space-ampersand-ampersand-space) is a compound AND condition --
+# every part must be present, not just one. Use this for a tool too generic to watch alone
+# (grep fires on every unrelated call anywhere) combined with a path that scopes it to your
+# actual data: `grep && ~/my-data-dir`.
+#
 # Starter examples (uncomment/adapt, or delete and write your own):
 # mailq
 # notesq
@@ -17,3 +22,4 @@
 # callq
 # recall
 # convoq
+# grep && ~/my-protected-data-dir
