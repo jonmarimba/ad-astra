@@ -63,6 +63,7 @@
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORD_LITERAL="$HOOK_DIR/shell_word_literal.py"
 REAP_HINT_FILE="$HOOK_DIR/no-killing-other-claudes.reap-hint"
 REAP_MECHANISM_HINT=""
 [ -f "$REAP_HINT_FILE" ] && REAP_MECHANISM_HINT="$(cat "$REAP_HINT_FILE")"
@@ -101,6 +102,16 @@ except Exception: print('')
 # spelling "kill" in a way the exact-match never recognizes as the word "kill" at all.
 basename_of() {
   local w="$1"
+  # Decode literal Bash word syntax with the companion scanner.  It understands
+  # ANSI-C quoting ($'\\151') without evaluating command text; dynamic
+  # expansions are intentionally left for this hook's existing fail-closed
+  # substitution handling.
+  if [ -f "$WORD_LITERAL" ]; then
+    local literal
+    if literal="$(python3 "$WORD_LITERAL" "$w" 2>/dev/null)"; then
+      w="$literal"
+    fi
+  fi
   # QUOTE-AND-BACKSLASH SPLICING. Bash removes matched quote pairs during word expansion
   # AND removes a bare backslash before an ordinary character (a backslash-escape), then
   # CONCATENATES what is left -- k''ill and k\ill are both single words Bash hands the real
@@ -115,6 +126,17 @@ basename_of() {
   # a real but much rarer shape here), but it is the same fail-closed trade this file makes
   # throughout -- better to over-normalize a rare edge case than under-normalize the common
   # evasion.
+  #
+  # ANSI-C and locale quoting: $'kill' and $"kill" are two more Bash quoting forms that
+  # also produce the bare word "kill" once expanded, and a plain `tr -d "'\""` alone leaves
+  # the leading $ behind (word becomes "$kill", still not a match) since $ isn't one of the
+  # stripped characters and isn't adjacent to a stripped one in the right order to cancel
+  # out. Strip the two-character $' and $" sequences globally FIRST, then the general
+  # quote/backslash strip below cleans up whatever quote character they left orphaned.
+  # Found by GhOST-Claude while investigating a supervisor finding about this file's
+  # evasion-fixing pattern, 2026-09-08 -- same day as rounds five and six.
+  w="${w//\$\'/}"
+  w="${w//\$\"/}"
   w="$(printf '%s' "$w" | tr -d "'\"\\\\")"
   # A bare `var=$(kill ...)` glues the assignment directly onto the substitution with no
   # space -- bash's own inline-assignment-before-command syntax -- so the opener check below

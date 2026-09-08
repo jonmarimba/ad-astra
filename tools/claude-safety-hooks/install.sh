@@ -56,7 +56,9 @@ mkdir -p "$HOOKS_DIR"
 
 cp "$HERE/no-silent-truncation.sh" "$HOOKS_DIR/no-silent-truncation.sh"
 cp "$HERE/no-killing-other-claudes.sh" "$HOOKS_DIR/no-killing-other-claudes.sh"
+cp "$HERE/shell_word_literal.py" "$HOOKS_DIR/shell_word_literal.py"
 chmod +x "$HOOKS_DIR/no-silent-truncation.sh" "$HOOKS_DIR/no-killing-other-claudes.sh"
+chmod +x "$HOOKS_DIR/shell_word_literal.py"
 
 if [ -n "$REAP_HINT" ]; then
   # Plain data, never interpolated into shell source -- see the header comment above and

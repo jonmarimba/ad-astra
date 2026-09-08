@@ -33,6 +33,7 @@ HOOKS_DIR="$TARGET/.claude/hooks"
 SETTINGS="$TARGET/.claude/settings.local.json"
 
 rm -f "$HOOKS_DIR/no-silent-truncation.sh" "$HOOKS_DIR/no-killing-other-claudes.sh" \
+      "$HOOKS_DIR/shell_word_literal.py" \
       "$HOOKS_DIR/no-killing-other-claudes.reap-hint"
 if [ "$KEEP_WATCHLIST" -eq 0 ]; then
   rm -f "$HOOKS_DIR/no-silent-truncation.watchlist"
