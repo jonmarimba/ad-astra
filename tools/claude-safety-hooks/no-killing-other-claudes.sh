@@ -192,8 +192,15 @@ claude_pids=""
 # Leading literal assignments are not executable words, so `x=i; k${x}ll` must
 # inspect the second word rather than treating the assignment as the command.
 dynamic_executable_word() {
-  local word wrapper=0
+  local word wrapper=0 wrapper_name="" skip_operand=0
   for word in $1; do
+    if [ "$skip_operand" -eq 1 ]; then
+      # This word is the OPERAND of a flag consumed on the previous
+      # iteration (e.g. the "name" in `exec -a name`), not a candidate
+      # executable itself -- skip it without re-examining it as one.
+      skip_operand=0
+      continue
+    fi
     case "$word" in
       [A-Za-z_]*=*) continue ;;
     esac
@@ -201,9 +208,17 @@ dynamic_executable_word() {
     # scanning past the wrapper rather than incorrectly treating `exec` (or
     # `command`) itself as the executable.
     case "$word" in
-      exec|command|builtin|nohup|time) wrapper=1; continue ;;
+      exec|command|builtin|nohup|time) wrapper=1; wrapper_name="$word"; continue ;;
     esac
     if [ "$wrapper" -eq 1 ]; then
+      # `exec -a name cmd` overrides argv0: `-a` takes its OWN operand
+      # ("name") as a separate word, which is not the delegated executable
+      # either -- skip both, or the scanner stops on "name" and never
+      # reaches the real command word that follows.
+      if [ "$wrapper_name" = "exec" ] && [ "$word" = "-a" ]; then
+        skip_operand=1
+        continue
+      fi
       # Command's common flags do not name its delegated executable.
       case "$word" in --|-*) continue ;; esac
     fi
