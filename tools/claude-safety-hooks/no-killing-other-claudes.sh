@@ -192,11 +192,21 @@ claude_pids=""
 # Leading literal assignments are not executable words, so `x=i; k${x}ll` must
 # inspect the second word rather than treating the assignment as the command.
 dynamic_executable_word() {
-  local word
+  local word wrapper=0
   for word in $1; do
     case "$word" in
       [A-Za-z_]*=*) continue ;;
     esac
+    # These wrappers delegate execution to their next command word.  Keep
+    # scanning past the wrapper rather than incorrectly treating `exec` (or
+    # `command`) itself as the executable.
+    case "$word" in
+      exec|command|builtin|nohup|time) wrapper=1; continue ;;
+    esac
+    if [ "$wrapper" -eq 1 ]; then
+      # Command's common flags do not name its delegated executable.
+      case "$word" in --|-*) continue ;; esac
+    fi
     case "$word" in
       *'$'*|*'`'*|*'<('*|*'>('* ) return 0 ;;
     esac
