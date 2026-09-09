@@ -204,6 +204,15 @@ dynamic_executable_word() {
     case "$word" in
       [A-Za-z_]*=*) continue ;;
     esac
+    # Normalize through the same quote/backslash/ANSI-C stripper the rest of
+    # this file uses for the kill-command word itself. Without this, a
+    # quoted wrapper or flag -- `exec "-a" harmless $verb` -- compares its
+    # literal quote characters against `exec`/`-a`/`--` and matches none of
+    # them, so the scanner stops on the quoted token (judging it the
+    # resolved executable) and never reaches the real dynamic word that
+    # follows. Found live, 2026-09-08: this exact shape bypassed the fresh
+    # `-a`-operand fix within the same review round.
+    word="$(basename_of "$word")"
     # These wrappers delegate execution to their next command word.  Keep
     # scanning past the wrapper rather than incorrectly treating `exec` (or
     # `command`) itself as the executable.
