@@ -127,6 +127,16 @@ node "$CP" notes.md >/dev/null 2>&1
 [ $? -ne 0 ] && ok "identical content under a draft name still fails" \
              || bad "the skip leaks past sidecar names"
 
+# A legal deposition sidecar is often named after the source, rather than
+# carrying an `.ocr.txt` suffix. It must receive the same fidelity protection.
+printf 'This matters a great deal and the approach is robust.\n' > deposition.txt
+out="$(node "$CP" deposition.txt 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "skipped"; then
+  ok "verbatim deposition.txt sidecar skipped with the reason stated"
+else
+  bad "deposition.txt was prose-checked, or skipped silently (rc=$rc)"
+fi
+
 echo
 echo "passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
