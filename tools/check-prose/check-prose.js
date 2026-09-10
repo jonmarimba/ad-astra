@@ -142,7 +142,8 @@ const SIDECAR_RE = /\.(marker|metadata)\.md$|\.(ocr|layout)\.txt$/i;
 
 function isPdfTextSidecar(file) {
     if (!file.toLowerCase().endsWith('.txt')) return false;
-    return fs.existsSync(`${file.slice(0, -4)}.pdf`);
+    const sourceStem = file.slice(0, -4);
+    return fs.existsSync(`${sourceStem}.pdf`) || fs.existsSync(`${sourceStem}.PDF`);
 }
 
 function check(file) {
