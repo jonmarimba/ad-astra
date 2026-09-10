@@ -27,10 +27,12 @@ The **asd-ste100** skill is sentence mechanics, modeled on the aerospace Simplif
 
 The **humanizer** skill removes AI tells and then adds a specific person's voice. The tell-removal layer is the upstream `blader/humanizer` skill, pulled fresh from GitHub at install time, working from the signs of AI writing that Wikipedia catalogues. The voice layer calibrates the draft against Jonathan's register files: attorney, business-client, or casual. The result sounds like him rather than a de-slopped nobody. Those files live in the `js-project-GhOST` checkout; on a machine without it, only the tell-removal layer applies.
 
-The **check-prose** tool is the mechanical gate. `node .astra/check-prose/check-prose.js <file>` flags banned words and phrases, candor disclaimers, label-plus-fragment shapes, sentences about the document itself, and sentences past 25 words. It exits nonzero on any finding, so it works in scripts and hooks. The rules are data in `rules.json` beside the script, and a repo extends them without forking by adding `.check-prose.json` at its root.
+The **check-prose** tool is the mechanical gate. `node .astra/check-prose/check-prose.js <file>` flags banned words and phrases, candor disclaimers, label-plus-fragment shapes, sentences about the document itself, and sentences past 25 words. It exits nonzero on any finding. Run it on demand against a draft; it is not a commit gate and never runs from a git hook. It refuses PDF sidecar files (`.marker.md`, `.metadata.md`, `.ocr.txt`, `.layout.txt`) by name. A rendering of a source document is a record, and prose rules do not apply to it. The rules are data in `rules.json` beside the script, and a repo extends them without forking by adding `.check-prose.json` at its root.
 
 The **writing-doctrine** tool installs `.doctrine/writing.md`, the rules that sit above the sentence. Those rules cover what belongs in a client email and why the action goes first while corrections wait. They also cover how to ask a paid expert for a decision. And the doctrine carries the standing order that makes the rest of the stack fire: run the tools before any prose reaches a human. A model's opinion of its own prose is not evidence.
 
 ## Day to day
 
 Draft the document. Ask the agent to run the `prose` skill over it. Run `node .astra/check-prose/check-prose.js <file>` and fix what it flags. Only then let a human see the result.
+
+These tools touch only prose you authored. A file that renders a PDF or another source document is a record; leave it verbatim (QUICKSTART-pdf.md).

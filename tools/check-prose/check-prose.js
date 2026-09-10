@@ -15,7 +15,10 @@
  *   - sentences that talk about the document itself
  *
  * Usage: node tools/check-prose.js FILE...
- * Exits non-zero when anything is flagged, so it can gate a commit.
+ * Exits non-zero when anything is flagged. Run it on demand against a draft you
+ * authored. It is NOT a commit gate and must never run from a git hook: a hook
+ * fires on every file and cannot tell a draft from a transcription
+ * (Jonathan, 2026-09-09).
  */
 
 const fs = require('fs');
@@ -130,7 +133,19 @@ function sentences(text) {
     return text.split(/(?<=[.!?]["'\u2019\u201d\)\]*_]{0,2})\s+/).map(s => s.trim()).filter(Boolean);
 }
 
+// A file that RENDERS a source document is a record, not a draft. Its only
+// standard is fidelity to the PDF it came from, so prose rules must never touch
+// it — "correcting" a transcription falsifies evidence, and the legal repos are
+// full of exactly these files (Jonathan, 2026-09-09). The skip is loud so a
+// sweep cannot mistake it for a clean pass.
+const SIDECAR_RE = /\.(marker|metadata)\.md$|\.(ocr|layout)\.txt$/;
+
 function check(file) {
+    if (SIDECAR_RE.test(file)) {
+        console.log(file);
+        console.log('    skipped — renders a source document (PDF sidecar); fidelity to the source is its only standard');
+        return 0;
+    }
     const raw = fs.readFileSync(file, 'utf8');
     const lines = raw.split('\n');
     const problems = [];

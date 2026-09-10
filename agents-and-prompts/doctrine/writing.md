@@ -6,6 +6,12 @@ These rules govern what belongs in a document, how to address a recipient, and h
 
 Before any prose reaches a human — email draft, client document, README a person will read — run the installed writing tools. Run the prose skill (which chains asd-ste100 and the humanizer), then check-prose. This is not optional and not conditional on how good you judge the draft to be. Every model rates its own prose as fantastic; the AI tells the humanizer catches are precisely the ones the model that produced them cannot see. A draft presented without the tools having run is an unreviewed draft, and saying so afterward does not cure it. If the tools are not installed in the repo, say that instead of skipping silently.
 
+## The tools touch only prose we authored — never transcriptions, never from a hook (Jonathan, 2026-09-09)
+
+The rule above applies to prose we write for humans. A file that renders a source document is a copy: a PDF sidecar (`.txt`, `.ocr.txt`, `.layout.txt`, `.marker.md`, `.metadata.md`), an OCR dump, a transcript, quoted evidence. Its only standard is fidelity to that source. Running a prose tool over one does not improve it; it falsifies the record. The legal repos are full of exactly these files.
+
+Prose checking is also not a commit gate. No pre-commit or post-commit hook runs check-prose or the prose skill, ever. A hook fires on every file and cannot tell a draft from a transcription, which is how a checker ends up "correcting" a court document. Run the tools on the draft in front of you, when that draft is headed to a human.
+
 ## A client email is a relationship document, not a bug report (Jonathan, 2026-08-14)
 
 The ASD-STE100 rules govern sentences. These govern what belongs in the document at all. Written after Jonathan rewrote a draft end to end, where the gap was not prose polish but audience. The draft was a findings list addressed to nobody; his rewrite was a letter to four named people that happened to contain findings.

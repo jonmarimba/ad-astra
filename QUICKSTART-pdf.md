@@ -23,6 +23,8 @@ For each `foo.pdf`, the kit writes:
 
 Sidecars are committed alongside their PDFs. That is the point: the repo's documents stay searchable as plain text, in git, forever.
 
+A sidecar is a verbatim rendering of its PDF, and fidelity to the source is its only standard. The prose tools never touch one — check-prose refuses sidecar files by name — because "improving" a transcription falsifies the record.
+
 ## The hook
 
 The pre-commit hook regenerates and stages sidecars for every staged PDF. If the kit is missing, the hook refuses the commit loudly, because a PDF with no text layer looks exactly like nothing being wrong. The installer manages only its own block in `.git/hooks/pre-commit`; anything else already in that hook is preserved, and the prior version is backed up.
