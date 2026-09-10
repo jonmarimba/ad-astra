@@ -128,7 +128,9 @@ node "$CP" notes.md >/dev/null 2>&1
              || bad "the skip leaks past sidecar names"
 
 # A legal deposition sidecar is often named after the source, rather than
-# carrying an `.ocr.txt` suffix. It must receive the same fidelity protection.
+# carrying an `.ocr.txt` suffix. Its sibling PDF proves that it is evidence,
+# rather than an authored draft with an evidence-like name.
+touch deposition.pdf
 printf 'This matters a great deal and the approach is robust.\n' > deposition.txt
 out="$(node "$CP" deposition.txt 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && echo "$out" | grep -q "skipped"; then
@@ -136,6 +138,11 @@ if [ "$rc" -eq 0 ] && echo "$out" | grep -q "skipped"; then
 else
   bad "deposition.txt was prose-checked, or skipped silently (rc=$rc)"
 fi
+
+rm deposition.pdf
+node "$CP" deposition.txt >/dev/null 2>&1
+[ $? -ne 0 ] && ok "an authored deposition.txt without a sibling PDF still fails" \
+             || bad "a filename alone bypasses prose checks"
 
 echo
 echo "passed $PASS, failed $FAIL"

@@ -138,13 +138,15 @@ function sentences(text) {
 // it — "correcting" a transcription falsifies evidence, and the legal repos are
 // full of exactly these files (Jonathan, 2026-09-09). The skip is loud so a
 // sweep cannot mistake it for a clean pass.
-// Some legal exports use the source document's own name with a .txt suffix
-// instead of an `.ocr.txt` or `.layout.txt` suffix. `deposition.txt` is still
-// a verbatim evidence sidecar, not authored prose.
-const SIDECAR_RE = /\.(marker|metadata)\.md$|\.(ocr|layout)\.txt$|deposition\.txt$/i;
+const SIDECAR_RE = /\.(marker|metadata)\.md$|\.(ocr|layout)\.txt$/i;
+
+function isPdfTextSidecar(file) {
+    if (!file.toLowerCase().endsWith('.txt')) return false;
+    return fs.existsSync(`${file.slice(0, -4)}.pdf`);
+}
 
 function check(file) {
-    if (SIDECAR_RE.test(file)) {
+    if (SIDECAR_RE.test(file) || isPdfTextSidecar(file)) {
         console.log(file);
         console.log('    skipped — renders a source document (PDF sidecar); fidelity to the source is its only standard');
         return 0;
