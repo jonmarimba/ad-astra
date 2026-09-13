@@ -172,6 +172,7 @@ XCODE_APP_PATH = os.environ.get("XCODE_MCP_FRONT_XCODE_APP_PATH", "/Applications
 XCODE_BINARY_PATH = f"{XCODE_APP_PATH.rstrip('/')}/Contents/MacOS/Xcode"
 RECONNECT_POLL_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_RECONNECT_POLL_S", "5"))
 CONNECT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CONNECT_TIMEOUT_S", "15"))
+OSASCRIPT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_OSASCRIPT_TIMEOUT_S", "5"))
 # Generous on purpose - a real Xcode build_project call can legitimately run
 # for minutes. The point isn't to bound normal work, it's to make sure NO call
 # can wedge the daemon forever (found live, 2026-08-14: with no timeout at all,
@@ -274,11 +275,18 @@ async def _run_osascript(script: str) -> bytes:
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=5)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()  # reap it — don't leave a zombie behind either
-        raise RuntimeError("osascript timed out after 5s (System Events may be unresponsive)")
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=OSASCRIPT_TIMEOUT_SECONDS)
+    except BaseException:
+        # A cancelled approval sidecar is just as dangerous as a timeout: without
+        # this cleanup its osascript child survives the task that launched it and
+        # the next poll adds another. Kill first; shielded wait schedules reaping
+        # even when the caller's cancellation must propagate immediately.
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+        with contextlib.suppress(asyncio.CancelledError, ProcessLookupError):
+            await asyncio.shield(proc.wait())
+        raise
     if proc.returncode != 0:
         raise RuntimeError(f"osascript exited {proc.returncode}: {err.decode(errors='replace').strip()}")
     return out
@@ -356,6 +364,11 @@ LIST_MAX_PAGES = int(os.environ.get("XCODE_MCP_FRONT_LIST_MAX_PAGES", "200"))
 # whole connection attempt.
 ALLOW_CLICK_POLL_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CLICK_POLL", "1.5"))
 
+# One Xcode process has one approval surface. Several upstream connection loops
+# must therefore share one poll, rather than each wedging System Events with a
+# fresh osascript every tick.
+_allow_click_lock = asyncio.Lock()
+
 # Set the first time we see a foreign dialog while we are not connected; cleared whenever we
 # see no dialog or our own. Module-level rather than per-upstream because Xcode shows one
 # dialog at a time for the whole application, so this is genuinely global state.
@@ -363,6 +376,19 @@ _foreign_dialog_first_seen: dict = {}
 
 
 async def _click_allow_if_present() -> bool:
+    # A running daemon can outlive Xcode. Polling System Events in that state
+    # cannot discover an approval dialog and previously leaked one stuck child
+    # per tick, so do not launch osascript at all.
+    if not _xcode_is_running():
+        return False
+    async with _allow_click_lock:
+        # Xcode may quit while another waiter held the single-flight lock.
+        if not _xcode_is_running():
+            return False
+        return await _click_allow_if_present_unlocked()
+
+
+async def _click_allow_if_present_unlocked() -> bool:
     """Best-effort, narrowly scoped: only ever touches a button whose title is
     the exact literal string "Allow" or "Don't Allow", only in Xcode's own
     process. This is the one dialog this tool exists to eat, not a general
