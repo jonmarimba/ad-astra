@@ -1,49 +1,57 @@
 #!/bin/bash
-# install.sh — install claude-safety-hooks into a target repo's .claude/hooks/ and wire
-# them into PreToolUse/Bash in .claude/settings.local.json (merged additively, never
-# clobbering existing hooks).
+# install.sh — install claude-safety-hooks either into a target repo (--into) or into the
+# user's GLOBAL Claude config (--global), wiring them into PreToolUse/Bash (merged
+# additively, never clobbering existing hooks).
 #
 # Usage:
 #   ./install.sh --into /path/to/target-repo [--reap-hint "text naming your reap mechanism"]
+#   ./install.sh --global                    [--reap-hint "..."]
 #
-# What it does:
-#   1. Copies no-silent-truncation.sh and no-killing-other-claudes.sh into
-#      <target>/.claude/hooks/, executable.
-#   2. Seeds <target>/.claude/hooks/no-silent-truncation.watchlist from the .default file
-#      HERE, but only if the target doesn't already have one — never overwrites a repo's
-#      own tuned watchlist on a re-run.
-#   3. If --reap-hint is given, writes it as plain text to
-#      <target>/.claude/hooks/no-killing-other-claudes.reap-hint, which the installed hook
-#      reads as inert data at run time. (An earlier version sed-substituted the hint directly
-#      into the installed script's shell source, escaping only '/' and '&' — a hint
-#      containing '"' or a newline could break the installed script's syntax or inject code.
-#      A plain data file has no such surface.)
-#   4. Merges PreToolUse/Bash hook entries into <target>/.claude/settings.local.json via
-#      jq, additively — an existing PreToolUse/Bash hook list is preserved, and re-running
-#      this installer does not duplicate entries already present.
+# --into  writes <target>/.claude/hooks/ + <target>/.claude/settings.local.json, wired with
+#         $CLAUDE_PROJECT_DIR-relative paths (the per-repo default; still the right call for
+#         anything repo-specific).
+# --global writes ~/.claude/hooks/ + ~/.claude/settings.json, wired with an ABSOLUTE path
+#         (resolved at install time — global settings are machine-local, never cloned, so a
+#         concrete path is correct and does not depend on which repo is open). Use this for
+#         the SAFETY hooks specifically: they protect against silent data loss and killing a
+#         live claude regardless of which repo you are in, so a per-repo install leaves every
+#         un-installed repo unguarded. This is the deliberate carve-out to astra's
+#         "nothing installed globally" default — it applies to these protective hooks, NOT to
+#         tools or doctrine, which stay per-repo. (Jonathan, 2026-09-17: the install scripts
+#         should allow global install "where potentially applicable" — this is that case.)
 #
-# Requires: jq (brew install jq). Re-run any time to update the hook scripts themselves;
-# it will refuse to touch a watchlist that already exists.
+# What it does (either mode):
+#   1. Copies no-silent-truncation.sh, no-killing-other-claudes.sh, shell_word_literal.py
+#      into <hooks dir>, executable.
+#   2. Seeds <hooks dir>/no-silent-truncation.watchlist from the .default file HERE, but only
+#      if one isn't already there — never overwrites a tuned watchlist on a re-run.
+#   3. --reap-hint (optional) is written as plain data to no-killing-other-claudes.reap-hint.
+#   4. Merges PreToolUse/Bash hook entries into the settings file via jq, additively — an
+#      existing Bash hook list is preserved, and re-running does not duplicate entries.
+#
+# Requires: jq (brew install jq).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET=""
+GLOBAL=0
 REAP_HINT=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --into) TARGET="$2"; shift 2 ;;
+    --global) GLOBAL=1; shift ;;
     --reap-hint) REAP_HINT="$2"; shift 2 ;;
     *) echo "install.sh: unknown argument $1" >&2; exit 1 ;;
   esac
 done
 
-if [ -z "$TARGET" ]; then
-  echo "usage: install.sh --into /path/to/target-repo [--reap-hint TEXT]" >&2
-  exit 1
+# Exactly one of --into / --global.
+if [ "$GLOBAL" -eq 1 ] && [ -n "$TARGET" ]; then
+  echo "install.sh: --into and --global are mutually exclusive" >&2; exit 1
 fi
-if [ ! -d "$TARGET" ]; then
-  echo "install.sh: target repo not found: $TARGET" >&2
+if [ "$GLOBAL" -eq 0 ] && [ -z "$TARGET" ]; then
+  echo "usage: install.sh --into /path/to/target-repo | --global  [--reap-hint TEXT]" >&2
   exit 1
 fi
 if ! command -v jq >/dev/null 2>&1; then
@@ -51,7 +59,22 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-HOOKS_DIR="$TARGET/.claude/hooks"
+if [ "$GLOBAL" -eq 1 ]; then
+  HOOKS_DIR="$HOME/.claude/hooks"
+  SETTINGS="$HOME/.claude/settings.json"
+  # Absolute, resolved now — a global hook must not depend on $CLAUDE_PROJECT_DIR, which
+  # changes with whichever repo is open. Machine-local file, so a concrete path is correct.
+  CMD_PREFIX="$HOOKS_DIR"
+else
+  if [ ! -d "$TARGET" ]; then
+    echo "install.sh: target repo not found: $TARGET" >&2; exit 1
+  fi
+  HOOKS_DIR="$TARGET/.claude/hooks"
+  SETTINGS="$TARGET/.claude/settings.local.json"
+  # $CLAUDE_PROJECT_DIR is expanded by Claude Code at hook-run time to the open repo.
+  CMD_PREFIX="\$CLAUDE_PROJECT_DIR/.claude/hooks"
+fi
+
 mkdir -p "$HOOKS_DIR"
 
 cp "$HERE/no-silent-truncation.sh" "$HOOKS_DIR/no-silent-truncation.sh"
@@ -61,8 +84,6 @@ chmod +x "$HOOKS_DIR/no-silent-truncation.sh" "$HOOKS_DIR/no-killing-other-claud
 chmod +x "$HOOKS_DIR/shell_word_literal.py"
 
 if [ -n "$REAP_HINT" ]; then
-  # Plain data, never interpolated into shell source -- see the header comment above and
-  # the hook's own CONFIGURATION comment for why this replaced a sed-into-source approach.
   printf '%s' "$REAP_HINT" > "$HOOKS_DIR/no-killing-other-claudes.reap-hint"
 fi
 
@@ -74,15 +95,14 @@ else
   echo "install.sh: seeded a starter watchlist at $WATCHLIST -- edit it to name YOUR search tools"
 fi
 
-SETTINGS="$TARGET/.claude/settings.local.json"
 mkdir -p "$(dirname "$SETTINGS")"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 
 TMP="$(mktemp)"
-jq '
+jq --arg trunc "$CMD_PREFIX/no-silent-truncation.sh" \
+   --arg kill  "$CMD_PREFIX/no-killing-other-claudes.sh" '
   .hooks //= {} |
   .hooks.PreToolUse //= [] |
-  # find (or create) the entry whose matcher is "Bash"
   (.hooks.PreToolUse | map(.matcher == "Bash") | index(true)) as $idx |
   if $idx == null then
     .hooks.PreToolUse += [{"matcher": "Bash", "hooks": []}]
@@ -91,8 +111,7 @@ jq '
   | .hooks.PreToolUse[$idx2].hooks as $existing
   | .hooks.PreToolUse[$idx2].hooks =
       ($existing
-        + (["$CLAUDE_PROJECT_DIR/.claude/hooks/no-silent-truncation.sh",
-            "$CLAUDE_PROJECT_DIR/.claude/hooks/no-killing-other-claudes.sh"]
+        + ([$trunc, $kill]
            | map({"type": "command", "command": .})
            | map(select(. as $new | ($existing | map(.command) | index($new.command)) == null)))
       )
@@ -100,4 +119,8 @@ jq '
 mv "$TMP" "$SETTINGS"
 
 echo "install.sh: wired into $SETTINGS (PreToolUse/Bash, merged additively)"
-echo "install.sh: done. Restart/reload Claude Code in $TARGET for the hooks to take effect."
+if [ "$GLOBAL" -eq 1 ]; then
+  echo "install.sh: GLOBAL install done — applies to every session. Restart/reload Claude Code for it to take effect."
+else
+  echo "install.sh: done. Restart/reload Claude Code in $TARGET for the hooks to take effect."
+fi
