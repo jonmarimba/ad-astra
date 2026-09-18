@@ -51,6 +51,22 @@ rm "$SB/be_noisy"
 out="$(bash "$SHIM")"
 assert_empty "$out" "silent script run produces no shim output"
 
+# ---- a FAILED wrapped run -> shim exits NONZERO + the log records the REAL status ----
+# RED-capable both ways: before the fix the shim always did `exit 0` (so a failed run read
+# as delivered), AND the app command read `$?` after a `$(date)` substitution that clobbered
+# it (so the log always said "status 0" whatever the script really returned). This asserts
+# both: the wrapped script exits 7, the log must say status 7, and the shim must exit 7.
+cat > "$SB/failjob.sh" <<'EOF'
+#!/bin/bash
+exit 7
+EOF
+chmod +x "$SB/failjob.sh"
+assert_rc 0 "wrap the failing job" "$WIA" "$SB/failjob.sh" --log "$SB/logs/failjob.log" --name FailJobWrapper --outdir "$SB/out"
+FSHIM="$SB/out/failjobwrapper_launch.sh"
+bash "$FSHIM"; frc=$?
+assert_eq "7" "$frc" "shim propagates the wrapped script's nonzero exit (not a silent 0)"
+assert_contains "$SB/logs/failjob.log" "status 7" "log records the real exit status (rc captured before the date substitution)"
+
 # ---- the meat: editing the SCRIPT must not change the app's code hash ----
 h1="$(codesign -dvvv "$APP" 2>&1 | grep '^CDHash=')"
 echo 'echo more stuff' >> "$SB/job.sh"
