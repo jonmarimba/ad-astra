@@ -33,12 +33,15 @@ while IFS= read -r phrase; do
   case "$phrase" in ''|'#'*) continue ;; esac
   # -F fixed string, -i case-insensitive, -n line numbers. No regex: the list is
   # literal phrases and Jonathan's standing rule is to avoid regex where plain
-  # string scanning does the job.
+  # string scanning does the job. Report EVERY matching line — no head/limit: a
+  # checker that shows only the first N violations makes you fix N, re-run, and
+  # find the rest, and it undercounts the total (GhOST-OpenClaw peer review of
+  # 37c9e571). The match count is small by nature, so completeness is free.
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     hits=$((hits+1))
     printf '  %s  <- "%s"\n' "$line" "$phrase"
-  done < <(grep -Fin -- "$phrase" "$TMP" 2>/dev/null | head -5)
+  done < <(grep -Fin -- "$phrase" "$TMP" 2>/dev/null)
 done < "$LIST"
 
 if [ "$hits" -gt 0 ]; then
