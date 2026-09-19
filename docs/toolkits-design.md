@@ -94,7 +94,7 @@ A toolkit is a directory containing a `toolkit.json` manifest:
     {"name": "unwrap-markdown", "path": "tools/unwrap-markdown.js", "runtime": "node"}
   ],
   "data": [
-    {"name": "voice-registers", "path": "reference/voice/", "description": "Jonathan's per-register voice files"}
+    {"name": "voice-registers", "path": "agents-and-prompts/voice/", "description": "Jonathan's per-register voice files (canonical in js-db-ad-astra as of 2026-09-19)"}
   ],
   "requires": {
     "node": ">=18",
