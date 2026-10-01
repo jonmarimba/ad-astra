@@ -163,6 +163,74 @@ else
 fi
 rm -rf "$WS"
 
+echo "== 9. A pull with nothing to do must print nothing =="
+# The post-commit hook appends every run to .astra/update.log, a tracked file.
+# A "13 current" line per commit dirtied the tree after every commit, and
+# committing that line fired the hook again (Jonathan, 2026-10-01).
+new_repo
+out="$("$R/.astra/astra-update" --pull 2>&1)"
+if [ -z "$out" ]; then
+  ok "no-op pull is silent"
+else
+  bad "no-op pull printed: $(echo "$out" | tr '\n' ' ')"
+fi
+# Control: an explicit status check without --pull still reports.
+out="$("$R/.astra/astra-update" 2>&1)"
+if echo "$out" | grep -q "current"; then
+  ok "status check without --pull still prints its summary"
+else
+  bad "status check went quiet too (out=$(echo "$out" | tr '\n' ' '))"
+fi
+
+echo "== 10. A pull that changes something must say when =="
+new_repo
+printf '\n{"zzz":"timestamped"}\n' >> "$RULES"
+out="$("$R/.astra/astra-update" --pull 2>&1)"
+if echo "$out" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}'; then
+  ok "eventful pull is timestamped"
+else
+  bad "eventful pull carries no timestamp (out=$(echo "$out" | tr '\n' ' '))"
+fi
+cp "$SAVE/rules.json" "$RULES"
+
+echo "== 11. The updater is in the manifest and keeps ITSELF current =="
+# An update script that never updates itself is stale everywhere it was ever
+# vendored, which is how the HOA repo's copy fell behind (Jonathan, 2026-10-01).
+UPD="$ASTRA/tools/lib/astra-update"
+cp "$UPD" "$SAVE/astra-update"
+new_repo
+if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if 'astra-update' in d['tools'] else 1)" "$R/.astra/manifest.json"; then
+  ok "install records the updater in the manifest"
+else
+  bad "the updater is not in the manifest"
+fi
+printf '\n# upstream updater moved\n' >> "$UPD"
+"$R/.astra/astra-update" --pull >/dev/null 2>&1
+if grep -q "upstream updater moved" "$R/.astra/astra-update"; then
+  ok "untouched updater picked up the upstream change"
+else
+  bad "updater did NOT update itself"
+fi
+if [ -x "$R/.astra/astra-update" ]; then
+  ok "updated updater is still executable"
+else
+  bad "self-update dropped the executable bit"
+fi
+cp "$SAVE/astra-update" "$UPD"
+
+echo "== 12. A locally edited updater is never overwritten =="
+cp "$UPD" "$SAVE/astra-update"
+new_repo
+printf '\n# LOCAL UPDATER EDIT\n' >> "$R/.astra/astra-update"
+printf '\n# upstream updater moved again\n' >> "$UPD"
+out="$("$R/.astra/astra-update" --pull 2>&1)"
+if grep -q "LOCAL UPDATER EDIT" "$R/.astra/astra-update" && echo "$out" | grep -q "LOCAL EDITS"; then
+  ok "edited updater left alone and reported"
+else
+  bad "edited updater overwritten or not reported (out=$(echo "$out" | tr '\n' ' '))"
+fi
+cp "$SAVE/astra-update" "$UPD"
+
 echo
 echo "passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

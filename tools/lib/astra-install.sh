@@ -129,12 +129,44 @@ os.replace(tmp, manifest)
 PY
 }
 
-# Drop the puller into the repo so it can check itself without astra reaching in.
+# Drop the puller into the repo so it can check itself without astra reaching in,
+# and record it in the manifest like any tool. Until 2026-10-01 it was copied and
+# forgotten, so every vendored copy froze at the version it arrived with and the
+# updater was the one file nothing kept current (Jonathan: "what's the point of an
+# update script that doesn't keep itself up-to-date"). The explicit src/dest paths
+# are the same mechanism doctrine files use, because the updater lives in
+# tools/lib/ rather than tools/<tool>/.
 astra_vendor_updater() {
   local u="$TARGET/.astra/astra-update"
   cp "$ASTRA_ROOT/tools/lib/astra-update" "$u.astra-tmp"
+  chmod +x "$u.astra-tmp"
   mv -f "$u.astra-tmp" "$u"
-  chmod +x "$u"
+  local src_remote
+  src_remote="$(git -C "$ASTRA_ROOT" remote get-url origin 2>/dev/null || true)"
+  ASTRA_SRC="$ASTRA_ROOT" ASTRA_SRC_REMOTE="$src_remote" ASTRA_UPDATER="$u" \
+  ASTRA_MANIFEST="$TARGET/.astra/manifest.json" python3 - <<'PY'
+import hashlib, json, os, pathlib
+
+manifest = pathlib.Path(os.environ["ASTRA_MANIFEST"])
+try:
+    data = json.loads(manifest.read_text())
+except Exception:
+    data = {}
+data.setdefault("tools", {})
+entry = {
+    "source": os.environ["ASTRA_SRC"],
+    "files": {"astra-update": hashlib.sha256(
+        pathlib.Path(os.environ["ASTRA_UPDATER"]).read_bytes()).hexdigest()[:16]},
+    "paths": {"astra-update": {"src": "tools/lib/astra-update",
+                               "dest": ".astra/astra-update"}},
+}
+if os.environ.get("ASTRA_SRC_REMOTE"):
+    entry["source_remote"] = os.environ["ASTRA_SRC_REMOTE"]
+data["tools"]["astra-update"] = entry
+tmp = manifest.with_suffix(".json.tmp")
+tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+os.replace(tmp, manifest)
+PY
 }
 
 # Remove a tool and forget it. Leaves .astra/ itself alone if other tools remain.
