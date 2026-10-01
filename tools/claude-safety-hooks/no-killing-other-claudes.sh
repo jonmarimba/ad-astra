@@ -63,6 +63,7 @@
 set -uo pipefail
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORD_LITERAL="$HOOK_DIR/shell_word_literal.py"
 REAP_HINT_FILE="$HOOK_DIR/no-killing-other-claudes.reap-hint"
 REAP_MECHANISM_HINT=""
 [ -f "$REAP_HINT_FILE" ] && REAP_MECHANISM_HINT="$(cat "$REAP_HINT_FILE")"
@@ -75,6 +76,11 @@ except Exception: print('')
 " 2>/dev/null)"
 
 [ -z "$cmd" ] && exit 0
+
+# Bash removes a backslash followed by a physical newline before it recognizes
+# words. Do the same before segmenting; otherwise `k\\` followed by `ill` is
+# inspected as two harmless lines even though Bash executes `kill`.
+cmd="$(printf '%s' "$cmd" | python3 -c 'import sys; sys.stdout.write(sys.stdin.read().replace(chr(92) + chr(10), ""))')"
 
 # PROSE IS NOT A KILL CALL, BUT THIS EXEMPTION MUST NOT BE GLOBAL. This hook's own commit
 # message describes what it does and says "kill/pkill/killall" in plain English — which
@@ -101,6 +107,16 @@ except Exception: print('')
 # spelling "kill" in a way the exact-match never recognizes as the word "kill" at all.
 basename_of() {
   local w="$1"
+  # Decode literal Bash word syntax with the companion scanner.  It understands
+  # ANSI-C quoting ($'\\151') without evaluating command text; dynamic
+  # expansions are intentionally left for this hook's existing fail-closed
+  # substitution handling.
+  if [ -f "$WORD_LITERAL" ]; then
+    local literal
+    if literal="$(python3 "$WORD_LITERAL" "$w" 2>/dev/null)"; then
+      w="$literal"
+    fi
+  fi
   # QUOTE-AND-BACKSLASH SPLICING. Bash removes matched quote pairs during word expansion
   # AND removes a bare backslash before an ordinary character (a backslash-escape), then
   # CONCATENATES what is left -- k''ill and k\ill are both single words Bash hands the real
@@ -115,6 +131,17 @@ basename_of() {
   # a real but much rarer shape here), but it is the same fail-closed trade this file makes
   # throughout -- better to over-normalize a rare edge case than under-normalize the common
   # evasion.
+  #
+  # ANSI-C and locale quoting: $'kill' and $"kill" are two more Bash quoting forms that
+  # also produce the bare word "kill" once expanded, and a plain `tr -d "'\""` alone leaves
+  # the leading $ behind (word becomes "$kill", still not a match) since $ isn't one of the
+  # stripped characters and isn't adjacent to a stripped one in the right order to cancel
+  # out. Strip the two-character $' and $" sequences globally FIRST, then the general
+  # quote/backslash strip below cleans up whatever quote character they left orphaned.
+  # Found by GhOST-Claude while investigating a supervisor finding about this file's
+  # evasion-fixing pattern, 2026-09-08 -- same day as rounds five and six.
+  w="${w//\$\'/}"
+  w="${w//\$\"/}"
   w="$(printf '%s' "$w" | tr -d "'\"\\\\")"
   # A bare `var=$(kill ...)` glues the assignment directly onto the substitution with no
   # space -- bash's own inline-assignment-before-command syntax -- so the opener check below
@@ -156,8 +183,61 @@ basename_of() {
 reason=""
 pkill_or_killall_hit=0
 substitution_kill_hit=0
+dynamic_command_hit=0
 found_unsafe_arg=""
 claude_pids=""
+
+# Return success when the executable word itself contains a dynamic expansion.
+# Do not evaluate it: an expansion can manufacture `kill` from arbitrary text.
+# Leading literal assignments are not executable words, so `x=i; k${x}ll` must
+# inspect the second word rather than treating the assignment as the command.
+dynamic_executable_word() {
+  local word wrapper=0 wrapper_name="" skip_operand=0
+  for word in $1; do
+    if [ "$skip_operand" -eq 1 ]; then
+      # This word is the OPERAND of a flag consumed on the previous
+      # iteration (e.g. the "name" in `exec -a name`), not a candidate
+      # executable itself -- skip it without re-examining it as one.
+      skip_operand=0
+      continue
+    fi
+    case "$word" in
+      [A-Za-z_]*=*) continue ;;
+    esac
+    # Normalize through the same quote/backslash/ANSI-C stripper the rest of
+    # this file uses for the kill-command word itself. Without this, a
+    # quoted wrapper or flag -- `exec "-a" harmless $verb` -- compares its
+    # literal quote characters against `exec`/`-a`/`--` and matches none of
+    # them, so the scanner stops on the quoted token (judging it the
+    # resolved executable) and never reaches the real dynamic word that
+    # follows. Found live, 2026-09-08: this exact shape bypassed the fresh
+    # `-a`-operand fix within the same review round.
+    word="$(basename_of "$word")"
+    # These wrappers delegate execution to their next command word.  Keep
+    # scanning past the wrapper rather than incorrectly treating `exec` (or
+    # `command`) itself as the executable.
+    case "$word" in
+      exec|command|builtin|nohup|time) wrapper=1; wrapper_name="$word"; continue ;;
+    esac
+    if [ "$wrapper" -eq 1 ]; then
+      # `exec -a name cmd` overrides argv0: `-a` takes its OWN operand
+      # ("name") as a separate word, which is not the delegated executable
+      # either -- skip both, or the scanner stops on "name" and never
+      # reaches the real command word that follows.
+      if [ "$wrapper_name" = "exec" ] && [ "$word" = "-a" ]; then
+        skip_operand=1
+        continue
+      fi
+      # Command's common flags do not name its delegated executable.
+      case "$word" in --|-*) continue ;; esac
+    fi
+    case "$word" in
+      *'$'*|*'`'*|*'<('*|*'>('* ) return 0 ;;
+    esac
+    return 1
+  done
+  return 1
+}
 
 while IFS= read -r segment; do
   [ -z "$segment" ] && continue
@@ -166,6 +246,21 @@ while IFS= read -r segment; do
   trimmed="${segment#"${segment%%[![:space:]]*}"}"
   case "$trimmed" in
     "git commit"*|"git tag"*|"git merge"*|"git notes"*) continue ;;
+  esac
+
+  if dynamic_executable_word "$trimmed"; then
+    dynamic_command_hit=1
+    continue
+  fi
+
+  # A variable-expanded command name cannot be resolved without evaluating
+  # command text. Refuse the direct form and common transparent wrappers;
+  # literal `kill $pid` is handled below as an unsafe target instead.
+  case "$trimmed" in
+    '$'*|'"$'*|"'$"*|command[[:space:]]*'$'*|env[[:space:]]*'$'*|nice[[:space:]]*'$'*)
+      dynamic_command_hit=1
+      continue
+      ;;
   esac
 
   # UNCONDITIONAL FAIL-CLOSED ON SUBSTITUTION + KILL-WORD ANYWHERE IN THE SAME SEGMENT.
@@ -292,6 +387,8 @@ if [ "$pkill_or_killall_hit" -eq 1 ]; then
   reason="pkill/killall match processes by NAME PATTERN, which this hook cannot safely verify does not match a live claude process (regex can always be written to evade a substring check). Blocked unconditionally."
 elif [ "$substitution_kill_hit" -eq 1 ]; then
   reason="this segment contains a command/process substitution (\$( or a backtick) alongside a kill-family word, and this hook cannot safely resolve what such a segment actually targets -- text of any shape can precede a substitution opener with no delimiter, so no prefix-stripping can enumerate every case. Blocked unconditionally, the same as pkill/killall."
+elif [ "$dynamic_command_hit" -eq 1 ]; then
+  reason="this segment uses a variable-expanded command name the hook cannot decode without evaluating command text. Blocked rather than assuming it is safe."
 elif [ -n "$found_unsafe_arg" ]; then
   reason="the target '$found_unsafe_arg' is not a literal PID this hook can resolve and verify (a variable, command substitution, or name) -- refused by default rather than assumed safe."
 elif [ -n "$claude_pids" ]; then

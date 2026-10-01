@@ -62,21 +62,21 @@ assert_not_contains "$SB/out2/r1_claude.md" "warning: noise" "stderr kept out of
 assert_contains "$SB/out2/r1_claude.md.err" "warning: noise" "stderr captured in the .err sidecar"
 
 # ---- RED controls: a requested agent that can't run must be a loud failure ----
-red "requested agent with missing binary must fail (no silent skip)" env CLAUDE_BIN="$SB/bin/does-not-exist" "$PANEL" "$SB/task.md" --out "$SB/out3" --agents claude --tag r1
-red "unknown agent name must fail" "$PANEL" "$SB/task.md" --out "$SB/out4" --agents gemini --tag r1
+red "requested agent with missing binary must fail (no silent skip)" 1 "is not executable" env CLAUDE_BIN="$SB/bin/does-not-exist" "$PANEL" "$SB/task.md" --out "$SB/out3" --agents claude --tag r1
+red "unknown agent name must fail" 1 "unknown agent 'gemini'" "$PANEL" "$SB/task.md" --out "$SB/out4" --agents gemini --tag r1
 # the sharp case: ONE good voice + one bad — a lazy implementation runs the good one and calls
 # it success; a convocation must refuse to run short-handed, and launch NOTHING
-red "good agent + unknown agent must fail (no short-handed round)" env CLAUDE_BIN="$SB/bin/fake-claude" "$PANEL" "$SB/task.md" --out "$SB/out6" --agents claude,gemini --tag r1
+red "good agent + unknown agent must fail (no short-handed round)" 1 "unknown agent 'gemini'" env CLAUDE_BIN="$SB/bin/fake-claude" "$PANEL" "$SB/task.md" --out "$SB/out6" --agents claude,gemini --tag r1
 assert_no_file "$SB/out6/r1_claude.md" "no partial output written when the round was refused"
-red "missing task file must fail" "$PANEL" "$SB/no-such-task.md" --out "$SB/out5"
+red "missing task file must fail" 1 "no task file" "$PANEL" "$SB/no-such-task.md" --out "$SB/out5"
 # an agent binary that RUNS but crashes: 'done' + empty answer file + rc 0 was the mask
 cat > "$SB/bin/crasher" <<'SHIM'
 #!/usr/bin/env bash
 echo "boom" >&2; exit 3
 SHIM
 chmod +x "$SB/bin/crasher"
-red "agent that runs and crashes must fail the round" env CLAUDE_BIN="$SB/bin/crasher" "$PANEL" "$SB/task.md" --out "$SB/out7" --agents claude --tag r1
-red "typo'd flag must error, not run with defaults (would overwrite the previous round)" env CLAUDE_BIN="$SB/bin/fake-claude" "$PANEL" "$SB/task.md" --out "$SB/out8" --agents claude --tga r2
+red "agent that runs and crashes must fail the round" 1 "round INCOMPLETE" env CLAUDE_BIN="$SB/bin/crasher" "$PANEL" "$SB/task.md" --out "$SB/out7" --agents claude --tag r1
+red "typo'd flag must error, not run with defaults (would overwrite the previous round)" 64 "unknown argument '--tga'" env CLAUDE_BIN="$SB/bin/fake-claude" "$PANEL" "$SB/task.md" --out "$SB/out8" --agents claude --tga r2
 
 # 10. A ZERO EXIT WITH A STUB ANSWER IS NOT SUCCESS. `claude -p` returned the 15-byte string
 #     "Execution error" on 2026-08-26 and panel recorded it as ok, so a three-voice round
@@ -86,7 +86,7 @@ cat > "$SB/bin/errorstub" <<'SHIM'
 echo "Execution error"
 SHIM
 chmod +x "$SB/bin/errorstub"
-red "an agent that exits 0 with a 15-byte error string must fail the round" \
+red "an agent that exits 0 with a 15-byte error string must fail the round" 1 "too short to be an answer" \
   env MIN_ANSWER_BYTES=200 CLAUDE_BIN="$SB/bin/errorstub" "$PANEL" "$SB/task.md" --out "$SB/out9" --agents claude --tag r1
 
 finish

@@ -36,6 +36,6 @@ out="$("$HERE/../ponytail/install-into-repo.sh" "$REPO" 2>&1)"
 printf '%s\n' "$out" | grep -c "already installed" | grep -q "^2$" && pass "second run: both skills detected, nothing re-fetched" || fail "ponytail re-run not idempotent"
 
 # ---- RED controls ----
-red "ponytail without a repo arg must fail" "$HERE/../ponytail/install-into-repo.sh"
+red "ponytail without a repo arg must fail" 1 "usage: install-into-repo.sh" "$HERE/../ponytail/install-into-repo.sh"
 
 finish

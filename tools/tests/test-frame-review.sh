@@ -25,11 +25,11 @@ assert_contains "$SB/out2/index.html" "<h2>clip " "section for first video"
 assert_contains "$SB/out2/index.html" "<h2>clip2 " "section for second video"
 
 # ---- RED controls ----
-red "missing video must fail" "$FR" "$SB/no-such.mov" --outdir "$SB/out3"
+red "missing video must fail" 1 "no such video" "$FR" "$SB/no-such.mov" --outdir "$SB/out3"
 printf 'not a video' > "$SB/fake.mov"
-red "non-video bytes must fail (zero frames is loud, not empty success)" "$FR" "$SB/fake.mov" --outdir "$SB/out4"
-red "unknown flag must fail" "$FR" "$SB/clip.mov" --fsp 1
-red "--fps without a value must fail" "$FR" "$SB/clip.mov" --fps
-red "no arguments must fail with usage" "$FR"
+red "non-video bytes must fail (zero frames is loud, not empty success)" 1 "ffmpeg failed" "$FR" "$SB/fake.mov" --outdir "$SB/out4"
+red "unknown flag must fail" 64 "unknown flag" "$FR" "$SB/clip.mov" --fsp 1
+red "--fps without a value must fail" 64 "--fps needs a value" "$FR" "$SB/clip.mov" --fps
+red "no arguments must fail with usage" 64 "usage:" "$FR"
 
 finish

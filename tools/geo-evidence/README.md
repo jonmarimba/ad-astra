@@ -1,10 +1,10 @@
 # geo-evidence
 
-Turn a macOS Photos library into **queryable, location-classified evidence.** Query by date, classify every geotagged photo and video to the *nearest known property*, preview with zero downloads, checkbox the keepers, and pull only those at full resolution with EXIF intact. Built for litigation media where "which house was this shot at?" and "did the GPS survive?" actually matter — and where two properties can sit 50 metres apart.
+Turn a macOS Photos library into **queryable, location-classified evidence**. Query by date, classify every geotagged photo and video to the *nearest known property*, and preview with zero downloads. Checkbox the keepers, and pull only those at full resolution with EXIF intact. Built for litigation media where "which house was this shot at?" and "did the GPS survive?" actually matter — and where two properties can sit 50 metres apart.
 
 ## Why it exists
 
-Collecting evidence media by hand is: scroll Photos, guess which shots are the right property, export, hope the GPS didn't get stripped, repeat. geo-evidence makes it a query. On one real run it separated **60 property shots out of 259 unrelated ones** (gym selfies, family photos, the dog on the bed) across a 10-day window — without pulling a single home photo into the set, and without downloading originals until the exact ones were chosen.
+Collecting evidence media by hand is: scroll Photos, guess which shots are the right property, export, hope the GPS didn't get stripped, repeat. geo-evidence makes it a query. On one real run it separated **60 property shots out of 259 unrelated ones** across a 10-day window. The unrelated ones were gym selfies, family photos, and the dog on the bed. It did that without pulling a single home photo into the set, and without downloading originals until the exact ones were chosen.
 
 ## Install
 
@@ -14,11 +14,11 @@ Collecting evidence media by hand is: scroll Photos, guess which shots are the r
 
 Installs `exiftool` (Brewfile, which-first) and `osxphotos` (`uv tool install osxphotos --python 3.12` — it needs Python 3.10+; the pin stops uv grabbing an older one that crashes on import). `uv` is auto-installed if absent.
 
-**TCC:** the Photos library is permission-protected. Run from an interactive terminal that holds Photos/Full-Disk-Access, or behind an FDA `.app` wrapper for automation — same rule as any Mail/Messages/Photos reader.
+Under **TCC**, the Photos library is permission-protected. Run from an interactive terminal that holds Photos/Full-Disk-Access, or behind an FDA `.app` wrapper for automation — same rule as any Mail/Messages/Photos reader.
 
 ## Configure
 
-First run writes a template to `~/.geo-evidence/config` and exits, telling you to edit it. Replace the placeholders with **your** properties — the tool refuses to run on the `Example`/`0,0` placeholders (silently classifying against 0,0 would find nothing and look like "no media" when it's really "not configured"):
+First run writes a template to `~/.geo-evidence/config` and exits, telling you to edit it. Replace the placeholders with **your** properties — the tool refuses to run on the `Example`/`0,0` placeholders. Silently classifying against 0,0 would find nothing and look like "no media" when it's really "not configured":
 
 ```
 # NAME<TAB>LATITUDE<TAB>LONGITUDE   (decimal degrees, real coordinates)
@@ -30,7 +30,7 @@ MAX_M=402
 MAX_TIME_GAP_MIN=30
 ```
 
-**Why nearest-property, not a radius:** when two lots are ~50 m apart, a circle tight enough to exclude the neighbour also clips the far edge of your own lot. Nearest-centroid assigns each shot to whichever property it's *closest* to — the decision boundary is the perpendicular bisector between the houses — so the whole lot is captured while the neighbour is always excluded, *at any circle size*. `MAX_M` is just the outer cutoff for "not at any property."
+The design is **nearest-property, not a radius**. When two lots are ~50 m apart, a circle tight enough to exclude the neighbour also clips the far edge of your own lot. Nearest-centroid assigns each shot to whichever property it's *closest* to — the decision boundary is the perpendicular bisector between the houses. So the whole lot is captured while the neighbour is always excluded, *at any circle size*. `MAX_M` is just the outer cutoff for "not at any property."
 
 ## Commands
 
@@ -51,7 +51,7 @@ geo-evidence pull --property HouseA --since D --until D --out DIR --preview
 # exactly the items a gallery selection picked (see below)
 geo-evidence pull --select geo-evidence-selection.txt --out DIR
 ```
-- Full mode pulls the originals (downloading only the matched ones from iCloud, EXIF written) and writes a `MANIFEST.md` with per-file GPS + timestamp — flagging anything that lost GPS so you can re-export it.
+- Full mode pulls the originals (downloading only the matched ones from iCloud, EXIF written) and writes a `MANIFEST.md` with per-file GPS + timestamp. The manifest flags anything that lost GPS so you can re-export it.
 - `--preview` downloads nothing; it exports the small local derivatives (even for iCloud-only items) so you can eyeball everything first. It also writes `.items.tsv` / `.uuidmap.tsv` so the gallery can show and select the full set.
 
 ### `gallery` — a date-grouped, checkbox pick-list
@@ -59,7 +59,7 @@ geo-evidence pull --select geo-evidence-selection.txt --out DIR
 geo-evidence gallery <DIR> --out <DIR>/index.html
 open <DIR>/index.html
 ```
-Self-contained HTML: every item as a thumbnail (videos show a poster frame, items not downloaded show a selectable placeholder), grouped by capture date, each captioned with time + a GPS note. Per-day **select all / none**, a bottom bar with **Select all / Clear** and **⬇ Download selection** — which writes `geo-evidence-selection.txt` (the chosen UUIDs) for `pull --select`.
+The output is self-contained HTML: every item appears as a thumbnail (videos show a poster frame, items not downloaded show a selectable placeholder). Items are grouped by capture date, each captioned with time + a GPS note. Each day has **select all / none**, and a bottom bar has **Select all / Clear** and **⬇ Download selection**. The download button writes `geo-evidence-selection.txt` (the chosen UUIDs) for `pull --select`.
 
 ## The workflow
 
@@ -75,11 +75,11 @@ Preview costs no disk; you review everything; only the chosen items get the real
 
 ## Handling GPS-stripped media
 
-Photos re-exported as PNG (or otherwise) often lose their GPS. Those show as `NO-GPS` — but a second pass gives a GPS-less shot the property of its **nearest-in-time GPS'd neighbour** (within `MAX_TIME_GAP_MIN`), marked `~` / "time-inferred" so it's clearly location-*inferred*, not GPS-confirmed. This recovers storm-session shots that lost their location but sit inside a run of GPS'd shots.
+Photos re-exported as PNG (or otherwise) often lose their GPS. Those show as `NO-GPS` — but a second pass gives a GPS-less shot the property of its **nearest-in-time GPS'd neighbour** (within `MAX_TIME_GAP_MIN`). The item is marked `~` / "time-inferred" so it's clearly location-*inferred*, not GPS-confirmed. This recovers storm-session shots that lost their location but sit inside a run of GPS'd shots.
 
 ## Seams / env overrides
 
-`OSXPHOTOS_BIN`, `EXIFTOOL_BIN`, `SUBL_BIN`, and `GEO_EVIDENCE_HOME` override the respective binary / config dir — used by the test to run the real script against recorded payloads (no library, no network), and handy when a binary isn't on the default PATH.
+`OSXPHOTOS_BIN`, `EXIFTOOL_BIN`, `SUBL_BIN`, and `GEO_EVIDENCE_HOME` override the respective binary / config dir. The test uses them to run the real script against recorded payloads (no library, no network). They are also handy when a binary isn't on the default PATH.
 
 ## Test
 
@@ -87,7 +87,7 @@ Photos re-exported as PNG (or otherwise) often lose their GPS. Those show as `NO
 ../tests/run-all.sh          # runs test-geo-evidence.sh
 ```
 
-Drives the real script against a recorded osxphotos JSON payload with the transports stubbed at their seams — so it needs neither osxphotos nor a Photos library. Proves the 52 m nearest-property separation, whole-lot capture, the elsewhere cutoff, NO-GPS flagging, time-proximity recovery, the checkbox/UUID wiring, `pull --select`, the placeholder gallery, and the config guard.
+The test drives the real script against a recorded osxphotos JSON payload with the transports stubbed at their seams. So it needs neither osxphotos nor a Photos library. It proves the 52 m nearest-property separation, whole-lot capture, the elsewhere cutoff, NO-GPS flagging, and time-proximity recovery. It proves the checkbox/UUID wiring, `pull --select`, the placeholder gallery, and the config guard.
 
 ## Not this tool
 

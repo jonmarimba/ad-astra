@@ -13,8 +13,8 @@ What ADHD changes about reading
 Five facts drive every rule below:
 
 1. Working memory is small. Anything not on screen is forgotten. Do not ask the reader to "keep in mind X."
-1. Dopamine is scarce. Visible progress matters. Buried wins do not register.
-1. Lack of progress matters more. Do not bury unfinished or unstarted work or errors.
+1. Dopamine is scarce. Progress must be visible. Buried wins do not register.
+1. Lack of progress is the more urgent signal. Do not bury unfinished or unstarted work or errors.
 1. Working memory is small. Always update with FULL status. Details below.
 
 # Rules

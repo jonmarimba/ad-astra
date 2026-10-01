@@ -1,10 +1,10 @@
 # Toolkits — grouping skills, tools, and MCP servers into installable bundles
 
-This document describes what we want to build. Nothing here exists yet except the individual pieces.
+Nothing in this design exists yet except the individual pieces.
 
 ## The problem
 
-Jonathan's assistant setup has grown to include skills (asd-ste100, humanizer, adhd, convocation), standalone tools (check-prose.js, unwrap-markdown.js, mailq, shotq, notesq, imsgq, recall, archive_contact), MCP servers (mac-control, xcode-mcp-front, ghost-channel, imessage, safari-mcp-stp, claude-in-chrome), and voice registers (attorney, business-friendly-client, casual-contractor-and-text). These pieces are scattered across four repos (js-db-ad-astra, js-project-GhOST, pot-mhm-newmanPostmanNPM, js-llmKicker) and two install mechanisms (Claude Code plugins and manual PATH/symlink setup). A new machine or a new agent needs someone to remember what goes together and install each piece by hand.
+Jonathan's assistant setup has grown to include skills (asd-ste100, humanizer, adhd, convocation) and standalone tools (check-prose.js, unwrap-markdown.js, mailq, shotq, notesq, imsgq, recall, archive_contact). It also includes MCP servers (mac-control, xcode-mcp-front, ghost-channel, imessage, safari-mcp-stp, claude-in-chrome) and voice registers (attorney, business-friendly-client, casual-contractor-and-text). These pieces are scattered across four repos (js-db-ad-astra, js-project-GhOST, pot-mhm-newmanPostmanNPM, js-llmKicker) and two install mechanisms (Claude Code plugins and manual PATH/symlink setup). A new machine or a new agent needs someone to remember what goes together and install each piece by hand.
 
 ## What a toolkit is
 

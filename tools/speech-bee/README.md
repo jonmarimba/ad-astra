@@ -10,7 +10,7 @@ speech-bee bootstrap small.en         # better/larger model (base.en is the defa
 ```
 Engines now: **STT** = whisper.cpp (`whisper-cli`); **TTS** = macOS `say` (AVSpeechSynthesizer, on-device). Override with `SPEECH_BEE_STT` / `SPEECH_BEE_TTS` / `SPEECH_BEE_MODEL`.
 
-**Next backend:** Apple **SpeechAnalyzer/SpeechTranscriber** (macOS 26+, on-device, benchmarks above Whisper Large v3 Turbo, ~2-3× faster) as a Swift helper behind the same `stt` verb — for jargon (JIRA IDs, tool names) it may still need a correction pass or legacy SFSpeechRecognizer custom-vocabulary.
+The **next backend** is Apple **SpeechAnalyzer/SpeechTranscriber** (macOS 26+, on-device, benchmarks above Whisper Large v3 Turbo, ~2-3× faster), a Swift helper behind the same `stt` verb. For jargon (JIRA IDs, tool names) it may still need a correction pass or legacy SFSpeechRecognizer custom-vocabulary.
 
 ## Recording a call (Audio Hijack → speech-bee)
 1. In **Audio Hijack**, build a session: Application/Input blocks for the call app + your mic → a **Recorder** block (AIFF or WAV). Start it before the call.

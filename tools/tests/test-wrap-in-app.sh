@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: slow — launches a real .app via LaunchServices, which fails spuriously (error -600) under load: twice on 2026-08-31 while daemons restarted. GUI-class by the tier definition.
 # test-wrap-in-app.sh — wraps a real fixture script, LAUNCHES the generated app (same
 # open -g -W path the scheduler uses), and proves the whole contract by effect: output
 # lands in the log, the shim prints only what the script printed, a silent run pokes
@@ -76,11 +77,11 @@ warn="$("$WIA" "$SB/hbjob.sh" --log "$SB/logs/h.log" --name HbWrapper --outdir "
 case "$warn" in *deprecated*) fail "false deprecation warning for a Homebrew interpreter";; *) pass "no warning when the shebang is a Homebrew interpreter";; esac
 
 # ---- RED controls ----
-red "existing app must be refused, not clobbered (it may hold a grant)" "$WIA" "$SB/job.sh" --log "$SB/logs/job.log" --name TestJobWrapper --outdir "$SB/out"
-red "missing --log must fail (stdout has nowhere to go)" "$WIA" "$SB/job.sh" --outdir "$SB/out"
+red "existing app must be refused, not clobbered (it may hold a grant)" 1 "already exists — refusing to overwrite" "$WIA" "$SB/job.sh" --log "$SB/logs/job.log" --name TestJobWrapper --outdir "$SB/out"
+red "missing --log must fail (stdout has nowhere to go)" 64 "--log is required" "$WIA" "$SB/job.sh" --outdir "$SB/out"
 printf '#!/bin/bash\n' > "$SB/noexec.sh"
-red "non-executable script must fail" "$WIA" "$SB/noexec.sh" --log "$SB/l.log" --outdir "$SB/out"
-red "unknown flag must fail" "$WIA" "$SB/job.sh" --log "$SB/l.log" --outdri "$SB/out"
-red "missing script must fail" "$WIA" --log "$SB/l.log"
+red "non-executable script must fail" 1 "is not executable" "$WIA" "$SB/noexec.sh" --log "$SB/l.log" --outdir "$SB/out"
+red "unknown flag must fail" 64 "unknown flag '--outdri'" "$WIA" "$SB/job.sh" --log "$SB/l.log" --outdri "$SB/out"
+red "missing script must fail" 64 "usage: wrap-in-app" "$WIA" --log "$SB/l.log"
 
 finish

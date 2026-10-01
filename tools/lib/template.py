@@ -41,7 +41,10 @@ from pathlib import Path
 
 ASTRA = Path(__file__).resolve().parent.parent.parent
 TOOLS = ASTRA / "tools"
-TEMPLATES = TOOLS / "lib" / "templates.json"
+# ASTRA_TEMPLATES_JSON exists for the tests: they need a template whose member is
+# guaranteed to fail without editing the real catalogue. Tools still resolve from the
+# real tools/ tree either way.
+TEMPLATES = Path(os.environ.get("ASTRA_TEMPLATES_JSON") or (TOOLS / "lib" / "templates.json"))
 
 
 def load():
@@ -49,6 +52,47 @@ def load():
         return json.loads(TEMPLATES.read_text())
     except FileNotFoundError:
         return {"templates": {}}
+
+
+def resolve_tools(templates, name, _stack=None):
+    """The COMPOSED tool list: this template's own tools plus its member templates',
+    transitively, in member-first order, deduplicated. Composition is the mechanism the
+    whole design rests on (SPEC: a Mac+Swift template is simply its members) — so a
+    cycle and an unknown member are loud, named refusals, never a silent partial
+    install. Raises ValueError; callers print it and exit 65."""
+    _stack = _stack or []
+    if name in _stack:
+        raise ValueError("template cycle: " + " -> ".join(_stack + [name]))
+    meta = templates.get(name)
+    if meta is None:
+        suffix = f" (member of '{_stack[-1]}')" if _stack else ""
+        raise ValueError(f"no such template: {name}{suffix}")
+    tools = []
+    for member in meta.get("templates", []):
+        for t in resolve_tools(templates, member, _stack + [name]):
+            if t not in tools:
+                tools.append(t)
+    for t in meta.get("tools", []):
+        if t not in tools:
+            tools.append(t)
+    return tools
+
+
+def claimed_tools(templates, name, _stack=None):
+    """Every tool `name` claims, resolved as far as the catalogue allows and NEVER
+    raising. A wrapper whose member no longer resolves still claims what it CAN resolve
+    plus its own tools — the previous flat-list fallback returned own-tools-only, so a
+    tool a wrapper claimed only THROUGH a now-missing member read as unclaimed and got
+    deleted out from under the still-installed wrapper (adversarial round #7). This is
+    the claim question; resolve_tools stays strict for the install question."""
+    _stack = _stack or []
+    meta = templates.get(name)
+    if meta is None or name in _stack:
+        return set()
+    claimed = set(meta.get("tools", []))
+    for member in meta.get("templates", []):
+        claimed |= claimed_tools(templates, member, _stack + [name])
+    return claimed
 
 
 def tool_dir(name):
@@ -120,7 +164,7 @@ def installed_templates(repo):
     return _read_state(repo).get("templates", [])
 
 
-def record_template(repo, name, add=True):
+def record_template(repo, name, add=True, resolved=None):
     data = _read_state(repo)
     cur = list(data.get("templates", []))
     if add and name not in cur:
@@ -128,6 +172,19 @@ def record_template(repo, name, add=True):
     if not add and name in cur:
         cur.remove(name)
     data["templates"] = sorted(cur)
+    # RECORD THE RESOLVED TOOL LIST AT INSTALL TIME. The manifest records template
+    # NAMES, but a claim question asked later re-resolves the CURRENT catalogue — and if
+    # a member template was renamed or removed since install, that resolution is wrong,
+    # so a tool a wrapper still holds through a now-missing member read as unclaimed and
+    # got deleted (adversarial round #7; QUESTIONS.md predicted this exact "reasons from
+    # the wrong graph" failure). Recording what was actually installed makes uninstall
+    # reason from truth, not from a catalogue that may have moved underneath it.
+    tt = dict(data.get("template_tools", {}))
+    if add:
+        tt[name] = sorted(resolved or [])
+    else:
+        tt.pop(name, None)
+    data["template_tools"] = tt
     p = state_path(repo)
     p.parent.mkdir(parents=True, exist_ok=True)
     # Write beside and rename: a half-written manifest is exactly the corrupt
@@ -150,11 +207,19 @@ def tools_still_claimed(repo, excluding):
     by swift-ios, which was installed and working. Caught by the overlap test on
     2026-08-18, which is exactly what that test exists for."""
     t = load()["templates"]
+    recorded = _read_state(repo).get("template_tools", {})
     claimed = set()
     for name in installed_templates(repo):
         if name == excluding:
             continue
-        claimed.update(t.get(name, {}).get("tools", []))
+        # Prefer the tool list RECORDED AT INSTALL — it is what this template actually
+        # placed, immune to a catalogue that changed since (adversarial round #7). Fall
+        # back to a live resolve for templates installed before that field existed;
+        # claimed_tools never raises and resolves as far as the catalogue allows.
+        if name in recorded:
+            claimed |= set(recorded[name])
+        else:
+            claimed |= claimed_tools(t, name)
     return claimed
 
 
@@ -166,17 +231,32 @@ def cmd_list(_):
     for name, meta in sorted(t.items()):
         print(f"── {name}")
         print(f"     {meta.get('description','')}")
-        print(f"     tools: {', '.join(meta.get('tools', []))}")
+        if meta.get("templates"):
+            print(f"     members: {', '.join(meta['templates'])}")
+            try:
+                print(f"     tools (resolved): {', '.join(resolve_tools(t, name))}")
+            except ValueError as e:
+                print(f"     tools (UNRESOLVABLE): {e}")
+        else:
+            print(f"     tools: {', '.join(meta.get('tools', []))}")
     return 0
 
 
 def cmd_show(args):
     name = args[0] if args else ""
-    meta = load()["templates"].get(name)
+    templates = load()["templates"]
+    meta = templates.get(name)
     if not meta:
         print(f"no such template: {name}")
         return 66
     print(json.dumps(meta, indent=2))
+    try:
+        resolved = resolve_tools(templates, name)
+    except ValueError as e:
+        print(f"template.py: {e}", file=sys.stderr)
+        return 65
+    if meta.get("templates"):
+        print(f"resolved tools (own + member templates): {', '.join(resolved)}")
     return 0
 
 
@@ -193,10 +273,16 @@ def _target(args):
 
 def _apply(verb, args):
     name = args[0] if args and not args[0].startswith("-") else ""
-    meta = load()["templates"].get(name)
+    templates = load()["templates"]
+    meta = templates.get(name)
     if not meta:
         print(f"no such template: {name}", file=sys.stderr)
         return 66
+    try:
+        member_tools = resolve_tools(templates, name)
+    except ValueError as e:
+        print(f"template.py: {e}", file=sys.stderr)
+        return 65
     repo = _target(args)
 
     # UNINSTALL ONLY WHAT THE RECORD SAYS IS INSTALLED.
@@ -225,10 +311,13 @@ def _apply(verb, args):
     ok_n = fail_n = kept_n = 0
     print(f"{verb}ing template '{name}' -> {repo}")
     keep = tools_still_claimed(repo, name) if verb == "uninstall" else set()
-    for t in meta.get("tools", []):
+    for t in member_tools:
         if t in keep:
+            # claimed_tools, not resolve_tools: this cosmetic "who else needs it" line
+            # must not raise on an unresolvable member and abort the whole uninstall
+            # mid-run, after earlier members were already removed (adversarial round #4).
             others = [n for n in installed_templates(repo) if n != name
-                      and t in load()["templates"].get(n, {}).get("tools", [])]
+                      and t in claimed_tools(load()["templates"], n)]
             print(f"  KEPT    {t} — still required by: {', '.join(others)}")
             kept_n += 1
             continue
@@ -239,7 +328,18 @@ def _apply(verb, args):
         else:
             print(f"  FAILED  {t}: {why}")
             fail_n += 1
-    record_template(repo, name, add=(verb == "install"))
+    # ONLY A CLEAN RUN CHANGES THE RECORD. Recording an install whose members failed
+    # would claim tools this template never placed; unrecording an uninstall whose
+    # members failed would orphan the tools that remain. Installers are idempotent
+    # re-runs, so the remedy for a partial failure is: fix the cause, run the same verb
+    # again, and the record changes when the run is clean. (Found by the round-one
+    # colloquium, codex leg — record_template ran unconditionally here.)
+    if fail_n == 0:
+        record_template(repo, name, add=(verb == "install"), resolved=member_tools)
+    else:
+        print(f"NOT recording this {verb}: {fail_n} member(s) failed, and the record "
+              f"must describe what actually happened. Fix the failure and re-run "
+              f"(installers are idempotent).", file=sys.stderr)
     extra = f", {kept_n} kept (shared with another template)" if kept_n else ""
     print(f"\n{ok_n} ok, {fail_n} failed{extra}")
     return 1 if fail_n else 0
@@ -265,8 +365,13 @@ def cmd_status(args):
             pass
     print(f"repo: {repo}")
     print(f"  MCP servers present: {', '.join(sorted(mcp)) or 'none'}")
-    for name, meta in sorted(load()["templates"].items()):
-        want = [t for t in meta.get("tools", []) if t.startswith("mcp-")]
+    templates = load()["templates"]
+    for name, meta in sorted(templates.items()):
+        try:
+            resolved = resolve_tools(templates, name)
+        except ValueError:
+            resolved = meta.get("tools", [])
+        want = [t for t in resolved if t.startswith("mcp-")]
         have = [t for t in want if t.replace("mcp-", "", 1) in mcp]
         if want:
             state = "complete" if len(have) == len(want) else (

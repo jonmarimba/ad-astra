@@ -37,11 +37,13 @@ Runs in one of two modes, chosen by which env vars are set (see below):
 
 This is a dumb passthrough, not a real aggregator: it forwards list_tools/call_tool
 to the relevant upstream ClientSession(s) and returns whatever comes back. It does
-not interpret tool semantics. Calls to a given upstream are serialized through
-that upstream's own lock (tolerance for concurrent overlapping calls hasn't been
-tested, so this starts correctness-first — tool calls are already human-paced, so
-serialization shouldn't be felt in practice); different upstreams' calls are
-fully independent of each other.
+not interpret tool semantics. tools/call requests to a given upstream are
+serialized through that upstream's own lock; tools/list requests — client drains
+and the heartbeat alike — run WITHOUT the lock on a session snapshot, because the
+MCP session multiplexes concurrent requests by id and a list must never wait
+behind a long-running build (measured by the phase-1 panel: a client connecting
+during one upstream's slow call got no tool list at all until it finished).
+Different upstreams are fully independent of each other.
 
 VALIDATED 2026-08-14 (all live, against a real Xcode):
 - One connection tolerates many sequential calls of different shapes, no reconnect
@@ -81,13 +83,19 @@ Env overrides — SINGLE-upstream mode (default):
 
 Env overrides — MULTI-upstream mode (mutually exclusive with the single-upstream
 UPSTREAM_CMD/ARGS/REQUIRE_XCODE vars above — set THIS instead):
-  XCODE_MCP_FRONT_UPSTREAMS       semicolon-separated upstream specs, each
-                                   "name:require_xcode:command:arg1,arg2,...".
-                                   Example:
-                                   "xcode:1:xcrun:mcpbridge;drews:0:uvx:drews-xcode-mcp"
-                                   Tool names are prefixed "<name>__" in the
-                                   merged tool list and un-prefixed again when
-                                   routing a call back to that upstream.
+  XCODE_MCP_FRONT_MCP_INFO        path to a _mcp_info.json in the Claude Code shape
+                                   ({"mcpServers": {"<name>": {"command", "args"}}}),
+                                   plus per-server "prefix" (default "<name>__") and
+                                   "quirks" (["require_xcode"] for an upstream that
+                                   needs a live Xcode). See mcp_config.py, which
+                                   validates it and REJECTS fields the daemon does
+                                   not pass through (env, cwd, url, ...) by name.
+                                   Tool names are prefixed in the merged tool list
+                                   and un-prefixed again when routing a call back.
+  XCODE_MCP_FRONT_UPSTREAMS       REPLACED by the file above; setting it is a
+                                   startup error naming the replacement. The old
+                                   colon/comma format corrupted a command path
+                                   containing ':' and an argument containing ','.
 
 Env overrides — both modes:
   XCODE_MCP_FRONT_HOST             default "127.0.0.1" (do not bind wider — no auth layer)
@@ -106,18 +114,26 @@ Env overrides — both modes:
 
 import asyncio
 import contextlib
+import functools
+import json
 import logging
 import os
+import re
 import subprocess
 import time
 
 import anyio
 import uvicorn
+
+import mcp_config
 from mcp import types
 from mcp.client.session import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp.client.stdio import StdioServerParameters, get_default_environment, stdio_client
+from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler
+from mcp.shared.exceptions import MCPError
+from mcp.shared.subscriptions import ToolsListChanged
 from mcp.server.lowlevel import Server
-from mcp.server.lowlevel.server import ServerRequestContext
+from mcp.server.lowlevel.server import NotificationOptions, ServerRequestContext
 
 
 def _load_config_file() -> None:
@@ -156,6 +172,7 @@ XCODE_APP_PATH = os.environ.get("XCODE_MCP_FRONT_XCODE_APP_PATH", "/Applications
 XCODE_BINARY_PATH = f"{XCODE_APP_PATH.rstrip('/')}/Contents/MacOS/Xcode"
 RECONNECT_POLL_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_RECONNECT_POLL_S", "5"))
 CONNECT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CONNECT_TIMEOUT_S", "15"))
+OSASCRIPT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_OSASCRIPT_TIMEOUT_S", "5"))
 # Generous on purpose - a real Xcode build_project call can legitimately run
 # for minutes. The point isn't to bound normal work, it's to make sure NO call
 # can wedge the daemon forever (found live, 2026-08-14: with no timeout at all,
@@ -172,6 +189,20 @@ CONNECT_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CONNECT_TIMEOUT_
 # actively misleading once this fires, since the build was killed mid-flight,
 # not merely delayed; a retry starts it over, it doesn't resume it.
 CALL_TIMEOUT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CALL_TIMEOUT_S", "600"))
+# The reconnect loop backs off on repeated failed connects instead of hammering a
+# flat RECONNECT_POLL_SECONDS. A fresh connect to a require_xcode upstream spawns a
+# fresh mcpbridge, which raises a fresh approval dialog; a flat 5s loop therefore asks
+# Xcode for permission every 5s all night (found live 2026-08-31, Xcode 27 beta). Delay
+# doubles per consecutive failure up to this cap, and resets the moment a connect
+# succeeds — so a genuinely-down upstream is polled rarely, a healthy one recovers fast.
+RECONNECT_BACKOFF_MAX_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_RECONNECT_BACKOFF_MAX_S", "300"))
+# How long to hold the FIRST list_tools in-flight while an approval-gated upstream (Xcode)
+# waits for a human to answer its one approval dialog. Human-scale on purpose: the request
+# is never cancelled during this window (cancelling it sends notifications/cancelled over
+# the wire on mcp>=2.0.0, withdrawing the request and re-raising a fresh dialog — the
+# measured storm). Long enough that a person has ample time to click Allow once; bounded
+# so a genuinely dead child is still caught and reconnected (with backoff), not held forever.
+APPROVAL_WAIT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_APPROVAL_WAIT_S", "600"))
 SERVER_NAME = os.environ.get("XCODE_MCP_FRONT_SERVER_NAME", "xcode-mcp-front")
 
 logging.basicConfig(level=logging.INFO, format=f"%(asctime)s {SERVER_NAME} %(message)s")
@@ -244,11 +275,18 @@ async def _run_osascript(script: str) -> bytes:
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=5)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()  # reap it — don't leave a zombie behind either
-        raise RuntimeError("osascript timed out after 5s (System Events may be unresponsive)")
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=OSASCRIPT_TIMEOUT_SECONDS)
+    except BaseException:
+        # A cancelled approval sidecar is just as dangerous as a timeout: without
+        # this cleanup its osascript child survives the task that launched it and
+        # the next poll adds another. Kill first; shielded wait schedules reaping
+        # even when the caller's cancellation must propagate immediately.
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+        with contextlib.suppress(asyncio.CancelledError, ProcessLookupError):
+            await asyncio.shield(proc.wait())
+        raise
     if proc.returncode != 0:
         raise RuntimeError(f"osascript exited {proc.returncode}: {err.decode(errors='replace').strip()}")
     return out
@@ -286,23 +324,50 @@ FOREIGN_DIALOG_GRACE_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_FOREIGN_GRA
 # The relationship above is load-bearing, so it is checked rather than trusted to a comment. A
 # grace period at or beyond the connect timeout is a silent, permanent deadlock whenever a second
 # client exists, and it presents as "mcpbridge refuses to serve tools" — which is exactly how it
-# presented, for a night.
-if FOREIGN_DIALOG_GRACE_SECONDS >= CONNECT_TIMEOUT_SECONDS:
-    raise SystemExit(
-        "xcode-mcp-front: XCODE_MCP_FRONT_FOREIGN_GRACE (%.1fs) must be less than "
-        "XCODE_MCP_FRONT_CONNECT_TIMEOUT_S (%.1fs). A foreign approval dialog that outlives the "
-        "connection attempt it is blocking can never be cleared in time, so two daemons deadlock "
-        "and every symptom looks like Xcode refusing to serve tools."
-        % (FOREIGN_DIALOG_GRACE_SECONDS, CONNECT_TIMEOUT_SECONDS))
+# presented, for a night. The check runs from _build_upstreams once the specs are known,
+# because it only binds daemons that actually run the clicker: aborting a non-Xcode repo
+# daemon at startup over a dialog constraint it can never hit turned a small explicit
+# connect timeout into a KeepAlive crash loop (adversarial round, codex and qwen legs).
+def _check_dialog_grace(specs) -> None:
+    if not any(s.require_xcode for s in specs):
+        return
+    if FOREIGN_DIALOG_GRACE_SECONDS >= CONNECT_TIMEOUT_SECONDS:
+        raise SystemExit(
+            "xcode-mcp-front: XCODE_MCP_FRONT_FOREIGN_GRACE (%.1fs) must be less than "
+            "XCODE_MCP_FRONT_CONNECT_TIMEOUT_S (%.1fs). A foreign approval dialog that outlives "
+            "the connection attempt it is blocking can never be cleared in time, so two daemons "
+            "deadlock and every symptom looks like Xcode refusing to serve tools."
+            % (FOREIGN_DIALOG_GRACE_SECONDS, CONNECT_TIMEOUT_SECONDS))
+    # The POST-approval health check is bounded by CONNECT_TIMEOUT and only refreshes
+    # last_progress on success, so it must be able to time out and reconnect BEFORE the
+    # stall_watchdog blunt-restarts the process. If CONNECT_TIMEOUT >= STALL_EXIT the watchdog
+    # os._exit()s mid-heartbeat, killing the child and re-raising the approval dialog — the
+    # storm by another door. (The FIRST approval wait is exempt: its sidecar keeps last_progress
+    # fresh, so APPROVAL_WAIT_SECONDS is deliberately allowed to exceed STALL_EXIT.)
+    if CONNECT_TIMEOUT_SECONDS >= STALL_EXIT_SECONDS:
+        raise SystemExit(
+            "xcode-mcp-front: XCODE_MCP_FRONT_CONNECT_TIMEOUT_S (%.1fs) must be less than "
+            "XCODE_MCP_FRONT_STALL_EXIT (%.1fs), so a post-approval heartbeat can time out and "
+            "reconnect before the stall watchdog restarts the whole process mid-call."
+            % (CONNECT_TIMEOUT_SECONDS, STALL_EXIT_SECONDS))
 
 # How long an upstream may make NO progress before we let launchd restart us. See
 # stall_watchdog(). Generous on purpose: a false positive restarts a healthy daemon.
 STALL_EXIT_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_STALL_EXIT", "180"))
 
+# Structural ceiling on one tools/list drain, far above any real server's page count.
+# See Upstream.list_tools for why a wall-clock bound alone is not enough.
+LIST_MAX_PAGES = int(os.environ.get("XCODE_MCP_FRONT_LIST_MAX_PAGES", "200"))
+
 # How often to look for the approval dialog while a call is blocked waiting for it. Short,
 # because the window is the length of one blocked list_tools and a missed dialog costs the
 # whole connection attempt.
 ALLOW_CLICK_POLL_SECONDS = float(os.environ.get("XCODE_MCP_FRONT_CLICK_POLL", "1.5"))
+
+# One Xcode process has one approval surface. Several upstream connection loops
+# must therefore share one poll, rather than each wedging System Events with a
+# fresh osascript every tick.
+_allow_click_lock = asyncio.Lock()
 
 # Set the first time we see a foreign dialog while we are not connected; cleared whenever we
 # see no dialog or our own. Module-level rather than per-upstream because Xcode shows one
@@ -311,6 +376,19 @@ _foreign_dialog_first_seen: dict = {}
 
 
 async def _click_allow_if_present() -> bool:
+    # A running daemon can outlive Xcode. Polling System Events in that state
+    # cannot discover an approval dialog and previously leaked one stuck child
+    # per tick, so do not launch osascript at all.
+    if not _xcode_is_running():
+        return False
+    async with _allow_click_lock:
+        # Xcode may quit while another waiter held the single-flight lock.
+        if not _xcode_is_running():
+            return False
+        return await _click_allow_if_present_unlocked()
+
+
+async def _click_allow_if_present_unlocked() -> bool:
     """Best-effort, narrowly scoped: only ever touches a button whose title is
     the exact literal string "Allow" or "Don't Allow", only in Xcode's own
     process. This is the one dialog this tool exists to eat, not a general
@@ -448,8 +526,39 @@ class Upstream:
     each one's tools with `self.name + "__"` so two upstreams that happen to
     share a tool name can't collide."""
 
-    def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool):
+    def __init__(self, name: str, command: str, args: list[str], require_xcode_running: bool,
+                 prefix: str = "", env: dict | None = None, blocks: dict | None = None,
+                 maps: dict | None = None, from_env: bool = False,
+                 expected_version: str | None = None):
+        # The recorded compatible serverInfo.version, advisory only: a mismatch warns
+        # (in-band via instructions, once-persisted for the human) and NEVER refuses —
+        # an Xcode update taking the whole surface down is the worse failure (SPEC).
+        self.expected_version = expected_version
         self.name = name
+        # Exposed-name prefix, VERBATIM from the spec. The daemon used to force "" for a
+        # sole upstream regardless of what the config declared, so the validator printed
+        # prefix=solo__ while the daemon served bare names — and adding a second server
+        # silently renamed every tool the first one offered (round-one colloquium defect
+        # 2; the phase-1 panel measured it still live). The env-var single mode passes ""
+        # explicitly, which keeps the deployed passthrough unprefixed.
+        self.prefix = prefix
+        self.env = dict(env) if env else None
+        # The sieve (Phase 2): bare tool name -> the recorded reason it is withheld.
+        # Deny-list only, per Jonathan. Applied when the surface is composed AND at
+        # tools/call — a listing filter alone is decoration, because the model knows
+        # names from its own context and previous sessions.
+        self.blocks: dict[str, str] = dict(blocks) if blocks else {}
+        self._stale_blocks_reported: set[str] = set()
+        # The map (Phase 3): bare tool name -> mcp_config.MapEntry. The exposed name is
+        # FINAL — it replaces prefix+bare outright; the original is refused like any
+        # other name the upstream does not offer on this surface.
+        self.maps: dict = dict(maps) if maps else {}
+        self._stale_maps_reported: set[str] = set()
+        # True only for the legacy env-var single-upstream contract — the one spec the
+        # bare-name passthrough is allowed for, because an env spec cannot carry blocks
+        # or maps (phase-3 panel: the passthrough let a FILE config's blocked tools be
+        # called by name).
+        self.from_env = from_env
         # Watchdog input: bumped on every connect attempt and every successful heartbeat.
         # Initialised here so the watchdog never reads a missing attribute on a slow start.
         self.last_progress = time.monotonic()
@@ -459,40 +568,136 @@ class Upstream:
         self.lock = anyio.Lock()
         self.session: ClientSession | None = None
         self.known_broken = False
+        # Reconnect backoff: seconds to wait before the NEXT connect attempt. Doubles on
+        # each consecutive failed connect (capped), resets to the base the moment a connect
+        # succeeds. Stops the flat-5s dialog storm on an approval-gated upstream.
+        self.reconnect_delay = RECONNECT_POLL_SECONDS
+        # True once this CONNECTION has had one successful list_tools — i.e. Xcode's approval
+        # dialog (if any) has been answered. A first-approval timeout must NOT tear the
+        # connection down (that withdraws the open dialog and re-asks); a timeout AFTER
+        # approval is a real stall. Reset to False on every fresh connect.
+        self.approved_once = False
 
-    async def list_tools(self, params: types.PaginatedRequestParams | None) -> types.ListToolsResult:
+
+    async def _on_upstream_message(self, message) -> None:
+        """The upstream notification tap (4.1): the protocol says the tool list is a
+        moving target and offers listChanged when it moves — a relay that drops it
+        leaves every downstream cache stale."""
+        if isinstance(message, types.ToolListChangedNotification):
+            log.info("[%s] upstream announced tools/list_changed — relaying downstream",
+                     self.name)
+            _fire_surface_changed(f"{self.name} listChanged")
+
+    async def list_tools(self, params: types.PaginatedRequestParams | None) -> types.ListToolsResult | None:
+        """Returns None when this upstream is DISCONNECTED or the call failed — which is a
+        different fact from a connected upstream answering with zero tools, and the two
+        must never be conflated (increment 1.4: conflating them is how one missing
+        upstream used to blank the entire aggregate surface).
+
+        CONCURRENCY, stated plainly (the phase-1 panel caught the old file claiming full
+        serialization while the heartbeat bypassed the lock): tools/call is serialized
+        through self.lock; tools/list runs WITHOUT the lock on a session snapshot. The
+        MCP session multiplexes concurrent requests by id, and the heartbeat has listed
+        concurrently with real calls in production since 2026-08-14. Holding the lock
+        here meant a client connecting during a 10-minute build got no tool list at all
+        until the build ended — measured live by the panel's claude leg."""
         async with self.lock:
-            if self.session is None:
-                return types.ListToolsResult(tools=[])
-            try:
-                with anyio.fail_after(CALL_TIMEOUT_SECONDS):
-                    return await self.session.list_tools(params=params)
-            except Exception as e:
-                # Found live, 2026-08-14: this call had NO timeout at all before
-                # this fix — a genuinely hung upstream call (confirmed: a real
-                # tool call sat for 2+ minutes with nothing in the log, no
-                # timeout, no recovery) held self.lock forever, permanently
-                # wedging this upstream for every future call, single-upstream
-                # or combined. A timeout here means a hang gets treated the
-                # same as any other failure: marked broken, reconnected fresh.
-                self.known_broken = True
-                log.warning("[%s] list_tools failed, marking connection broken: %s", self.name, e)
-                return types.ListToolsResult(tools=[])
+            session = None if self.known_broken else self.session
+        if session is None:
+            return None
+        try:
+            # DRAIN EVERY PAGE (increment 1.5). Cursors are opaque, per-server tokens,
+            # so the downstream client's cursor cannot be forwarded here — this daemon
+            # aggregates several cursor spaces into one surface and therefore serves a
+            # complete snapshot instead. Ignoring nextCursor used to silently truncate
+            # any upstream that paginates.
+            #
+            # The drain is bounded STRUCTURALLY, not just by wall clock (panel, all
+            # three brands): a repeated cursor is a definite upstream bug, and the page
+            # ceiling catches the fresh-cursor-forever variant — the claude leg measured
+            # 48,075 pages accumulated in ten seconds from a cycling stub. Listing is
+            # discovery, so it gets the short connect timeout, not the 600-second budget
+            # that exists for real builds.
+            tools: list[types.Tool] = []
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            pages = 0
+            with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
+                while True:
+                    page = await session.list_tools(
+                        params=types.PaginatedRequestParams(cursor=cursor) if cursor else None)
+                    tools.extend(page.tools)
+                    pages += 1
+                    cursor = page.next_cursor
+                    if not cursor:
+                        return types.ListToolsResult(tools=tools)
+                    if cursor in seen_cursors:
+                        raise RuntimeError(
+                            f"cursor {cursor!r} repeated after {pages} pages — the upstream's "
+                            f"pagination cycles and can never finish")
+                    if pages >= LIST_MAX_PAGES:
+                        raise RuntimeError(
+                            f"tools/list still paginating after {LIST_MAX_PAGES} pages — "
+                            f"refusing to follow further")
+                    seen_cursors.add(cursor)
+        except Exception as e:
+            # REPORT UNAVAILABILITY; NEVER ADJUDICATE THE CONNECTION FROM HERE. This
+            # ran _mark_broken for one afternoon and took the deployed daemon down:
+            # clients poll tools/list constantly, each poll's drain timed out against
+            # the approval-gated mcpbridge (its first list blocks until the dialog is
+            # answered), and every timeout tore the connection down — WITHDRAWING the
+            # approval prompt before the clicker could answer it. That is the exact
+            # 2026-08-30 cancel-your-own-approval pathology, reintroduced through a
+            # new door and reproduced against a stall-tools stub under client load.
+            # The heartbeat in connection_manager — which owns the click-while-blocked
+            # helper — is the SOLE authority on connection state; a client-triggered
+            # drain that fails only means "nothing to serve from here right now".
+            log.info("[%s] list_tools unavailable this round (connection state untouched): %s",
+                     self.name, e or type(e).__name__)
+            return None
 
     async def call_tool(self, tool_name: str, arguments: dict) -> types.CallToolResult | None:
         """Returns None if not connected — caller decides how to report that,
         since the aggregator needs a slightly different message than the
         single-upstream case (naming which upstream is down)."""
+        # The surface-change fire happens OUT HERE, after the lock is released. The
+        # phase-5 panel caught the call-path break never announcing the contraction:
+        # every downstream client kept its cached full list for the whole outage — the
+        # exact failure 4.1 exists to close — because the fastest break-detection path
+        # was the one path that stayed silent.
+        was_broken = self.known_broken
+        result = await self._call_tool_locked(tool_name, arguments)
+        if self.known_broken and not was_broken:
+            _fire_surface_changed(f"{self.name} call broken")
+        return result
+
+    async def _call_tool_locked(self, tool_name: str, arguments: dict) -> types.CallToolResult | None:
         async with self.lock:
-            if self.session is None:
+            if self.session is None or self.known_broken:
                 return None
             log.info("[%s] call_tool %s", self.name, tool_name)
             try:
                 with anyio.fail_after(CALL_TIMEOUT_SECONDS):
                     result = await self.session.call_tool(tool_name, arguments)
+            except MCPError as e:
+                # AN APPLICATION-LEVEL JSON-RPC ERROR IS THE CALLER'S ERROR, NOT A DEAD
+                # TRANSPORT. The codex leg of the phase-1 panel caught this: the upstream
+                # answering -32602 for an unknown tool proves the connection is HEALTHY,
+                # and the old blanket except tore the session down and told the client
+                # "not connected right now, retry" — for a call that would fail
+                # identically on every retry.
+                log.info("[%s] call_tool %s: upstream returned an error (connection kept): %s",
+                         self.name, tool_name, e.message)
+                return types.CallToolResult(
+                    content=[types.TextContent(
+                        type="text",
+                        text=f"[{self.name}] upstream error for {tool_name!r}: {e.message}")],
+                    is_error=True,
+                )
             except Exception as e:
                 # See list_tools' comment — same missing-timeout bug, same fix.
                 self.known_broken = True
+                self.session = None
                 log.warning("[%s] call_tool %s failed, marking connection broken: %s", self.name, tool_name, e)
                 return None
             if not isinstance(result, types.CallToolResult):
@@ -541,10 +746,11 @@ class Upstream:
             idle = time.monotonic() - getattr(self, "last_progress", time.monotonic())
             if idle > STALL_EXIT_SECONDS:
                 log.error("[%s] no connect attempt and no successful heartbeat for %.0fs — the "
-                          "reconnect loop is wedged, almost certainly blocked in stdio_client "
-                          "teardown waiting on an mcpbridge child that will not exit. Exiting "
-                          "so launchd restarts us; staying up would serve zero tools while "
-                          "every log line claimed we were connected.", self.name, idle)
+                          "reconnect loop made no progress. Two known causes: stdio_client "
+                          "teardown waiting on a child that will not exit, or the loop waiting "
+                          "on this upstream's own lock behind a wedged call. Exiting so launchd "
+                          "restarts us; staying up would serve zero tools while every log line "
+                          "claimed we were connected.", self.name, idle)
                 os._exit(75)
 
 
@@ -556,7 +762,11 @@ class Upstream:
         clicking) on the same timer — until a call proves it's broken, then
         goes back to reconnecting. In-process, never exits on its own; a
         genuine crash is what the process supervisor (launchd) is for."""
-        params = StdioServerParameters(command=self.command, args=self.args)
+        # The config's env map is ADDITIVE over the SDK's safe default set (a six-variable
+        # allowlist) — matching Claude Code's semantics for the same file shape. Passing
+        # spec env alone would strip PATH and HOME from the child.
+        child_env = {**get_default_environment(), **self.env} if self.env else None
+        params = StdioServerParameters(command=self.command, args=self.args, env=child_env)
         while True:
             if self.require_xcode_running and not _xcode_is_running():
                 log.info("[%s] Xcode not running, waiting", self.name)
@@ -570,52 +780,119 @@ class Upstream:
             self.last_progress = time.monotonic()
             try:
                 async with stdio_client(params) as (read, write):
-                    async with ClientSession(read, write) as session:
+                    async with ClientSession(read, write,
+                                             message_handler=self._on_upstream_message) as session:
                         with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
-                            await session.initialize()
+                            init = await session.initialize()
+                        # Version check (4.2): exact-string, advisory. serverInfo.version
+                        # is opaque, so no newer/older classification — say what was
+                        # expected, what answered, and keep serving.
+                        server_info = getattr(init, "server_info", None) or getattr(
+                            init, "serverInfo", None)
+                        found = getattr(server_info, "version", None)
+                        if self.expected_version:
+                            if found != self.expected_version:
+                                # A missing serverInfo.version is NOT a pass — the
+                                # operator believes the check ran (phase-5 panel).
+                                _fire_version_mismatch(self.name, self.expected_version,
+                                                       found or "(unreported)")
+                            else:
+                                # Back on the expected version: retract the advisory so
+                                # new sessions stop being told about a mismatch that
+                                # healed (phase-5 panel: the note outlived its cause).
+                                _fire_version_match(self.name)
                         async with self.lock:
                             self.session = session
                             self.known_broken = False
+                        # Connect succeeded: reset the backoff, and mark this connection as
+                        # not-yet-approved so the first list_tools timeout holds instead of
+                        # tearing down.
+                        self.reconnect_delay = RECONNECT_POLL_SECONDS
+                        self.approved_once = False
                         log.info("[%s] connected — serving until this breaks", self.name)
+                        # The surface just grew: tell downstream clients holding a cached
+                        # list (4.1 — the phase-1 panel's permanently-cached-partial-
+                        # surface failure).
+                        _fire_surface_changed(f"{self.name} connected")
                         self.last_progress = time.monotonic()
                         while not self.known_broken:
                             await anyio.sleep(RECONNECT_POLL_SECONDS)
-                            # Health-check: a silent list_tools call catches a
-                            # dead upstream before any client discovers it.
-                            # Without this, a killed Xcode leaves the daemon
-                            # sitting "connected" until a real client call
-                            # fails — minutes of silently serving zero tools.
-                            # CLICK WHILE THE CALL IS BLOCKED, NOT AFTER IT RETURNS. This is
-                            # the deadlock that kept the suite at 6/10 and looked for a whole
-                            # night like Apple's bridge refusing to serve tools.
+                            # Xcode raises "Allow <x> to access Xcode?" LAZILY on the first real
+                            # list_tools (not at the handshake) and BLOCKS the call until it is
+                            # answered. Two distinct storm mechanisms were measured on 2026-08-31
+                            # against the Xcode 27 beta, and this loop is split to avoid BOTH:
                             #
-                            # Xcode raises "Allow <x> to access Xcode?" lazily, on the first real
-                            # list_tools rather than at the handshake — the comment below has
-                            # said so since 2026-08-14. So list_tools BLOCKS until that dialog is
-                            # answered. The clicker that answers it was placed after the await.
-                            # It therefore ran only once list_tools had already returned, and on
-                            # the timeout path the except branch marks the upstream broken and
-                            # breaks out before reaching it at all. The one thing that could
-                            # unblock the call was scheduled to run only after the call unblocked.
+                            #  1. Killing the child on a timeout withdraws the dialog it is bound
+                            #     to; the next connect re-raises it — a fresh dialog every cycle.
+                            #  2. Cancelling the list_tools REQUEST is NOT local. The pinned
+                            #     mcp>=2.0.0 SDK sends notifications/cancelled over the wire, the
+                            #     child cancels its handler, and the re-issue fires a FRESH handler
+                            #     (proven by effect: a fake server's handler count went 1->2 across
+                            #     one cancelled + one re-issued list_tools). So even a bounded-then-
+                            #     reissue heartbeat re-asks Xcode on a timer.
                             #
-                            # Worse, the teardown withdraws the prompt: the dialog is bound to the
-                            # live connecting process, so killing the child on timeout retracts
-                            # the question. With a 5s reconnect loop the daemon spent all night
-                            # asking Xcode for permission and cancelling the request before anyone
-                            # could say yes — which is why no dialog was ever found on screen, and
-                            # why running a single bridge by hand and simply leaving it alive
-                            # produced the prompt immediately and 21 tools once it was answered.
-                            #
-                            # Two daemons made it twice as fast, which is the "do two bridges
-                            # interfere" question: they do, but only by doubling the churn. One
-                            # daemon alone reproduces it.
+                            # Therefore: the FIRST approval wait keeps exactly ONE list_tools
+                            # in-flight and NEVER cancels it, so nothing crosses the wire and the
+                            # single dialog stays up until answered once. Only AFTER approval does
+                            # the loop fall through to a short, cancel-on-timeout health check,
+                            # where a hang really is a stall.
+                            if self.require_xcode_running and not self.approved_once:
+                                try:
+                                    with anyio.fail_after(APPROVAL_WAIT_SECONDS):
+                                        async with anyio.create_task_group() as _tg:
+                                            async def _wait_sidecar():
+                                                # This is a deliberate human wait, not a wedge:
+                                                # keep last_progress fresh so the stall_watchdog
+                                                # does not os._exit mid-wait (which would kill the
+                                                # child and re-raise the dialog — storm mechanism
+                                                # 1 by another door), and poll the clicker so an
+                                                # AUTO_ALLOW grant answers it hands-free.
+                                                while True:
+                                                    self.last_progress = time.monotonic()
+                                                    if AUTO_ALLOW:
+                                                        await _click_allow_if_present()
+                                                    await anyio.sleep(ALLOW_CLICK_POLL_SECONDS)
+                                            _tg.start_soon(_wait_sidecar)
+                                            # NOT wrapped in a cancel-on-timeout: the ONE thing
+                                            # that must never happen to this request is a
+                                            # cancellation reaching the child.
+                                            await session.list_tools()
+                                            _tg.cancel_scope.cancel()
+                                    self.approved_once = True
+                                    self.last_progress = time.monotonic()
+                                    log.info("[%s] first list_tools approved — serving", self.name)
+                                except Exception as e:
+                                    # APPROVAL_WAIT_SECONDS elapsed with no answer, OR the child
+                                    # died mid-wait. Either way the connection is spent: tear down
+                                    # and let the outer loop reconnect with backoff (so an upstream
+                                    # nobody ever approves is re-asked rarely, not every 5s).
+                                    # Unwrap ExceptionGroups so the log names the REAL sub-cause
+                                    # (a bare "ExceptionGroup" cost a live session on 2026-08-31).
+                                    _causes = []
+                                    _stack = [e]
+                                    while _stack:
+                                        _cur = _stack.pop()
+                                        _subs = getattr(_cur, "exceptions", None)
+                                        if _subs:
+                                            _stack.extend(_subs)
+                                        else:
+                                            _causes.append(f"{type(_cur).__name__}: {_cur}")
+                                    log.warning("[%s] first approval not completed (%s) — reconnecting",
+                                                self.name, "; ".join(_causes) or type(e).__name__)
+                                    async with self.lock:
+                                        self.known_broken = True
+                                        self.session = None
+                                    _fire_surface_changed(f"{self.name} approval wait ended")
+                                    break
+                                continue
+                            # POST-approval health check: a silent list_tools catches a dead
+                            # upstream before any client call discovers it. The dialog is already
+                            # answered, so a hang here is a REAL stall — bound it and, on any
+                            # failure, tear down and reconnect.
                             try:
                                 with anyio.fail_after(CONNECT_TIMEOUT_SECONDS):
                                     async with anyio.create_task_group() as _tg:
                                         async def _click_while_blocked():
-                                            # Poll rather than click once: the dialog appears a
-                                            # moment AFTER the request goes out, so a single
-                                            # attempt at the start reliably finds nothing.
                                             while True:
                                                 if AUTO_ALLOW:
                                                     await _click_allow_if_present()
@@ -625,66 +902,120 @@ class Upstream:
                                         _tg.cancel_scope.cancel()
                                 self.last_progress = time.monotonic()
                             except Exception as e:
-                                log.warning("[%s] heartbeat list_tools failed, marking broken: %s", self.name, e)
+                                log.warning("[%s] post-approval heartbeat failed, marking broken: %s",
+                                            self.name, e)
                                 async with self.lock:
                                     self.known_broken = True
+                                    # Drop the public reference NOW — stdio teardown can wedge
+                                    # (see stall_watchdog), and until it finishes the old session
+                                    # must not be callable.
+                                    self.session = None
+                                _fire_surface_changed(f"{self.name} heartbeat broken")
                                 break
-                            # The approval prompt has been observed appearing
-                            # AFTER a successful initialize() — requested
-                            # lazily, apparently on the first real list_tools
-                            # call rather than at the handshake. So keep
-                            # checking even once connected, not just while
-                            # reconnecting — safe every tick regardless, since
-                            # it only ever acts on our own pid or a dead one.
-                            if AUTO_ALLOW:
-                                await _click_allow_if_present()
             except Exception as e:
-                log.warning("[%s] connect attempt failed (will retry): %s", self.name, e)
+                # Unwrap ExceptionGroups: "unhandled errors in a TaskGroup (1 sub-exception)"
+                # names nothing and cost a live debugging session on 2026-08-31.
+                causes = []
+                stack = [e]
+                while stack:
+                    cur = stack.pop()
+                    subs = getattr(cur, "exceptions", None)
+                    if subs:
+                        stack.extend(subs)
+                    else:
+                        causes.append(f"{type(cur).__name__}: {cur}")
+                log.warning("[%s] connect attempt failed (will retry): %s", self.name,
+                            "; ".join(causes))
 
             async with self.lock:
                 self.session = None
-            log.info("[%s] not connected, retrying in %ss", self.name, RECONNECT_POLL_SECONDS)
-            await anyio.sleep(RECONNECT_POLL_SECONDS)
-
-
-def _parse_multi_upstreams(spec: str) -> list[Upstream]:
-    """"name:require_xcode:command:arg1,arg2,...;name2:..." -> [Upstream, ...]"""
-    upstreams = []
-    for chunk in spec.split(";"):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        name, require_xcode, command, argstr = chunk.split(":", 3)
-        args = [a for a in argstr.split(",") if a]
-        upstreams.append(Upstream(name.strip(), command.strip(), args, require_xcode.strip() == "1"))
-    if not upstreams:
-        raise ValueError(f"XCODE_MCP_FRONT_UPSTREAMS set but parsed to zero upstreams: {spec!r}")
-    return upstreams
+            log.info("[%s] not connected, retrying in %ss", self.name, self.reconnect_delay)
+            await anyio.sleep(self.reconnect_delay)
+            # Back off for the NEXT attempt if this one keeps failing; a successful connect
+            # resets this to the base. Bounds the approval-dialog re-ask rate on a persistently
+            # unreachable require_xcode upstream instead of a flat every-5s storm.
+            self.reconnect_delay = min(self.reconnect_delay * 2, RECONNECT_BACKOFF_MAX_SECONDS)
 
 
 def _build_upstreams() -> list[Upstream]:
-    multi_spec = os.environ.get("XCODE_MCP_FRONT_UPSTREAMS")
-    if multi_spec:
-        return _parse_multi_upstreams(multi_spec)
+    """All selection and validation logic lives in mcp_config.resolve_specs (tested fast,
+    without this file's mcp/uvicorn dependencies); this is only the Upstream construction.
+    A bad config is a loud startup death for launchd to report, never a half-configured
+    daemon."""
+    try:
+        specs = mcp_config.resolve_specs(os.environ)
+    except (mcp_config.ConfigError, OSError) as e:
+        raise SystemExit(f"{SERVER_NAME}: {e}")
+    _check_dialog_grace(specs)
     return [
-        Upstream(
-            name="default",
-            command=os.environ.get("XCODE_MCP_FRONT_UPSTREAM_CMD", "xcrun"),
-            args=os.environ.get("XCODE_MCP_FRONT_UPSTREAM_ARGS", "mcpbridge").split(),
-            require_xcode_running=os.environ.get("XCODE_MCP_FRONT_REQUIRE_XCODE", "1") == "1",
-        )
+        Upstream(name=s.name, command=s.command, args=s.args,
+                 require_xcode_running=s.require_xcode, prefix=s.prefix, env=s.env,
+                 blocks=s.blocks, maps=s.maps, from_env=s.from_env,
+                 expected_version=s.version)
+        for s in specs
     ]
 
 
-def _not_connected_result(detail: str) -> types.CallToolResult:
+# Phase 4 plumbing: Upstream instances announce surface changes (connect, break, an
+# upstream's own listChanged) and version mismatches through these hooks; build_server
+# registers the consumers. Module-level because Upstream predates the server object.
+_surface_changed_callbacks: list = []
+_version_mismatch_callbacks: list = []
+
+
+def _fire_surface_changed(reason: str) -> None:
+    for cb in list(_surface_changed_callbacks):
+        cb(reason)
+
+
+def _fire_version_mismatch(name: str, expected: str, found: str) -> None:
+    for cb in list(_version_mismatch_callbacks):
+        cb(name, expected, found)
+
+
+_version_match_callbacks: list = []
+
+
+def _fire_version_match(name: str) -> None:
+    for cb in list(_version_match_callbacks):
+        cb(name)
+
+
+def _rewrite_refs(text: str, table: dict) -> str:
+    """Whole-word substitution of old tool names with their PUBLISHED names — the
+    mechanical description pass (SPEC): every sibling description mentioning a renamed
+    tool goes stale at the same moment, so the rename table substitutes them all. The
+    table maps old bare name -> the name actually published this composition, so a
+    degraded alias rewrites to its prefixed fallback, never to a name that is not on
+    the surface. A regex is deliberate — whole-word replacement is the one job plain
+    scanning cannot do without reimplementing \\b (the roadmap's red case: a tool named
+    'read' mangling 'already'). Alternatives sorted longest-first, because Python's
+    alternation is first-match: with 'foo' before 'foo-bar', the phase-3 panel measured
+    'use foo-bar' rewriting as 'use <mapped>-bar'."""
+    if not text or not table:
+        return text
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(k) for k in sorted(table, key=len, reverse=True)) + r")\b")
+    return pattern.sub(lambda m: table[m.group(1)], text)
+
+
+def _not_connected_result(u: "Upstream") -> types.CallToolResult:
+    # The retry text is derived from the upstream's own quirks: telling a client that
+    # Xcode is being checked and its dialog clicked, for an upstream that has nothing to
+    # do with Xcode, is a lie the phase-1 panel reproduced verbatim.
+    if u.require_xcode_running:
+        how = ("checking Xcode is running and clicking its approval prompt if one is "
+               "showing")
+    else:
+        how = "restarting its child process"
     return types.CallToolResult(
         content=[
             types.TextContent(
                 type="text",
                 text=(
-                    f"xcode-mcp-front: {detail} This daemon retries on its own every few "
-                    "seconds (checking Xcode is running and clicking its approval prompt if "
-                    "one is showing) — a retry shortly should work without any manual action."
+                    f"{SERVER_NAME}: [{u.name}] not connected right now. This daemon "
+                    f"retries on its own every few seconds ({how}) — a retry shortly "
+                    "should work without any manual action."
                 ),
             )
         ],
@@ -694,123 +1025,502 @@ def _not_connected_result(detail: str) -> types.CallToolResult:
 
 def build_server(upstreams: list[Upstream]) -> Server:
     single = len(upstreams) == 1
-    prefix_of = {u: (f"{u.name}__" if not single else "") for u in upstreams}
+    # Prefixes are honoured VERBATIM — the single-upstream override that forced "" here
+    # made the daemon and the validator disagree about the same file, and made adding a
+    # second server silently rename the first one's entire surface.
+    prefix_of = {u: u.prefix for u in upstreams}
     upstream_by_prefix = {prefix_of[u]: u for u in upstreams}
+    # Bare-name passthrough exists ONLY for the deployed env-var single mode: an env
+    # spec cannot carry blocks or maps, so nothing is bypassed there. A FILE config —
+    # even single-server, even with an empty prefix — goes through the catalogued path,
+    # or its sieve would filter the listing while leaving the tools callable by name
+    # (phase-3 panel, all three brands).
+    passthrough = (upstreams[0]
+                   if single and upstreams[0].prefix == "" and upstreams[0].from_env
+                   else None)
+
+    # Standing warnings (collisions, stale override descriptions) are logged once per
+    # distinct key: clients poll tools/list every few seconds, and a warning repeated
+    # forever stops being read (phase-3 panel, claude leg).
+    reported_warnings: set = set()
+
+    def warn_once(key, msg, *args):
+        if key in reported_warnings:
+            return
+        reported_warnings.add(key)
+        log.warning(msg, *args)
+
+    # EXPLICIT DISPATCH TABLE (increment 1.3): exposed name -> (upstream, bare upstream
+    # name), rebuilt every time the surface is composed in on_list_tools. Consulted
+    # FIRST on tools/call; the startswith() prefix walk below survives only as a
+    # fallback for a name that has not been listed yet in this daemon's lifetime.
+    # Prefix routing alone cannot survive the tool map (Phase 3): a mapped name that
+    # drops the prefix would be advertised and then rejected as unknown. The config
+    # loader already rejects the prefix sets that would make this table ambiguous
+    # (duplicates, prefixes of each other).
+    dispatch: dict[str, tuple[Upstream, str]] = {}
+
+    # Downstream notification registry (4.1). ServerSession is a per-request proxy over
+    # a stable per-client Connection whose standalone channel carries server-initiated
+    # notifications; remembering the latest proxy per connection lets the broadcaster
+    # reach every client that has ever made a request. The `_connection` read is the one
+    # private attribute this daemon touches — the SDK offers no public registry, and the
+    # alternative was shipping no relay at all.
+    downstream_sessions: dict = {}
+    # An abandoned session's send neither raises nor drains on the legacy transport
+    # (the SDK drops server-initiated messages for a session with no open GET stream),
+    # so the registry cannot rely on failure for eviction — it is BOUNDED instead, and
+    # insertion order makes the dict its own LRU: oldest-registered goes first. 128 is
+    # far above the concurrent-client count here (a handful of harness sessions plus
+    # kicker nodes), so eviction only ever removes the long-abandoned (phase-5 panel,
+    # all three brands, on the unbounded leak).
+    DOWNSTREAM_CAP = 128
+
+    def _remember_downstream(ctx: ServerRequestContext) -> None:
+        conn = getattr(ctx.session, "_connection", None)
+        if conn is None:
+            return
+        key = id(conn)
+        # Re-registering moves the entry to the newest position; entries hold the
+        # session (which holds the connection) strongly, so a live key cannot be
+        # reused by a new connection.
+        downstream_sessions.pop(key, None)
+        downstream_sessions[key] = ctx.session
+        while len(downstream_sessions) > DOWNSTREAM_CAP:
+            downstream_sessions.pop(next(iter(downstream_sessions)))
+
+    async def broadcast_list_changed() -> None:
+        # Concurrent, one timeout each: serial sends made broadcast latency scale with
+        # the registry (phase-5 panel), and one stuck client must not delay the rest.
+        async def _send_one(key, session):
+            try:
+                with anyio.move_on_after(1):
+                    await session.send_tool_list_changed()
+            except Exception:
+                downstream_sessions.pop(key, None)  # connection gone; forget it
+
+        async with anyio.create_task_group() as tg:
+            for key, session in list(downstream_sessions.items()):
+                tg.start_soon(_send_one, key, session)
+        # Modern-protocol (2026-07-28+) clients hear changes on subscriptions/listen
+        # streams instead; the bus fans this out to every active listener there.
+        await subscription_bus.publish(ToolsListChanged())
+
+    async def compose_surface() -> list[types.Tool]:
+        """Compose the whole surface and swap the dispatch table — THE ONLY code path
+        allowed to build dispatch entries. The adversarial round broke the previous
+        split: a lighter per-upstream refresh on the tools/call miss path skipped the
+        two-pass collision policy, so a client calling a remembered name into the
+        empty startup table executed the alias claimant's tool under another
+        upstream's natural name (findings/adversarial-cold-call-hijack.sh). One
+        composer, every path, identical policy.
+
+        A DISCONNECTED upstream is reported and skipped; it must NOT blank the others
+        (increment 1.4). A connected upstream answering with zero tools contributes
+        zero tools; that is an answer, not an absence."""
+        # Upstreams are listed CONCURRENTLY: each drain is independent, and the old
+        # sequential walk meant one slow upstream withheld every later upstream's tools
+        # for its whole timeout (panel: measured 23 seconds behind a single stalled stub).
+        results: dict[Upstream, types.ListToolsResult | None] = {}
+
+        async def _collect(u: Upstream) -> None:
+            results[u] = await u.list_tools(None)
+
+        async with anyio.create_task_group() as tg:
+            for u in upstreams:
+                tg.start_soon(_collect, u)
+
+        # THE EVALUATION ORDER IS FIXED AND THESE PASSES ARE ITS DECLARATION (2.3):
+        # availability first (an unavailable upstream is reported and its decisions are
+        # inert), then the source-qualified sieve, then NATURAL prefixed names reserving
+        # the surface, then mapped aliases where the reserved surface leaves room, then
+        # descriptions rewritten from what was ACTUALLY published, then publish. Natural
+        # names go first so ownership can never depend on which upstream the config
+        # lists first — the phase-3 panel showed first-inserted-wins letting an
+        # earlier-listed alias hijack a later upstream's genuine name.
+        all_tools: list[types.Tool] = []
+        unavailable: list[str] = []
+        new_dispatch: dict[str, tuple[Upstream, str]] = {}
+        pending: list = []          # (upstream, bare, exposed, tool) in publish order
+        offered_by: dict[Upstream, set] = {}
+        connected = [u for u in upstreams if results.get(u) is not None]
+        unavailable = [u.name for u in upstreams if results.get(u) is None]
+
+        for u in connected:  # PASS 1 — natural names reserve the surface
+            prefix = prefix_of[u]
+            offered_by[u] = set()
+            for t in results[u].tools:
+                bare = t.name
+                offered_by[u].add(bare)
+                if bare in u.blocks or bare in u.maps:
+                    continue  # sieved, or renamed (admitted in pass 2)
+                exposed = f"{prefix}{bare}"
+                if exposed in new_dispatch:
+                    # Reachable since 1.5: an upstream mutating its list between drained
+                    # pages can hand back the same tool twice.
+                    warn_once(("dup", u.name, exposed),
+                              "list_tools: duplicate exposed name %r from upstream %s — "
+                              "keeping the first occurrence", exposed, u.name)
+                    continue
+                new_dispatch[exposed] = (u, bare)
+                pending.append((u, bare, exposed, t))
+
+        # PASS 2 — aliases, with 3.3's degradation. effective[u] maps old bare name ->
+        # the name ACTUALLY published, which is what the description pass substitutes:
+        # a degraded alias rewrites to its prefixed fallback, never to a name that is
+        # not on the surface.
+        effective: dict[Upstream, dict] = {}
+        for u in connected:
+            prefix = prefix_of[u]
+            table = effective.setdefault(u, {})
+            for t in results[u].tools:
+                bare = t.name
+                entry = u.maps.get(bare)
+                if entry is None or bare in u.blocks:
+                    continue
+                exposed = entry.exposed
+                if new_dispatch.get(exposed) == (u, bare):
+                    continue  # a duplicated copy of an already-admitted mapped tool
+                if exposed in new_dispatch:
+                    # The mapped name collides with something already published: drop
+                    # the alias, keep serving under the prefixed original, report it.
+                    warn_once(("alias", u.name, exposed),
+                              "[%s] mapped name '%s' collides with an already published "
+                              "tool — dropping the alias and serving '%s%s' instead",
+                              u.name, exposed, prefix, bare)
+                    exposed = f"{prefix}{bare}"
+                    if exposed in new_dispatch:
+                        if new_dispatch[exposed] != (u, bare):
+                            warn_once(("gone", u.name, exposed),
+                                      "[%s] fallback name '%s' is ALSO taken — tool "
+                                      "'%s' is off the surface entirely; fix the map",
+                                      u.name, exposed, bare)
+                        continue
+                new_dispatch[exposed] = (u, bare)
+                table[bare] = exposed
+                pending.append((u, bare, exposed, t))
+
+        # Staleness bookkeeping: a decision naming a tool the upstream does not offer is
+        # a line that stopped meaning anything, and a version bump is exactly when that
+        # happens. Warned once per entry; an entry whose tool REAPPEARS is forgiven so a
+        # later re-staleness warns again (phase-3 panel, qwen leg).
+        for u in connected:
+            offered = offered_by[u]
+            u._stale_blocks_reported -= offered
+            u._stale_maps_reported -= offered
+            for stale in sorted(set(u.blocks) - offered - u._stale_blocks_reported):
+                u._stale_blocks_reported.add(stale)
+                log.warning("[%s] block entry for '%s' matched nothing the upstream "
+                            "offers — the decision it records no longer applies; "
+                            "fix or remove it in the template", u.name, stale)
+            for stale in sorted(set(u.maps) - offered - u._stale_maps_reported):
+                u._stale_maps_reported.add(stale)
+                log.warning("[%s] map entry for '%s' matched nothing the upstream offers "
+                            "— its exposed name '%s' is dropped from the surface; the "
+                            "upstream likely renamed or removed the tool. Fix the "
+                            "template, and consider re-running the collision comparison "
+                            "against this upstream's new version.",
+                            u.name, stale, u.maps[stale].exposed)
+
+        # PASS 3 — descriptions, from the effective table. An explicit override wins
+        # outright (and is warned about when it still speaks old names); everything
+        # else gets the mechanical whole-word pass.
+        for u, bare, exposed, t in pending:
+            entry = u.maps.get(bare)
+            if entry is not None and entry.description is not None:
+                desc = entry.description
+                if _rewrite_refs(desc, effective.get(u, {})) != desc:
+                    warn_once(("stale-desc", u.name, exposed),
+                              "[%s] override description for '%s' still references "
+                              "renamed tools by their OLD names — it will mislead the "
+                              "model; fix it in the template", u.name, exposed)
+            else:
+                desc = _rewrite_refs(t.description or "", effective.get(u, {}))
+            all_tools.append(t.model_copy(update={"name": exposed, "description": desc}))
+        dispatch.clear()
+        dispatch.update(new_dispatch)
+        if unavailable:
+            log.warning("list_tools: serving %d tools WITHOUT unavailable upstream(s) %s — "
+                        "each reconnects on its own; calls to them return a per-upstream error",
+                        len(all_tools), ", ".join(unavailable))
+        return all_tools
 
     async def on_list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
-        all_tools: list[types.Tool] = []
-        results_by_upstream: dict[str, list[types.Tool]] = {}
-        for u in upstreams:
-            result = await u.list_tools(params)
-            prefix = prefix_of[u]
-            upstream_tools = []
-            for t in result.tools:
-                if prefix:
-                    t = t.model_copy(update={"name": f"{prefix}{t.name}"})
-                upstream_tools.append(t)
-            results_by_upstream[u.name] = upstream_tools
-            all_tools.extend(upstream_tools)
-        # In multi-upstream mode, ALL upstreams must be connected.  Serving a
-        # partial tool list silently hides the missing upstream from the client
-        # — it gets half the tools and has no idea.  Return zero tools and a
-        # loud message instead so the client retries once the daemon reconnects
-        # the dead upstream (which it does on its own, every few seconds).
-        if not single:
-            missing = [u.name for u in upstreams if not results_by_upstream.get(u.name)]
-            if missing:
-                log.warning("list_tools: refusing to serve partial tool list — missing upstreams: %s", missing)
-                return types.ListToolsResult(tools=[])
-        return types.ListToolsResult(tools=all_tools)
+        _remember_downstream(ctx)
+        # This daemon serves its whole surface as ONE page (each upstream is drained in
+        # Upstream.list_tools), so it never issues a nextCursor — and a cursor it never
+        # issued cannot be honoured. Refusing beats forwarding it into upstream cursor
+        # spaces it cannot belong to, which corrupted per-upstream pagination silently.
+        if params is not None and params.cursor is not None:
+            # MCPError so both transport paths return the spec's INVALID_PARAMS with the
+            # message intact — a raised ValueError became code 0 on the 2025 path and a
+            # message-less "Internal server error" on the modern one (panel, measured by
+            # the claude leg on both protocol versions; empty-string cursor caught by
+            # codex — "" is as unissued as any other value).
+            raise MCPError(
+                types.INVALID_PARAMS,
+                f"{SERVER_NAME} serves its full tool list in one page and issued no cursor; "
+                f"got unexpected cursor {params.cursor!r}")
+        return types.ListToolsResult(tools=await compose_surface())
 
     async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
+        _remember_downstream(ctx)
+        # ROUTING IS DISPATCH-FIRST AND NEVER FORWARDS ON FAITH. The old prefix fallback
+        # forwarded any dispatch miss to whichever upstream owned the prefix — which
+        # would quietly bypass Phase 2's deny list and keep Phase 3's renamed tools
+        # callable under their old names (panel, codex leg). A miss now refreshes that
+        # one upstream's catalogue once (covering a call that arrives before the first
+        # tools/list) and refuses if the name still is not offered.
         name = params.name
-        target = None
-        tool_name = name
-        for prefix, u in upstream_by_prefix.items():
-            if prefix and name.startswith(prefix):
-                target = u
-                tool_name = name[len(prefix) :]
-                break
-        if target is None:
-            # single-upstream mode (no prefixes at all), or a multi-upstream
-            # call that somehow arrived unprefixed — route to the sole
-            # upstream if there's only one, otherwise this is a real error.
-            if single:
-                target = upstreams[0]
+        if name not in dispatch:
+            candidate = None
+            if passthrough is not None:
+                candidate = passthrough
             else:
+                # A mapped exposed name carries no prefix, so before the prefix walk,
+                # recognise it from the static map tables — a call can legitimately
+                # arrive before this daemon's first tools/list.
+                for u in upstreams:
+                    if any(e.exposed == name for e in u.maps.values()):
+                        candidate = u
+                        break
+                else:
+                    for prefix, u in upstream_by_prefix.items():
+                        if prefix and name.startswith(prefix):
+                            candidate = u
+                            break
+            if candidate is None and single:
+                # A single-server FILE config (any prefix, including "") is catalogued
+                # like everyone else: the sole upstream is the only possible owner, so
+                # route the miss through the block check and refresh below rather than
+                # dead-ending on the prefix walk.
+                candidate = upstreams[0]
+            if candidate is None:
                 return types.CallToolResult(
                     content=[
                         types.TextContent(
                             type="text",
-                            text=f"xcode-mcp-front: tool name '{name}' doesn't match any known upstream prefix "
+                            text=f"{SERVER_NAME}: tool name '{name}' doesn't match any known upstream prefix "
                             f"({', '.join(p for p in upstream_by_prefix if p)})",
                         )
                     ],
                     is_error=True,
                 )
+            if candidate is passthrough:
+                # Env-var single mode serves the upstream's names verbatim, so there is
+                # no daemon-side catalogue to enforce; the upstream answers for itself.
+                result = await candidate.call_tool(name, params.arguments)
+                if result is None:
+                    return _not_connected_result(candidate)
+                return result
+            pfx = prefix_of[candidate]
+            bare = name[len(pfx):] if pfx and name.startswith(pfx) else name
+            if bare in candidate.blocks:
+                # The sieve at tools/call (increment 2.1): hiding a tool from the listing
+                # while leaving it callable would make the block decoration. The refusal
+                # carries the recorded why — that is what the mandatory field is FOR.
+                return types.CallToolResult(
+                    content=[types.TextContent(
+                        type="text",
+                        text=(f"{SERVER_NAME}: '{bare}' on upstream '{candidate.name}' is "
+                              f"blocked on this surface — {candidate.blocks[bare]}"))],
+                    is_error=True,
+                )
+            # A miss composes the FULL surface — the same two-pass collision policy as
+            # tools/list, never a lighter per-upstream shortcut (the adversarial round's
+            # cold-call hijack lived in exactly that gap).
+            await compose_surface()
+            if name in dispatch:
+                target, tool_name = dispatch[name]
+                result = await target.call_tool(tool_name, params.arguments)
+                if result is None:
+                    return _not_connected_result(target)
+                return result
+            async with candidate.lock:
+                candidate_down = candidate.session is None or candidate.known_broken
+            if candidate_down:
+                return _not_connected_result(candidate)
+            if name not in dispatch:
+                # `bare` from the guarded slice above: a mapped alias carries no prefix,
+                # and slicing one off anyway mangled the message ('never_served' minus
+                # six came out as 'erved' — phase-3 panel, claude leg).
+                return types.CallToolResult(
+                    content=[
+                        types.TextContent(
+                            type="text",
+                            text=(
+                                f"{SERVER_NAME}: upstream '{candidate.name}' does not currently "
+                                f"offer '{bare}' — re-list tools for the current surface."
+                            ),
+                        )
+                    ],
+                    is_error=True,
+                )
 
+        target, tool_name = dispatch[name]
         result = await target.call_tool(tool_name, params.arguments)
         if result is None:
-            return _not_connected_result(f"[{target.name}] not connected right now.")
+            return _not_connected_result(target)
         return result
 
-    names = ", ".join(u.name for u in upstreams)
+    # THE INSTRUCTIONS ARE DERIVED FROM THE CONFIG, NOT ASSUMED. The old text described
+    # every surface as Apple's Xcode bridge — the panel booted a Python stub behind this
+    # daemon and read initialize text claiming it was `xcrun mcpbridge`. The mcpbridge
+    # guidance survives, but only when an upstream actually IS mcpbridge.
+    fronts_mcpbridge = any(
+        u.command == "xcrun" and "mcpbridge" in u.args for u in upstreams)
+    mcpbridge_para = (
+        "\n\nApple's own Xcode MCP bridge (`xcrun mcpbridge`) is one of the upstreams "
+        "here. You will likely also see other Xcode-adjacent MCP servers configured "
+        "alongside — commonly xcode-mcp-server (a third-party tool, Drew's) and "
+        "XcodeBuildMCP. That overlap is INTENTIONAL, not a conflict to resolve. If a "
+        "call here fails or behaves inconsistently, try the equivalent tool on one of "
+        "the others instead of giving up — and if one consistently works better or "
+        "worse for a task, say so out loud in your response; that is wanted "
+        "information."
+        if fronts_mcpbridge else "")
     if single:
+        u0 = upstreams[0]
+        shown = f"{u0.prefix}<tool>" if u0.prefix else "the upstream's own tool names, unprefixed"
         instructions = (
-            "This is a persistent proxy in front of Apple's own Xcode MCP bridge "
-            "(`xcrun mcpbridge`) — same tools it exposes, reached over HTTP instead of "
-            "each client spawning its own copy (that used to mean a separate Xcode "
-            "approval popup per client; this way it's approved once and stays up).\n\n"
+            f"This is a persistent HTTP proxy in front of one MCP server: {u0.name} "
+            f"(`{u0.command} {' '.join(u0.args)}`), serving {shown}. One approved "
+            "daemon stays up instead of each client spawning its own copy.\n\n"
             "If a call says 'not connected right now', this daemon is already retrying "
-            "on its own every few seconds — checking Xcode is running and clicking its "
-            "approval prompt if one is showing — so a short retry should work without "
-            "any manual action.\n\n"
-            "You will likely also see other Xcode-adjacent MCP servers configured "
-            "alongside this one — commonly named xcode-mcp-server (a third-party tool, "
-            "Drew's) and XcodeBuildMCP. That overlap is INTENTIONAL, not a conflict to "
-            "resolve or a sign something's misconfigured. Different tools cover the same "
-            "ground with different tradeoffs (this one needs Xcode's own approval once; "
-            "XcodeBuildMCP runs headless; xcode-mcp-server has its own run/screenshot "
-            "path). If a call here fails or behaves inconsistently, try the equivalent "
-            "tool on one of the others instead of giving up.\n\n"
-            "If you notice one of these consistently working better (or worse) than the "
-            "others for a given task, say so out loud in your response — that's wanted "
-            "information, not noise. It may be used later to deprioritize or hide the "
-            "less reliable option."
+            "on its own every few seconds, so a short retry should work without any "
+            f"manual action.{mcpbridge_para}"
         )
     else:
+        roster = "; ".join(
+            f"{u.name} (`{u.command} {' '.join(u.args)}`, tools prefixed `{u.prefix}`)"
+            for u in upstreams)
         instructions = (
-            f"This is a persistent proxy fronting MULTIPLE Xcode-adjacent MCP servers "
-            f"behind one endpoint: {names}. Every tool is prefixed with its upstream's "
-            f"name (e.g. `{upstreams[0].name}__SomeTool`) so two upstreams that happen to "
-            "expose a same-named tool can't collide or shadow each other — always use "
-            "the prefixed name shown in the tool list, never the bare upstream name.\n\n"
+            f"This is a persistent proxy fronting MULTIPLE MCP servers behind one "
+            f"endpoint: {roster}. Prefixes keep two upstreams' same-named tools from "
+            "colliding — always use the prefixed name shown in the tool list.\n\n"
             "If a call says 'not connected right now', that specific upstream is "
             "reconnecting on its own — the others are unaffected, since each upstream "
-            "has its own independent connection. A short retry should work."
+            "has its own independent connection. A short retry should work.\n\n"
+            "The tool list reflects the upstreams available AT THE MOMENT YOU LIST. If "
+            "an upstream named above is missing from the list, it is reconnecting; "
+            f"re-run tools/list to pick it up when it returns.{mcpbridge_para}"
         )
 
-    return Server(
+    # The modern (2026-07-28+) wire has no standing GET stream: clients hear changes on
+    # subscriptions/listen response streams, and the SDK derives the modern
+    # tools.listChanged capability from whether that method is served — the
+    # NotificationOptions override below covers only the handshake era (phase-5 panel,
+    # codex leg, probed both paths). Serving the listen handler closes the modern half.
+    subscription_bus = InMemorySubscriptionBus()
+
+    server = Server(
         SERVER_NAME,
         version="0.4.0",
         instructions=instructions,
         on_list_tools=on_list_tools,
         on_call_tool=on_call_tool,
-        lifespan=lambda app: _lifespan(app, upstreams),
+        on_subscriptions_listen=ListenHandler(subscription_bus),
+        lifespan=lambda app: _lifespan(app, upstreams, broadcast_list_changed),
     )
+
+    # ADVERTISE tools.listChanged (4.1). The runner builds initialization options with
+    # default NotificationOptions at each session's initialize; the SDK's own comment
+    # says list_changed flags "require NotificationOptions to be passed externally", and
+    # the only externally-reachable seam on the streamable-HTTP path is this bound-method
+    # override. A daemon that pushes list_changed while advertising listChanged:false
+    # invites clients to ignore it.
+    server.create_initialization_options = functools.partial(
+        Server.create_initialization_options, server,
+        notification_options=NotificationOptions(tools_changed=True))
+
+    # VERSION MISMATCH consumer (4.2). In-band: instructions are re-read at every new
+    # session's initialize, so updating them reaches each fresh model with no new
+    # mechanism. Human: one log line per distinct (upstream, expected, found), persisted
+    # so a launchd restart does not re-raise it — the 2026-08-30 lesson is that a
+    # warning per reconnect tick is twenty-one modals in an evening.
+    base_instructions = instructions
+    mismatch_notes: dict = {}
+    persisted_path = os.path.join(
+        os.environ.get("XCODE_MCP_FRONT_HOME", os.path.expanduser("~/.xcode-mcp-front")),
+        "version-mismatches.json")
+    try:
+        with open(persisted_path, encoding="utf-8") as f:
+            seen_mismatches = json.load(f)
+    except (OSError, ValueError):
+        seen_mismatches = {}
+    if not isinstance(seen_mismatches, dict):
+        # A malformed ledger must degrade to warning twice, never to failing every
+        # reconnect with a TypeError (phase-5 panel, codex leg).
+        log.warning("%s did not hold an object — starting the mismatch ledger fresh",
+                    persisted_path)
+        seen_mismatches = {}
+
+    def _on_version_mismatch(name: str, expected: str, found: str) -> None:
+        mismatch_notes[name] = (
+            f"NOTE: upstream '{name}' was verified against version '{expected}' but is "
+            f"running '{found}'. Blocks and renames may reference tools that moved — "
+            f"consider having a human run the collision comparison "
+            f"(tools/tool-templates/mcp_tools.py compare) against the new version.")
+        server.instructions = base_instructions + "\n\n" + "\n".join(
+            mismatch_notes[k] for k in sorted(mismatch_notes))
+        key = f"{name}:{expected}:{found}"
+        if key in seen_mismatches:
+            return
+        seen_mismatches[key] = True
+        log.warning("[%s] expected version '%s' but the upstream reports '%s' — serving "
+                    "anyway (a mismatch warns, never refuses). Recorded in %s so this "
+                    "warns once.", name, expected, found, persisted_path)
+        try:
+            os.makedirs(os.path.dirname(persisted_path), exist_ok=True)
+            with open(persisted_path, "w", encoding="utf-8") as f:
+                json.dump(seen_mismatches, f, indent=2, sort_keys=True)
+        except OSError as e:
+            log.warning("could not persist the version-mismatch record: %s", e)
+
+    _version_mismatch_callbacks.append(_on_version_mismatch)
+
+    def _on_version_match(name: str) -> None:
+        if mismatch_notes.pop(name, None) is not None:
+            server.instructions = base_instructions + (
+                ("\n\n" + "\n".join(mismatch_notes[k] for k in sorted(mismatch_notes)))
+                if mismatch_notes else "")
+            log.info("[%s] back on the expected version — mismatch advisory retracted", name)
+
+    _version_match_callbacks.append(_on_version_match)
+
+    return server
 
 
 @contextlib.asynccontextmanager
-async def _lifespan(app: Server, upstreams: list[Upstream]):
+async def _lifespan(app: Server, upstreams: list[Upstream], broadcast):
     async with anyio.create_task_group() as tg:
+        # The notification relay's downstream half (4.1): surface-change events from the
+        # Upstreams (connect, break, upstream listChanged) wake this task, which
+        # debounces a burst and pushes tools/list_changed to every known client.
+        changed = {"event": anyio.Event()}
+
+        def _wake(reason: str) -> None:
+            changed["event"].set()
+
+        _surface_changed_callbacks.append(_wake)
+
+        async def _broadcaster() -> None:
+            while True:
+                await changed["event"].wait()
+                changed["event"] = anyio.Event()
+                await anyio.sleep(0.5)  # a reconnect burst becomes one notification
+                await broadcast()
+
         for u in upstreams:
             tg.start_soon(u.connection_manager)
             tg.start_soon(u.stall_watchdog)
+        tg.start_soon(_broadcaster)
         try:
             yield {}
         finally:
+            _surface_changed_callbacks.remove(_wake)
             tg.cancel_scope.cancel()
 
 

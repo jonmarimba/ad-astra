@@ -1,6 +1,5 @@
 # Naming things in code
-Naming things is hard and it's important to get it PERFECTLY RIGHT
-We're talking about variables, constants, method names, functions, classes, modules, structs, enumerations, enumeration cases, source file names, etc
+Naming things is hard and it's important to get it PERFECTLY RIGHT. We're talking about variables, constants, method names, functions, classes, modules, structs, enumerations, enumeration cases, source file names, etc.
 - Poor naming leads to misinterpretations and mistakes
 
 ## Brevity -vs- Clarity
@@ -13,7 +12,7 @@ We're talking about variables, constants, method names, functions, classes, modu
 
 ## Clarity at the point of use is the ONLY GOAL
 
-Clarity at the point of use is your most important goal. Entities such as methods and properties are declared only once but used repeatedly. Design APIs to make those uses clear and concise. When evaluating a design, reading a declaration is seldom sufficient; always examine a use case to make sure it looks clear in context. This means that in reading the line of code at the call site, it should be immediately obvious what the call will do, what the arguments mean, etc.. What the reader expects to happen should be what happens.
+Clarity at the point of use is your most important goal. Entities such as methods and properties are declared only once but used repeatedly. Design APIs to make those uses clear and concise. When evaluating a design, reading a declaration is seldom sufficient; always examine a use case to make sure it looks clear in context. This means that in reading the line of code at the call site, it should be immediately obvious what the call will do. It should be equally obvious what the arguments mean, etc.. What the reader expects to happen should be what happens.
 
 Consider these examples:
 
@@ -145,7 +144,7 @@ class ProductionLine {
 }
 ```
 
-If the type is so tightly bound to its protocol constraint that the protocol name *is* the role, avoid collision by appending `Protocol` to the protocol name:
+Sometimes the type is so tightly bound to its protocol constraint that the protocol name *is* the role. In that case, avoid collision by appending `Protocol` to the protocol name:
 ```swift
 protocol Sequence {
   associatedtype Iterator : IteratorProtocol
@@ -178,8 +177,7 @@ AudioUnit.instantiate(
 
 ### Example 7 - Factory methods
 
-Begin names of factory methods with "make", like "x.makeIterator()".
-The first argument to initializer and factory methods should *not* form a phrase starting with the base name
+Begin names of factory methods with "make", like "x.makeIterator()". The first argument to initializer and factory methods should *not* form a phrase starting with the base name.
 
 For example, the first arguments to these calls do not read as part of the same phrase as the base name (this is good):
 ```swift

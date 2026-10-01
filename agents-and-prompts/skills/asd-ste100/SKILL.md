@@ -54,4 +54,4 @@ Read every sentence aloud. If a sentence requires a second pass to understand, s
 
 Run `.astra/check-prose/check-prose.js <file>` over the draft. It flags sentences over 25 words, banned vocabulary, bold-label fragments, hard-wrapped paragraphs, and speech-act headings. It exits non-zero when it flags anything.
 
-The rules live beside it in `.astra/check-prose/rules.json` and are data, not code. Add a word there rather than editing the checker. A repo may extend the rules without forking them by adding `.check-prose.json` at its root. If the checker is not present, the repo does not have the tool installed — install it from astra rather than writing a local copy, because a local copy is exactly the drift this arrangement exists to end.
+The rules live beside it in `.astra/check-prose/rules.json` and are data, not code. Add a word there rather than editing the checker. A repo may extend the rules without forking them by adding `.check-prose.json` at its root. If the checker is not present, the repo does not have the tool installed. Install it from astra rather than writing a local copy, because a local copy is exactly the drift this arrangement exists to end.

@@ -32,16 +32,17 @@ assert_eq "- Who|- The Life|- The Work|" "$toc" "TOC ordered by prefix, not file
 
 # ---- no-silent-loss: an empty or unindexable section must FAIL the build ----
 : > "$SRC/30_broken.md"   # empty
-red "empty section fails the build (no silent hole)" "$BB" "$SRC" --out "$SB/b2.md"
+red "empty section fails the build (no silent hole)" 1 "is EMPTY — refusing to build" "$BB" "$SRC" --out "$SB/b2.md"
 assert_no_file "$SB/b2.md" "no partial bio written when a section was empty"
 printf 'no heading here at all\n' > "$SRC/30_broken.md"   # non-empty, but no '# '
-red "section with no top-level heading fails (can't index it)" "$BB" "$SRC" --out "$SB/b3.md"
+red "section with no top-level heading fails (can't index it)" 1 "has no top-level '# Heading' — can't index it" "$BB" "$SRC" --out "$SB/b3.md"
 rm "$SRC/30_broken.md"
 
 # ---- RED controls ----
-red "missing --out must fail" "$BB" "$SRC"
-red "missing sections dir must fail" "$BB" "$SB/nope" --out "$SB/b4.md"
-red "a dir with no NN_ section files must fail" bash -c "mkdir -p '$SB/empty' && '$BB' '$SB/empty' --out '$SB/b5.md'"
-red "unknown flag must fail" "$BB" "$SRC" --out "$SB/b6.md" --frobnicate
+red "missing --out must fail" 64 "--out FILE is required" "$BB" "$SRC"
+red "missing sections dir must fail" 1 "no such sections dir" "$BB" "$SB/nope" --out "$SB/b4.md"
+mkdir -p "$SB/empty"
+red "a dir with no NN_ section files must fail" 1 "no NN_*.md section files" "$BB" "$SB/empty" --out "$SB/b5.md"
+red "unknown flag must fail" 64 "unknown flag '--frobnicate'" "$BB" "$SRC" --out "$SB/b6.md" --frobnicate
 
 finish

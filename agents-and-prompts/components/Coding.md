@@ -13,7 +13,7 @@
 Fallbacks are another word for silent defaults, and we usually don't want them.
 - In most cases, we want the error - to be handled or surfaced as appropriate and feasible.
 - If the fallback would only get exercised as a result of a code bug, we don't want it -- we want the error
-- If the fallback is to protect against an API call failing, unless it's a situation where it would make sense to show cached data anyway, we probably don't want a fallback for that failure either.
+- If the fallback is to protect against an API call failing, we probably don't want a fallback for that failure either. The exception is a situation where it would make sense to show cached data anyway.
 
 ## Multiple Interacting Booleans
 When you've got multiple interacting Boolean values, THINK: Is this a place you should be using an enum instead?

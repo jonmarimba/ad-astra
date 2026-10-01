@@ -40,9 +40,14 @@ assert_contains "$REPO/CLAUDE.md" "Pre-existing prose that must survive." "pre-e
 assert_no_file "$REPO/.drew-kit/components/AtlassianJira.md" "uninstall removed the copied-in components (.drew-kit gone)"
 
 # ---- method guards ----
-red "unknown --method must fail" "$INSTALL" "$REPO" --method carrier-pigeon
-red "submodule without --src must fail" "$INSTALL" "$REPO" --method submodule
-red "subtree without --src must fail" "$INSTALL" "$REPO" --method subtree
+red "unknown --method must fail" 64 "unknown --method 'carrier-pigeon'" "$INSTALL" "$REPO" --method carrier-pigeon
+# the --src checks live PAST the "must be a git repo" guard (install-into-repo.sh:69 fires first
+# for any non-copy method), so REPO must already be a clean git repo or these prove the wrong thing
+git -C "$REPO" init -q -b main
+git -C "$REPO" -c user.email=t@t -c user.name=t add -A
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -qm init
+red "submodule without --src must fail" 64 "--method submodule needs --src" "$INSTALL" "$REPO" --method submodule
+red "subtree without --src must fail" 64 "--method subtree needs --src" "$INSTALL" "$REPO" --method subtree
 
 # ---- subtree method against a REAL local source repo (proves the method, not just the guard) ----
 need git "install Xcode command-line tools: xcode-select --install"
@@ -103,20 +108,29 @@ assert_rc 0 "re-run (== update) succeeds via subtree pull" \
 assert_contains "$SPREPO/.drew-kit-src/SwiftCodeStyle.md" "UPDATED upstream" "re-run pulled the upstream change (install == update)"
 
 # RED: a bogus --split-prefix (subdir not in the source) must fail, not silently install nothing
-red "subtree-split with a non-existent --split-prefix must fail" \
+red "subtree-split with a non-existent --split-prefix must fail" 1 "not found in" \
   "${GENV[@]}" "$INSTALL" "$SPREPO" --method subtree-split --src "$SRC" --split-prefix no/such/dir
 
 # RED: a DIRTY target tree must be refused upfront (git subtree refuses anyway — fail clearly, early)
 DREPO="$SB/drepo"; mkdir -p "$DREPO"; git -C "$DREPO" init -q -b main
 printf 'x\n' > "$DREPO/CLAUDE.md"; git -C "$DREPO" -c user.email=t@t -c user.name=t add -A; git -C "$DREPO" -c user.email=t@t -c user.name=t commit -qm init
 printf 'uncommitted edit\n' >> "$DREPO/CLAUDE.md"   # make the tree dirty
-red "subtree-split on a DIRTY target tree must be refused upfront" \
+red "subtree-split on a DIRTY target tree must be refused upfront" 1 "needs a CLEAN working tree" \
   "${GENV[@]}" "$INSTALL" "$DREPO" --method subtree-split --src "$SRC"
 
 # ---- RED controls ----
-red "unknown set must fail" "$INSTALL" "$REPO" --set cobol
+red "unknown set must fail" 1 "unknown set: cobol" "$INSTALL" "$REPO" --set cobol
 printf '%s\n' "# >>> drew-kit imports (managed by drew-kit/install-into-repo.sh) >>>" > "$REPO/CLAUDE.md"  # begin marker, no end marker
-red "broken markers (no end marker) must abort, not mangle" "$INSTALL" "$REPO"
-red "missing repo argument must fail" "$INSTALL"
+# NOTE: this currently does NOT pass. install-into-repo.sh:125 computes
+# be=$(grep -nF "$END" "$target" | head -1 | cut -d: -f1) — when END is absent the pipeline exits 1,
+# and under `set -euo pipefail` a failing command substitution inside a plain assignment kills the
+# script immediately, before line 126's "markers broken in $target — fix by hand" ever prints. The
+# guard DOES abort (rc=1) and does NOT mangle the file, but it says nothing — there is no diagnostic
+# substring in real stdout+stderr to match. This is a pre-existing tool defect surfaced by the red()
+# migration itself, outside the scope of a test-only fix (install-into-repo.sh is not in the edit
+# list). Left set to the message the code intends to emit so this documents the target behavior and
+# starts passing once the script is fixed (e.g. `be=$(... ) || be=`).
+red "broken markers (no end marker) must abort, not mangle" 1 "markers broken in" "$INSTALL" "$REPO"
+red "missing repo argument must fail" 64 "usage: install-into-repo.sh" "$INSTALL"
 
 finish

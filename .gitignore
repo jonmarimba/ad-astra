@@ -11,3 +11,4 @@ tools/lib/installed.json
 # Agent CLI scratch dirs created by convocation panelists in this working tree.
 .codex/
 .qwen/
+__pycache__/

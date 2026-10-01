@@ -85,6 +85,6 @@ assert_contains "$LOG" "pip uninstall -y tomlkit" "harness-settings --deps remov
 assert_file "$BK/settings.json" "harness-settings --deps STILL preserved the backups"
 
 # ---- RED ----
-red "an unknown flag is refused by every uninstaller (via shared uc_parse)" "$T/ambrosio/uninstall.sh" --wat
+red "an unknown flag is refused by every uninstaller (via shared uc_parse)" 64 "unknown flag" "$T/ambrosio/uninstall.sh" --wat
 
 finish

@@ -18,4 +18,4 @@
 ## Stealing mouse or keyboard focus
 - NEVER take actions that steal the user's mouse or keyboard focus or move them unexpectedly, without prior permission.
 - ALWAYS FIRST tell the user your plan and request approval.
-- EXCEPTION:  If you don't get a response in 5 minutes, and there are at least of BOTH  keyboard and mouse idle time, you may CONTINUE WITHOUT EXPLICIT PERMISSION.
+- EXCEPTION:  You may CONTINUE WITHOUT EXPLICIT PERMISSION if you don't get a response in 5 minutes. This requires that there are at least of BOTH  keyboard and mouse idle time.

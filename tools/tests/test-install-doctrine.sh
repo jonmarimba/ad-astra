@@ -45,10 +45,10 @@ assert_contains "$REPO/CLAUDE.md" "doctrine:geo-evidence" "OTHER slug survived t
 assert_contains "$REPO/CLAUDE.md" "keep this prose." "pre-existing prose still intact"
 
 # ---- RED ----
-red "missing --slug must fail" "$INS" "$REPO" "$DOC"
-red "path-shaped slug must fail (../ escape)" "$INS" "$REPO" "$DOC" --slug "../evil"
-red "slug with slash must fail" "$INS" "$REPO" "$DOC" --slug "a/b"
-red "missing doctrine file must fail" "$INS" "$REPO" "$SB/nope.md" --slug x
-red "missing repo must fail" "$INS" "$SB/norepo" "$DOC" --slug x
+red "missing --slug must fail" 64 "usage: install-doctrine.sh" "$INS" "$REPO" "$DOC"
+red "path-shaped slug must fail (../ escape)" 64 "bad --slug '../evil'" "$INS" "$REPO" "$DOC" --slug "../evil"
+red "slug with slash must fail" 64 "bad --slug 'a/b'" "$INS" "$REPO" "$DOC" --slug "a/b"
+red "missing doctrine file must fail" 1 "no such doctrine file" "$INS" "$REPO" "$SB/nope.md" --slug x
+red "missing repo must fail" 1 "no such repo" "$INS" "$SB/norepo" "$DOC" --slug x
 
 finish

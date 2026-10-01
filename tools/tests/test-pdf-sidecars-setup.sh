@@ -35,7 +35,7 @@ exit 0
 EOF
 chmod +x "$B/.git/hooks/pre-commit"
 cp "$B/.git/hooks/pre-commit" "$SB/B.orig"
-red "foreign PDF hook + no mode: setup must REFUSE" "$KB/setup.sh"
+red "foreign PDF hook + no mode: setup must REFUSE" 2 "Not touching it" "$KB/setup.sh"
 cmp -s "$SB/B.orig" "$B/.git/hooks/pre-commit" && pass "refusal left the foreign hook byte-identical" || fail "guarded refusal MODIFIED the foreign hook"
 assert_rc 0 "coexist mode succeeds" "$KB/setup.sh" --coexist
 HOOK_B="$B/.git/hooks/pre-commit"
@@ -63,6 +63,6 @@ assert_contains "$HOOK_B" "generate_pdf_sidecars.sh" "foreign content survived s
 git -C "$B" config jsutils.path >/dev/null 2>&1 && fail "jsutils.path not unset by subtract" || pass "jsutils.path unset by subtract"
 
 # ---- RED control ----
-red "unknown option must fail" "$KA/setup.sh" --frobnicate
+red "unknown option must fail" 64 "unknown option" "$KA/setup.sh" --frobnicate
 
 finish

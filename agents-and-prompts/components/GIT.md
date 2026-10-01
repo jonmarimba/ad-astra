@@ -20,13 +20,13 @@
 
 ### Bitbucket
 - My username / profile is "drewster77" (https://bitbucket.org/drewster77)
-- I am no longer creating new repos in bitbucket. Anything we actively touch in bitbucket should probably be migrated to github. Ask the user. The general way to migrate is: 1) checkout and pull EVERYTHING - all commits, branches, tags, etc. from the old bitbucket repo. 2) determine if the existing repo is a public or private one. 3) decide if we will rename the slug. New slugs are generally being "named-like-this", rather than being "NamedLikeThis". 4) Use `gh` to create the new repo with the new slug name and the appropriate public/private state. 5) If it is public, be sure to `touch __PUBLIC_REPO` in the repo root.6) Add the new remote to the local checkout repo, using its ssh URL (not https). 7) Push all to new repo. 8) Rename the old bitbucket repo by prefixing its name with "do_not_use_". So for example, if the old repo was named "NCCUserFeedbackKit", it should be renamed "do_not_use_NCCUserFeedbackKit" on bitbucket, and the new Github repo should be named "ncc-user-feedback-kit". 9) Remove the reference to the old remove from the local repo. 10) Summarize everything to the user.
+- I am no longer creating new repos in bitbucket. Anything we actively touch in bitbucket should probably be migrated to github. Ask the user. The general way to migrate is: 1) checkout and pull EVERYTHING - all commits, branches, tags, etc. from the old bitbucket repo. 2) determine if the existing repo is a public or private one. 3) decide if we will rename the slug. New slugs are generally being "named-like-this", rather than being "NamedLikeThis". 4) Use `gh` to create the new repo with the new slug name and the appropriate public/private state. 5) If it is public, be sure to `touch __PUBLIC_REPO` in the repo root. 6) Add the new remote to the local checkout repo, using its ssh URL (not https). 7) Push all to new repo. 8) Rename the old bitbucket repo by prefixing its name with "do_not_use_". So for example, if the old repo was named "NCCUserFeedbackKit", it should be renamed "do_not_use_NCCUserFeedbackKit" on bitbucket. The new Github repo should be named "ncc-user-feedback-kit". 9) Remove the reference to the old remove from the local repo. 10) Summarize everything to the user.
 
 # Repositories
 - Repos checked out in ~/cursor or ~/Documents/ncc_source are PERSONAL repos
 - Repos checked out in ~/clients or ~/Documents/clients are CLIENT repos
 - Repos checked out in ~/checkouts, ~/Downloads, or /tmp/ are random repos from random folks that I was testing out for one purpose or another
-- Any non-personal, non-client repo that I have forked for making changes is generally treated as a personal repo, and so will usually be found in ~/cursor or ~/Documents/ncc_source
+- Any non-personal, non-client repo that I have forked for making changes is generally treated as a personal repo. It will therefore usually be found in ~/cursor or ~/Documents/ncc_source
 
 ## Important Repo Rules
 - NEVER delete a repository
@@ -41,7 +41,7 @@
 - My name should always read as "Andrew Benson"
 
 ### Personal repos
-- For all personal repos on Github and Bitbucket, as well as any open-source projects I've forked into Github, my commits SHOULD appear with the email "db@nuclearcyborg.com"
+- For all personal repos on Github and Bitbucket, my commits SHOULD appear with the email "db@nuclearcyborg.com". The same applies to any open-source projects I've forked into Github
 - It's possible some older repos or old commits might have "drewbenson@netjack.com". This is fine. Do not change them.
 - New PERSONAL repos MUST be created in Github ONLY
 - ALWAYS ask if the repo should be private or public. Default to private. For public repos, run `touch __PUBLIC_REPO` in the repo root to create an obvious reminder
@@ -63,7 +63,7 @@
 ### Creating new repos
 - Use 'gh' to create them in my personal profile
 - Ask if the repo should be public or private. If unclear, make it private
-- For my personal PUBLIC repos Github (ONLY), `touch __PUBLIC_REPO` in the repository root to make sure it is always clear when we are not working in a private repo. If you find yourself in a public repo that is under my personal github profile that does not have this file, please add it.
+- For my personal PUBLIC repos Github (ONLY), `touch __PUBLIC_REPO` in the repository root. This makes sure it is always clear when we are not working in a private repo. If you find yourself in a public repo that is under my personal github profile that does not have this file, please add it.
 - All personal and client repos should be present in my SourceTree. Add them if they're not there already and pay attention to the groupings. Random checkouts that are usually in my ~/checkouts folder should also be added, but in a 'checkouts' folder
 
 ## My personal Bitbucket

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: slow — 14s measured 2026-08-31; talks to live model endpoints
 # test-model-list-parity.sh — runs the REAL, currently-installed qwen and opencode binaries
 # against a THROWAWAY COPY of Jonathan's live config (never the real $HOME/.qwen or
 # $HOME/.config/opencode — see the incident note below) and confirms the "ollamacloud/*" and

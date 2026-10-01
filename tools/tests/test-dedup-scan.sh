@@ -36,8 +36,9 @@ assert_not_contains "$R" "test_a.py" "test file excluded from candidates"
 assert_not_contains "$R" "doc.md" "non-code file excluded from candidates"
 
 # ---- RED controls ----
-red "missing graph.json must fail with the pointer to graphify-repo" "$DS" "$SB/empty-repo" --no-llm
-red "typo'd flag must error, not run with defaults" "$DS" "$REPO" --no-lm
-red "missing repo arg must fail" "$DS"
+mkdir -p "$SB/empty-repo"
+red "missing graph.json must fail with the pointer to graphify-repo" 1 "no graphify-out/graph.json — run graphify-repo first" "$DS" "$SB/empty-repo" --no-llm
+red "typo'd flag must error, not run with defaults" 64 "unknown argument '--no-lm'" "$DS" "$REPO" --no-lm
+red "missing repo arg must fail" 1 "usage: dedup-scan <repo>" "$DS"
 
 finish

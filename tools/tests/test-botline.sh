@@ -30,7 +30,7 @@ assert_dir "$BOTLINE_HOME/inbox/testbot" "inbox dir exists after register"
 assert_rc 0 "send succeeds" "$BOTLINE" send --from testbot "hello jonathan"
 assert_contains "$IMSG_SEND_LOG" "[testbot] hello jonathan" "send reached imsg tagged with the bot name"
 assert_eq "testbot" "$(cat "$BOTLINE_HOME/last_bot")" "send marked testbot as last-to-message"
-red "send without --from must fail" "$BOTLINE" send "orphan text"
+red "send without --from must fail" 1 "usage: botline send --from" "$BOTLINE" send "orphan text"
 
 # ---- dispatch first run: seeds watermark, SILENT on stdout (schd pokes on any stdout) ----
 export IMSG_FIXTURE="$SB/empty.jsonl"; : > "$IMSG_FIXTURE"
@@ -110,8 +110,8 @@ wait
 assert_file "$BOTLINE_HOME/inbox/testbot/20.msg" "interrupted message KEPT after failed delivery"
 assert_file "$BOTLINE_HOME/inbox/testbot/21.msg" "queued message behind it KEPT too"
 rm -f "$BOTLINE_HOME/inbox/testbot/"*.msg
-red "recv with a path-shaped bot name must fail" "$BOTLINE" recv --as ../escaped
-red "register with a path-shaped bot name must fail" "$BOTLINE" register --name ../evil
+red "recv with a path-shaped bot name must fail" 1 "invalid bot name" "$BOTLINE" recv --as ../escaped
+red "register with a path-shaped bot name must fail" 1 "invalid bot name" "$BOTLINE" register --name ../evil
 
 # ---- recv --peek keeps messages ----
 echo "keepme" > "$BOTLINE_HOME/inbox/testbot/11.msg"
