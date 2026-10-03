@@ -78,4 +78,19 @@ red "--log without a path is refused" 2 "--log needs a file path" "$UPD" --log
 "$UPD" --log "$LOG" >"$SB/stdout.txt" 2>/dev/null
 assert_contains "$SB/stdout.txt" "locally modified" "stdout still carries the summary"
 
+# --- RED-capable: CONCURRENT updaters log one state transition exactly once. Resolving the
+#     local edit back to the upstream content is a transition into "1 current". The test-only
+#     ASTRA_UPDATE_LOG_TEST_DELAY widens the read->append window so three parallel runs all read
+#     the same prior state before any append — without the flock they each append the block
+#     (cbase+3); the flock serializes them to exactly one (cbase+1). Separate processes without
+#     the delay do NOT reliably collide (python startup jitter spreads them out), so the delay is
+#     what makes this honestly RED-capable rather than a tautology. (ghost-openclaw on 8cf500da.)
+printf 'echo v2\n' > "$WORK/consumer/.astra/footool/foo.sh"   # == upstream -> "1 current"
+cbase="$(wc -l < "$LOG" | tr -d ' ')"
+ASTRA_UPDATE_LOG_TEST_DELAY=0.5 "$UPD" --pull --log "$LOG" >/dev/null 2>&1 &
+ASTRA_UPDATE_LOG_TEST_DELAY=0.5 "$UPD" --pull --log "$LOG" >/dev/null 2>&1 &
+ASTRA_UPDATE_LOG_TEST_DELAY=0.5 "$UPD" --pull --log "$LOG" >/dev/null 2>&1 &
+wait
+assert_eq "$((cbase + 1))" "$(wc -l < "$LOG" | tr -d ' ')" "concurrent updaters log one transition once, no duplicate blocks"
+
 finish
