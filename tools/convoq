@@ -80,7 +80,19 @@ if [ "${1:-}" = "update" ] && [ "$#" -eq 1 ]; then
   # `update` falls through to unqualified discovery, indexing an unrelated session. Verified
   # against real dirs: /Users/jonathan/.kicker -> -Users-jonathan--kicker. (ghost-openclaw
   # peer review of 775599d, then 09fa603/1569394.)
-  PROJ_DIR="$HOME/.claude/projects/$(printf '%s' "$REPO_ROOT" | sed 's#[\\/:.[:space:]]#-#g')"
+  SLUG="$(printf '%s' "$REPO_ROOT" | sed 's#[\\/:.[:space:]]#-#g')"
+  PROJ_DIR="$HOME/.claude/projects/$SLUG"
+  # Claude Code MAY trim trailing hyphen(s) from the slug. ghost-openclaw peer review
+  # (2026-10-03) flagged that a repo whose path ends in '-' would then be stored under the
+  # trimmed name while this wrapper looked in the untrimmed one. The trim behaviour is NOT
+  # verified against Claude Code's source (its bundle is 225MB minified), and guessing wrong
+  # would break the very case it tries to fix, so rather than assert a trim we fall back to
+  # the trimmed form only when the exact dir is absent. No repo on this machine ends in a
+  # hyphen, so this is purely defensive and correct whether or not Claude Code trims.
+  if [ ! -d "$PROJ_DIR" ]; then
+    TRIMMED_DIR="$HOME/.claude/projects/$(printf '%s' "$SLUG" | sed 's/-*$//')"
+    [ -d "$TRIMMED_DIR" ] && PROJ_DIR="$TRIMMED_DIR"
+  fi
   if [ -d "$PROJ_DIR" ]; then
     NEWEST="$(ls -t "$PROJ_DIR"/*.jsonl 2>/dev/null | head -1)"
     if [ -n "$NEWEST" ]; then
