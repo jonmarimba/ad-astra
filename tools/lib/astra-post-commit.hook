@@ -5,8 +5,13 @@
 # that still match what was installed, and reports anything locally modified
 # instead of overwriting it.
 #
-# Runs in the background so a commit never waits on it.
-if [ -x "$(git rev-parse --show-toplevel)/.astra/astra-update" ]; then
-  ( "$(git rev-parse --show-toplevel)/.astra/astra-update" --pull \
-      >> "$(git rev-parse --show-toplevel)/.astra/update.log" 2>&1 & ) >/dev/null 2>&1
+# Runs in the background so a commit never waits on it. The updater owns the
+# log: --log writes one dated line when the state changes and nothing when it
+# does not, so a repo that commits forty times a day does not accumulate forty
+# lines of "14 current". The log is ignored by git (the installer adds it to
+# .gitignore); it is a local record, not a tracked file.
+ROOT="$(git rev-parse --show-toplevel)"
+if [ -x "$ROOT/.astra/astra-update" ]; then
+  ( "$ROOT/.astra/astra-update" --pull --log "$ROOT/.astra/update.log" \
+      >/dev/null 2>&1 & ) >/dev/null 2>&1
 fi

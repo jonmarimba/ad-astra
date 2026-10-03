@@ -124,6 +124,24 @@ def _git_remote(path):
 
 def main():
     pull = "--pull" in sys.argv
+    # --log FILE: append one dated line per CHANGE OF STATE, never per run. A hook that
+    # runs on every commit must not leave "14 current" four hundred times in a tracked
+    # file; CocoaPods writes Podfile.lock when the pods change and is silent otherwise,
+    # and this does the same. Jonathan, 2026-10-02: "An updater shouldn't shit in its
+    # tracking file when nothing happened."
+    log_path = None
+    if "--log" in sys.argv:
+        i = sys.argv.index("--log")
+        if i + 1 >= len(sys.argv):
+            print("--log needs a file path", file=sys.stderr)
+            return 2
+        log_path = Path(sys.argv[i + 1])
+    events = []                       # every line that is not "nothing to report"
+
+    def out(msg):
+        print(msg)
+        events.append(msg)
+
     data = load()
     behind = modified = current = missing = 0
 
@@ -131,20 +149,20 @@ def main():
         src_root, src_note = resolve_source(meta.get("source", ""),
                                             meta.get("source_remote"))
         if src_root is None:
-            print(f"  SOURCE GONE  {tool}  (recorded {meta.get('source')!r}; no "
+            out(f"  SOURCE GONE  {tool}  (recorded {meta.get('source')!r}; no "
                   f"$ASTRA_SOURCE, no sibling clone). Set ASTRA_SOURCE=<path to the "
                   f"source checkout> or clone it beside this repo.")
             missing += 1
             continue
         if src_note:
-            print(f"  note: {tool} source{src_note}")
+            out(f"  note: {tool} source{src_note}")
         src_dir = src_root / "tools" / tool
         dest_dir = HERE / tool
 
         # A tool whose files all carry explicit paths need not have a tools/<tool> directory.
         if not src_dir.is_dir() and not meta.get("paths"):
             # The source checkout exists but no longer carries this tool.
-            print(f"  SOURCE GONE  {tool}  (looked in {src_dir})")
+            out(f"  SOURCE GONE  {tool}  (looked in {src_dir})")
             missing += 1
             continue
 
@@ -164,17 +182,17 @@ def main():
             upstream, live = sha(src), sha(dest)
 
             if upstream is None:
-                print(f"  SOURCE GONE  {tool}/{fname}")
+                out(f"  SOURCE GONE  {tool}/{fname}")
                 missing += 1
             elif live is None:
-                print(f"  MISSING      {tool}/{fname} — reinstall the tool")
+                out(f"  MISSING      {tool}/{fname} — reinstall the tool")
                 missing += 1
             elif live == upstream:
                 current += 1
             elif live != installed_sha:
                 # Diverged from what we put here. Could be a deliberate local
                 # change or an accident; either way it is not ours to discard.
-                print(f"  LOCAL EDITS  {tool}/{fname} — differs from what was "
+                out(f"  LOCAL EDITS  {tool}/{fname} — differs from what was "
                       f"installed; not touching it")
                 modified += 1
             elif pull:
@@ -182,10 +200,10 @@ def main():
                 shutil.copy2(src, tmp)
                 os.replace(tmp, dest)       # atomic: never a truncated tool
                 meta["files"][fname] = upstream
-                print(f"  updated      {tool}/{fname}")
+                out(f"  updated      {tool}/{fname}")
                 behind += 1
             else:
-                print(f"  BEHIND       {tool}/{fname} — run .astra/astra-update --pull")
+                out(f"  BEHIND       {tool}/{fname} — run .astra/astra-update --pull")
                 behind += 1
 
     if pull and behind:
@@ -198,7 +216,26 @@ def main():
         parts.append(f"{modified} locally modified")
     if missing:
         parts.append(f"{missing} missing")
-    print(", ".join(parts))
+    summary = ", ".join(parts)
+    print(summary)
+
+    if log_path is not None:
+        # Write only when the state changed: something was updated, flagged or lost, or the
+        # summary differs from the last one logged. A quiet run leaves the file untouched.
+        last = None
+        try:
+            for line in log_path.read_text().splitlines():
+                if line[:1].isdigit():
+                    last = line.split("  ", 1)[1] if "  " in line else line
+        except OSError:
+            pass
+        if events or summary != last:
+            import datetime
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            with log_path.open("a") as fh:
+                fh.write(f"{stamp}  {summary}\n")
+                for e in events:
+                    fh.write(f"{e}\n")
 
     # Nonzero only for things a human must act on. Being behind is not a
     # failure when --pull just fixed it.

@@ -135,3 +135,10 @@ if [ ! -f "$POST" ]; then
   chmod +x "$POST"
   echo "installed post-commit updater"
 fi
+# The updater's log is a local record and must not be tracked: a tracked log that the
+# post-commit hook appends to dirties the tree after every commit, forever.
+IGN="$TARGET/.gitignore"
+if ! grep -qxF '.astra/update.log' "$IGN" 2>/dev/null; then
+  printf '%s\n' '.astra/update.log' >> "$IGN"
+  echo "ignored .astra/update.log"
+fi
