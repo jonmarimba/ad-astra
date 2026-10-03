@@ -62,6 +62,15 @@ printf 'echo mine\n' > "$WORK/consumer/.astra/footool/foo.sh"
 "$UPD" --pull --log "$LOG" >/dev/null 2>&1
 assert_contains "$LOG" "LOCAL EDITS" "a locally modified file is recorded"
 
+# --- RED-capable: a PERSISTENT local edit logs ONCE, not on every run. The old
+#     `if events or summary != last` re-appended an identical LOCAL EDITS block each run,
+#     because the event is regenerated while the condition holds (ghost-openclaw on d9dd98b0).
+after_edit="$(wc -l < "$LOG" | tr -d ' ')"
+"$UPD" --pull --log "$LOG" >/dev/null 2>&1
+"$UPD" --pull --log "$LOG" >/dev/null 2>&1
+"$UPD" --pull --log "$LOG" >/dev/null 2>&1
+assert_eq "$after_edit" "$(wc -l < "$LOG" | tr -d ' ')" "a persistent local edit does not re-log on every run"
+
 # --- RED control: --log with no path is refused, rc 2, and says so ---
 red "--log without a path is refused" 2 "--log needs a file path" "$UPD" --log
 

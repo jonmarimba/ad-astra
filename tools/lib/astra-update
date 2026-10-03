@@ -222,14 +222,25 @@ def main():
     if log_path is not None:
         # Write only when the state changed: something was updated, flagged or lost, or the
         # summary differs from the last one logged. A quiet run leaves the file untouched.
-        last = None
+        # Edge-triggered: write only when the FULL state — the summary AND its detail lines —
+        # differs from the LAST entry logged. Comparing the summary alone misses a changed set
+        # of flagged files at an unchanged count; keying on `events` being non-empty (the old
+        # bug) re-appended an identical block on EVERY run while a LOCAL EDITS / SOURCE GONE /
+        # MISSING condition persisted, because those events are regenerated each run. A dated
+        # line (summary) begins with a digit; detail lines begin with spaces, so they parse apart
+        # cleanly. (ghost-openclaw peer review of d9dd98b0; reproduced 2026-10-02: log grew every run.)
+        last_summary = None
+        last_events = []
         try:
             for line in log_path.read_text().splitlines():
-                if line[:1].isdigit():
-                    last = line.split("  ", 1)[1] if "  " in line else line
+                if line[:1].isdigit() and "  " in line:
+                    last_summary = line.split("  ", 1)[1]
+                    last_events = []
+                elif last_summary is not None:
+                    last_events.append(line)
         except OSError:
             pass
-        if events or summary != last:
+        if summary != last_summary or events != last_events:
             import datetime
             stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
             with log_path.open("a") as fh:
