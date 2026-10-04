@@ -32,7 +32,9 @@ esac; done
 [ -n "$NAME" ] && [ -n "$REPO" ] && [ -n "$FILES" ] || { echo "usage: convene.sh --name X --repo D --files '...' [--convoq 'a|b'] [--ollama-model id]" >&2; exit 64; }
 [ -d "$REPO" ] || { echo "no such repo: $REPO" >&2; exit 1; }
 OUT="${OUT:-$REPO/.convocation}"; mkdir -p "$OUT"
-CONVOQ_BIN="${CONVOQ_BIN:-$HOME/svnCheckouts/js-project-GhOST/tools/convoq}"
+# Default to astra's OWN convoq (resolved relative to this script), never a GhOST checkout — ad
+# astra must not depend on GhOST existing on the machine (it runs on the M5 beside other robots).
+CONVOQ_BIN="${CONVOQ_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/convoq}"
 if [ -n "${CONVOQ:-}" ] && [ ! -x "$CONVOQ_BIN" ]; then
   echo "convene: convoq wrapper not executable at $CONVOQ_BIN" >&2
   echo "convene: convoq-first is doctrine; refusing to run a convocation blind." >&2
