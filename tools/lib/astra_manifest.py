@@ -208,8 +208,10 @@ def hooks_dir(repo):
 def strip_block(text, begin, end):
     if begin not in text:
         return text
-    pat = re.compile(r"\n?" + re.escape(begin) + r".*?" + re.escape(end) + r"\n?", re.S)
-    return pat.sub("\n", text, count=1)
+    pat = re.compile(r"\n*" + re.escape(begin) + r".*?" + re.escape(end) + r"\n?", re.S)
+    out = pat.sub("\n", text, count=1)
+    # Leave the file as it was before the block went in: no stray blank lines.
+    return out.rstrip("\n") + "\n" if out.strip() else ""
 
 
 def wire_hooks(repo, on=True):

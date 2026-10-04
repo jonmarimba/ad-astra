@@ -148,6 +148,12 @@ out="$("$R/.astra/astra-update" 2>&1)"
 echo "$out" | grep -q "SOURCE GONE" && ok "an explicit status check still reports it" || bad "explicit status hid the missing source"
 (cd "$R" && sh .git/hooks/post-commit); [ $? -eq 0 ] && ok "hook exits 0 without astra" || bad "hook failed without astra"
 
+echo "== 3c2. Add then remove leaves .gitignore byte-identical =="
+new_repo
+printf 'node_modules/\n' > "$R/.gitignore"; cp "$R/.gitignore" "$SCRATCH/gi.before"
+"$ASTRA" add check-prose --into "$R" >/dev/null 2>&1; "$ASTRA" remove check-prose --into "$R" >/dev/null 2>&1
+cmp -s "$SCRATCH/gi.before" "$R/.gitignore" && ok ".gitignore restored exactly" || bad ".gitignore changed by add+remove: $(od -c "$R/.gitignore" | tail -2 | head -1)"
+
 echo "== 3d. Reinstalling a doctrine leaves CLAUDE.md byte-identical =="
 new_repo
 printf '# Repo\n\nintro\n' > "$R/CLAUDE.md"
