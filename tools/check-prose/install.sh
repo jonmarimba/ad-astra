@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo
 # check-prose — install the prose checker into a given repo.
 #
 # Installs check-prose.js AND rules.json together. The rules are DATA and travel

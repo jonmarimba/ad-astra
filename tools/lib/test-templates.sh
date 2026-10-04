@@ -12,20 +12,24 @@ command -v jq >/dev/null || { echo "MISSING DEPENDENCY: jq"; exit 1; }
 T="$(mktemp -d)/repo"; git clone --quiet ~/svnCheckouts/js-llmKicker "$T" 2>/dev/null || { echo "clone failed"; exit 1; }
 fail=()
 
-python3 "$A/tools/lib/template.py" install swift-ios --into "$T" >/dev/null 2>&1
+iout="$(python3 "$A/tools/lib/template.py" install swift-ios --into "$T" 2>&1)"
 
 # swift-ios carries the code-quality set (INVENTORY item 5: "an edit to one JSON file,
 # not a system to build" — plus the member installers that edit required).
 [ -f "$T/.claude/skills/ponytail/SKILL.md" ] || fail+=("swift-ios did not install the ponytail skill")
 [ -f "$T/.astra/dedup-scan/dedup-scan" ] || fail+=("swift-ios did not install dedup-scan")
-command -v periphery >/dev/null 2>&1 || fail+=("swift-ios did not ensure periphery is available")
+# periphery is a machine-level tool (a brew formula). A repo install names it
+# and says how to get it, and never runs brew itself (2026-10-04).
+echo "$iout" | grep -q "MACHINE periphery" || fail+=("swift-ios did not report periphery as a machine dependency")
 
 python3 "$A/tools/lib/template.py" install kicker-dev --into "$T" >/dev/null 2>&1
 out="$(python3 "$A/tools/lib/template.py" uninstall kicker-dev --into "$T" 2>&1)"
 rc=$?
 after="$(jq -r '.mcpServers|keys|join(",")' "$T/.mcp.json" 2>/dev/null)"
 
-for need in xcode mac-control-mcp XcodeBuildMCP ios-simulator mobile-mcp; do
+# swift-ios's MCP servers since 2026-09-01: the combined Xcode aggregator,
+# mac-control (shared with kicker-dev, so it must be KEPT) and the simulator.
+for need in xcode-combined mac-control-mcp ios-simulator; do
   echo "$after" | grep -q "$need" || fail+=("swift-ios lost $need after uninstalling an overlapping template")
 done
 echo "$after" | grep -q kickerd && fail+=("kickerd survived its own template's uninstall")

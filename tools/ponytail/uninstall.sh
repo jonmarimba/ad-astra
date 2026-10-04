@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# uninstall.sh — remove the ponytail skills from one repo. The inverse the installer's
-# own header documents: rm -rf <repo>/.claude/skills/ponytail (and ponytail-audit).
+# astra-scope: repo
+# uninstall.sh — the ponytail and ponytail-audit skills (vendored from upstream, MIT), removed from <repo> along with its manifest entry.
+# Generated on the shared pattern (2026-10-04): every per-repo tool installs
+# through astra_place/astra_place_at and uninstalls through astra_remove, so
+# its files are tracked in .astra/manifest.json, updated by the post-commit
+# hook, and gone for good once uninstalled.
 set -euo pipefail
-REPO=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --into) REPO="${2:-}"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-[ -n "$REPO" ] || { echo "usage: uninstall.sh --into <repo>" >&2; exit 64; }
-[ -d "$REPO" ] || { echo "uninstall.sh: no such directory: $REPO" >&2; exit 66; }
-rm -rf "$REPO/.claude/skills/ponytail" "$REPO/.claude/skills/ponytail-audit"
-echo "removed ponytail skills from $REPO/.claude/skills"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/astra-install.sh"
+astra_target "$@"
+astra_remove ponytail

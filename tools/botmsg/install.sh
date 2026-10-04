@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo
 # botmsg — install into a repo so any bot working there can text a human.
 #
 #   ./install.sh                  dependencies only
@@ -32,7 +33,10 @@ esac
 
 . "$HERE/../lib/astra-install.sh"
 astra_target "$@"
-install_deps
+# --into places this repo's files only. Machine dependencies install when this
+# script runs with no arguments, so adding a tool to a repo never runs brew or
+# uv as a side effect (2026-10-04).
+echo "note: machine dependencies are not installed by --into; run $0 with no arguments once per machine."
 astra_place botmsg botmsg
 chmod +x "$TARGET/.astra/botmsg/botmsg"
 

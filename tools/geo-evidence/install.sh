@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: machine
 # install.sh — geo-evidence deps: osxphotos (Photos-library query/export) + exiftool. Which-first.
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"

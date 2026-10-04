@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # kickerd — install ONE MCP server, into a given repo.
 #
 # The kicker daemon's own MCP surface.

@@ -1,4 +1,5 @@
 #!/bin/bash
+# astra-scope: repo-config
 # install.sh — install claude-safety-hooks either into a target repo (--into) or into the
 # user's GLOBAL Claude config (--global), wiring them into PreToolUse/Bash (merged
 # additively, never clobbering existing hooks).

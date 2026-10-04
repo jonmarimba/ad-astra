@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
+# astra-scope: repo
 # install.sh — convocation agents. RULE: check for an existing install FIRST (any method),
 # and only ever install via the SAME method this environment already uses — never a second
 # copy through a different package manager.
 #   claude = npm -g @anthropic-ai/claude-code   codex = npm -g @openai/codex   qwen = brew qwen-code
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+
+# --into <repo> installs the per-repo piece ONLY: convocation's doctrine. It
+# never installs machine software, so `astra add base` in a repo cannot run
+# npm or brew as a side effect (2026-10-04). Run with no arguments to check
+# and install the three CLIs on this machine.
+INTO=""; want_into=0
+for a in "$@"; do
+  if [ "$want_into" = 1 ]; then INTO="$a"; want_into=0; continue; fi
+  [ "$a" = "--into" ] && want_into=1
+done
+if [ -n "$INTO" ]; then
+  HERE="$(cd "$(dirname "$0")" && pwd)"
+  exec "$HERE/../lib/install-doctrine.sh" "$INTO" "$HERE/convocation-doctrine.md" --slug convocation
+fi
 
 have() {  # present anywhere on PATH? report where + how it resolves, and skip install
   local p; p="$(command -v "$1" 2>/dev/null)" || return 1
@@ -28,13 +43,4 @@ done
 
 # --into <repo>: also install convocation's DOCTRINE (convoq-first + mix-brands) into that repo's
 # instruction files, so the capability travels with the rules for using it there.
-INTO=""; want_into=0
-for a in "$@"; do
-  if [ "$want_into" = 1 ]; then INTO="$a"; want_into=0; continue; fi
-  [ "$a" = "--into" ] && want_into=1
-done
-if [ -n "$INTO" ]; then
-  HERE="$(cd "$(dirname "$0")" && pwd)"
-  "$HERE/../lib/install-doctrine.sh" "$INTO" "$HERE/convocation-doctrine.md" --slug convocation
-fi
 exit 0

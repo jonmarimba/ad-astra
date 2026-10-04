@@ -42,12 +42,18 @@ Each repo answers for itself. `.astra/manifest.json` records which templates the
 
 ## How updates happen
 
-`.astra/astra-update --pull`, run inside your repo, asks this repo whether anything moved on and updates in place. It only touches files that are still exactly what the installer wrote; anything you edited locally is reported, never overwritten. A post-commit hook runs it in the background on every commit, so a repo you commit to stays current without anyone thinking about it. If the hook is missing, install it:
+`.astra/astra-update --pull`, run inside your repo, asks this repo whether anything moved on and updates in place. It only touches files that are still exactly what the installer wrote; anything you edited locally is reported, never overwritten. Every install wires a post-commit and a post-merge hook that run it in the background, so a repo you commit to or pull into stays current without anyone thinking about it.
+
+The whole interface is one command, run inside the repo:
 
 ```
-cp js-db-ad-astra/tools/lib/astra-post-commit.hook YourApp/.git/hooks/post-commit
-chmod +x YourApp/.git/hooks/post-commit
+~/svnCheckouts/js-db-ad-astra/tools/astra add writing        # a set from templates.json, or a single tool
+~/svnCheckouts/js-db-ad-astra/tools/astra remove humanizer   # gone for good; no update brings it back
+~/svnCheckouts/js-db-ad-astra/tools/astra status
+~/svnCheckouts/js-db-ad-astra/tools/astra list
 ```
+
+Git does not clone hooks, so on a new machine or a fresh clone run `astra sync` once. It wires the hooks in every repo under `~/svnCheckouts` that has astra tools. A repo never needs astra to work: installed tools are ordinary committed files, and the hook stays silent when no astra checkout is present. Tools marked `# astra-scope: machine` (brew formulas, global CLIs) are never installed by a repo install; a set that names one says so and gives the command.
 
 ## How bots know their tooling is current
 

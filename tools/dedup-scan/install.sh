@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo
 # install.sh — place dedup-scan into a repo's .astra, the standard astra_place pattern.
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"

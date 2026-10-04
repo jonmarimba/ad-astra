@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: machine
 # install.sh — full setup: deps, the TCC-grantable app wrapper, and the launchd
 # job that keeps xcode-mcp-front running across logins (RunAtLoad, KeepAlive).
 set -euo pipefail

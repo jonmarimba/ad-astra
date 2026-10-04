@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: machine
 # axe — install the AXe CLI (cameroncooke/axe): Apple Accessibility-API driving for the
 # iOS Simulator from plain Bash. `axe describe-ui` (AX tree as text), `axe tap --id|--label`,
 # `axe type`, `axe swipe`, `axe screenshot`, `axe list-simulators`. https://www.axe-cli.com/

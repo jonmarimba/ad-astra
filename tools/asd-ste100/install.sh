@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# asd-ste100 — install the ASD-STE100 Simplified Technical English skill (sentence
-# mechanics: complete sentences, active voice, one idea per sentence) into a repo's
-# .claude/skills/. Source of truth: agents-and-prompts/skills/asd-ste100/SKILL.md.
-# Usage: ./install.sh --into <repo>
+# astra-scope: repo
+# install.sh — the ASD-STE100 skill, placed into <repo>/.claude/skills/ and recorded.
+# Generated on the shared pattern (2026-10-04): every per-repo tool installs
+# through astra_place/astra_place_at and uninstalls through astra_remove, so
+# its files are tracked in .astra/manifest.json, updated by the post-commit
+# hook, and gone for good once uninstalled.
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC="$HERE/../../agents-and-prompts/skills/asd-ste100"
-TARGET=""
-while [ $# -gt 0 ]; do case "$1" in --into) TARGET="${2:-}"; shift 2;; *) echo "asd-ste100: unknown argument: $1" >&2; exit 64;; esac; done
-[ -n "$TARGET" ] || { echo "usage: install.sh --into <repo>" >&2; exit 64; }
-[ -d "$TARGET" ] || { echo "asd-ste100: no such directory: $TARGET" >&2; exit 66; }
-mkdir -p "$TARGET/.claude/skills/asd-ste100"
-cp "$SRC/SKILL.md" "$TARGET/.claude/skills/asd-ste100/SKILL.md"
-echo "asd-ste100: installed skill -> $TARGET/.claude/skills/asd-ste100/"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/astra-install.sh"
+astra_target "$@"
+astra_place_at asd-ste100 \
+  "agents-and-prompts/skills/asd-ste100/SKILL.md:.claude/skills/asd-ste100/SKILL.md"

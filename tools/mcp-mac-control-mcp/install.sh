@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # mac-control-mcp — install ONE MCP server, into a given repo.
 #
 # Drive macOS: windows, clicks, keys, screen capture, accessibility tree.

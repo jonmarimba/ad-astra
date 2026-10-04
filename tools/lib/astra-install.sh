@@ -61,129 +61,38 @@ astra_target() {
   export TARGET
 }
 
-# Copy a tool's files into <repo>/.astra/<tool>/ and record its origin.
+# Every function below delegates to astra_manifest.py, the one writer of a
+# repo's install state (2026-10-04). Before that, this file, install-doctrine.sh
+# and a dozen hand-rolled installers each wrote the manifest their own way, or
+# not at all, and only one of them wired the updater hook.
+ASTRA_MANIFEST_PY="$ASTRA_ROOT/tools/lib/astra_manifest.py"
+
+# Copy a tool's files into <repo>/.astra/<tool>/ and record them.
+#     astra_place check-prose check-prose.js rules.json
 astra_place() {
   local tool="$1"; shift
-  local src="$ASTRA_ROOT/tools/$tool"
-  local dest="$TARGET/.astra/$tool"
-  mkdir -p "$dest"
-
-  local f
-  for f in "$@"; do
-    [ -f "$src/$f" ] || { echo "missing source file: $src/$f" >&2; exit 65; }
-    # Write beside and rename. A plain cp truncates the destination before it
-    # copies, so an interrupted install leaves a zero-length tool where a
-    # working one used to be.
-    cp "$src/$f" "$dest/$f.astra-tmp"
-    mv -f "$dest/$f.astra-tmp" "$dest/$f"
-  done
-
-  astra_record "$tool" "$@"
-  astra_vendor_updater
-  echo "installed $tool -> $dest"
+  local pairs=() f
+  for f in "$@"; do pairs+=("tools/$tool/$f:.astra/$tool/$f"); done
+  python3 "$ASTRA_MANIFEST_PY" place "$TARGET" "$tool" "${pairs[@]}"
+  python3 "$ASTRA_MANIFEST_PY" finish "$TARGET"
+  echo "installed $tool -> $TARGET/.astra/$tool"
 }
 
-# The manifest is what makes a repo self-sufficient: it knows what it has,
-# where it came from, and what it looked like when it arrived. Local
-# divergence is therefore detectable without asking astra anything.
-astra_record() {
+# Copy files to explicit places in the repo and record them. Each argument is
+# <path relative to astra>:<path relative to the repo>. For a skill under
+# .claude/skills/ or anything else that cannot live in .astra/.
+#     astra_place_at asd-ste100 agents-and-prompts/skills/asd-ste100/SKILL.md:.claude/skills/asd-ste100/SKILL.md
+astra_place_at() {
   local tool="$1"; shift
-  local manifest="$TARGET/.astra/manifest.json"
-  local dest="$TARGET/.astra/$tool"
-  # The source's git-remote identity, recorded so a cloned repo on another machine can
-  # verify a sibling-source guess is the SAME project before it feeds content in
-  # (adversarial round: an impostor sibling sharing only the basename could inject
-  # arbitrary content). Empty when the source has no remote — then no sibling fallback.
-  local src_remote
-  src_remote="$(git -C "$ASTRA_ROOT" remote get-url origin 2>/dev/null || true)"
-  ASTRA_TOOL="$tool" ASTRA_SRC="$ASTRA_ROOT" ASTRA_SRC_REMOTE="$src_remote" ASTRA_DEST="$dest" \
-  ASTRA_MANIFEST="$manifest" ASTRA_FILES="$*" python3 - <<'PY'
-import hashlib, json, os, pathlib
-
-manifest = pathlib.Path(os.environ["ASTRA_MANIFEST"])
-tool = os.environ["ASTRA_TOOL"]
-dest = pathlib.Path(os.environ["ASTRA_DEST"])
-files = os.environ["ASTRA_FILES"].split()
-
-def sha(p):
-    return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()[:16]
-
-try:
-    data = json.loads(manifest.read_text())
-except Exception:
-    data = {}
-data.setdefault("tools", {})
-# The SOURCE is recorded per-install rather than once for the file, because a
-# repo may legitimately be fed by more than one astra checkout over its life.
-entry = {
-    "source": os.environ["ASTRA_SRC"],
-    "files": {f: sha(dest / f) for f in files},
-}
-if os.environ.get("ASTRA_SRC_REMOTE"):
-    entry["source_remote"] = os.environ["ASTRA_SRC_REMOTE"]
-data["tools"][tool] = entry
-manifest.parent.mkdir(parents=True, exist_ok=True)
-tmp = manifest.with_suffix(".json.tmp")
-tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-os.replace(tmp, manifest)
-PY
+  python3 "$ASTRA_MANIFEST_PY" place "$TARGET" "$tool" "$@"
+  python3 "$ASTRA_MANIFEST_PY" finish "$TARGET"
+  echo "installed $tool -> $TARGET"
 }
 
-# Drop the puller into the repo so it can check itself without astra reaching in,
-# and record it in the manifest like any tool. Until 2026-10-01 it was copied and
-# forgotten, so every vendored copy froze at the version it arrived with and the
-# updater was the one file nothing kept current (Jonathan: "what's the point of an
-# update script that doesn't keep itself up-to-date"). The explicit src/dest paths
-# are the same mechanism doctrine files use, because the updater lives in
-# tools/lib/ rather than tools/<tool>/.
-astra_vendor_updater() {
-  local u="$TARGET/.astra/astra-update"
-  cp "$ASTRA_ROOT/tools/lib/astra-update" "$u.astra-tmp"
-  chmod +x "$u.astra-tmp"
-  mv -f "$u.astra-tmp" "$u"
-  local src_remote
-  src_remote="$(git -C "$ASTRA_ROOT" remote get-url origin 2>/dev/null || true)"
-  ASTRA_SRC="$ASTRA_ROOT" ASTRA_SRC_REMOTE="$src_remote" ASTRA_UPDATER="$u" \
-  ASTRA_MANIFEST="$TARGET/.astra/manifest.json" python3 - <<'PY'
-import hashlib, json, os, pathlib
-
-manifest = pathlib.Path(os.environ["ASTRA_MANIFEST"])
-try:
-    data = json.loads(manifest.read_text())
-except Exception:
-    data = {}
-data.setdefault("tools", {})
-entry = {
-    "source": os.environ["ASTRA_SRC"],
-    "files": {"astra-update": hashlib.sha256(
-        pathlib.Path(os.environ["ASTRA_UPDATER"]).read_bytes()).hexdigest()[:16]},
-    "paths": {"astra-update": {"src": "tools/lib/astra-update",
-                               "dest": ".astra/astra-update"}},
-}
-if os.environ.get("ASTRA_SRC_REMOTE"):
-    entry["source_remote"] = os.environ["ASTRA_SRC_REMOTE"]
-data["tools"]["astra-update"] = entry
-tmp = manifest.with_suffix(".json.tmp")
-tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-os.replace(tmp, manifest)
-PY
-}
-
-# Remove a tool and forget it. Leaves .astra/ itself alone if other tools remain.
+# Remove a tool's recorded files and its manifest entry. Once the entry is gone,
+# no automatic update can bring the tool back. Removing the last tool also
+# removes the updater, its hooks and its ignore rule.
 astra_remove() {
-  local tool="$1"
-  rm -rf "$TARGET/.astra/$tool"
-  ASTRA_TOOL="$tool" ASTRA_MANIFEST="$TARGET/.astra/manifest.json" python3 - <<'PY'
-import json, os, pathlib
-m = pathlib.Path(os.environ["ASTRA_MANIFEST"])
-try:
-    data = json.loads(m.read_text())
-except Exception:
-    raise SystemExit(0)
-data.get("tools", {}).pop(os.environ["ASTRA_TOOL"], None)
-tmp = m.with_suffix(".json.tmp")
-tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-os.replace(tmp, m)
-PY
-  echo "removed $tool from $TARGET/.astra"
+  python3 "$ASTRA_MANIFEST_PY" unplace "$TARGET" "$1"
+  python3 "$ASTRA_MANIFEST_PY" finish "$TARGET"
 }

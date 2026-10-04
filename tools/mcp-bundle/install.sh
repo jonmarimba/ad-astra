@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # mcp-bundle/install.sh — install the kicker MCP server set INTO A GIVEN REPO.
 #
 # Usage:

@@ -54,6 +54,19 @@ def load():
         return {"templates": {}}
 
 
+def lookup(templates, name):
+    """A template by name, or a single tool treated as a template of one.
+
+    So `astra add check-prose` and `astra add writing` take the same path, are
+    recorded the same way, and uninstall the same way (2026-10-04). A template
+    name wins if a tool shares it."""
+    if name in templates:
+        return templates[name]
+    if (TOOLS / name / "install.sh").exists():
+        return {"description": f"the {name} tool on its own", "tools": [name]}
+    return None
+
+
 def resolve_tools(templates, name, _stack=None):
     """The COMPOSED tool list: this template's own tools plus its member templates',
     transitively, in member-first order, deduplicated. Composition is the mechanism the
@@ -63,7 +76,7 @@ def resolve_tools(templates, name, _stack=None):
     _stack = _stack or []
     if name in _stack:
         raise ValueError("template cycle: " + " -> ".join(_stack + [name]))
-    meta = templates.get(name)
+    meta = lookup(templates, name)
     if meta is None:
         suffix = f" (member of '{_stack[-1]}')" if _stack else ""
         raise ValueError(f"no such template: {name}{suffix}")
@@ -86,13 +99,28 @@ def claimed_tools(templates, name, _stack=None):
     deleted out from under the still-installed wrapper (adversarial round #7). This is
     the claim question; resolve_tools stays strict for the install question."""
     _stack = _stack or []
-    meta = templates.get(name)
+    meta = lookup(templates, name)
     if meta is None or name in _stack:
         return set()
     claimed = set(meta.get("tools", []))
     for member in meta.get("templates", []):
         claimed |= claimed_tools(templates, member, _stack + [name])
     return claimed
+
+
+def scope(name):
+    """The `# astra-scope:` line every installer carries: repo, repo-config or
+    machine. Machine-level tools (a brew formula, a global CLI) are never run
+    by a repo install, so adding a set to a repo cannot install software on the
+    machine as a side effect (2026-10-04)."""
+    f = TOOLS / name / "install.sh"
+    try:
+        for line in f.read_text().splitlines()[:5]:
+            if line.startswith("# astra-scope:"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return "repo"
 
 
 def tool_dir(name):
@@ -245,7 +273,7 @@ def cmd_list(_):
 def cmd_show(args):
     name = args[0] if args else ""
     templates = load()["templates"]
-    meta = templates.get(name)
+    meta = lookup(templates, name)
     if not meta:
         print(f"no such template: {name}")
         return 66
@@ -274,9 +302,9 @@ def _target(args):
 def _apply(verb, args):
     name = args[0] if args and not args[0].startswith("-") else ""
     templates = load()["templates"]
-    meta = templates.get(name)
+    meta = lookup(templates, name)
     if not meta:
-        print(f"no such template: {name}", file=sys.stderr)
+        print(f"no such template or tool: {name}", file=sys.stderr)
         return 66
     try:
         member_tools = resolve_tools(templates, name)
@@ -317,9 +345,14 @@ def _apply(verb, args):
             # must not raise on an unresolvable member and abort the whole uninstall
             # mid-run, after earlier members were already removed (adversarial round #4).
             others = [n for n in installed_templates(repo) if n != name
-                      and t in claimed_tools(load()["templates"], n)]
+                      and t in claimed_tools(templates, n)]
             print(f"  KEPT    {t} — still required by: {', '.join(others)}")
             kept_n += 1
+            continue
+        if scope(t) == "machine":
+            # Named by the set, installed per machine, never by a repo install.
+            print(f"  MACHINE {t} — install once per machine: tools/{t}/install.sh")
+            ok_n += 1
             continue
         ok, why = run_tool(t, verb, repo)
         if ok:
@@ -336,6 +369,10 @@ def _apply(verb, args):
     # colloquium, codex leg — record_template ran unconditionally here.)
     if fail_n == 0:
         record_template(repo, name, add=(verb == "install"), resolved=member_tools)
+        # The record just changed, so settle the repo against it: when this was
+        # the last thing installed, the updater, hooks and manifest go too.
+        subprocess.run([sys.executable, str(TOOLS / "lib" / "astra_manifest.py"),
+                        "finish", str(repo)], check=False)
     else:
         print(f"NOT recording this {verb}: {fail_n} member(s) failed, and the record "
               f"must describe what actually happened. Fix the failure and re-run "

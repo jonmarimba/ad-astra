@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: machine
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"

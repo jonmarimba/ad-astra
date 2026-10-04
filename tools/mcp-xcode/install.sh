@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # xcode — install ONE MCP server, into a given repo.
 #
 # Apple's own Xcode MCP bridge via xcrun mcpbridge. Needs Xcode approval once.

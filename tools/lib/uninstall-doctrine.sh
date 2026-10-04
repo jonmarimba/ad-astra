@@ -22,6 +22,10 @@ for target in "$REPO/CLAUDE.md" "$REPO/AGENTS.md" "$REPO/QWEN.md"; do
   { head -n $((bs-1)) "$target"; tail -n +$((be+1)) "$target"; } > "$target.tmp" && mv "$target.tmp" "$target"
   echo "removed doctrine '$SLUG' block from $target"
 done
+# Drop the file AND its manifest entry. Deleting only the file left an entry
+# behind, so every later update reported the doctrine MISSING.
+ASTRA_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+python3 "$ASTRA_ROOT/tools/lib/astra_manifest.py" unplace "$REPO" "doctrine-$SLUG"
 [ -f "$REPO/.doctrine/$SLUG.md" ] && { rm -f "$REPO/.doctrine/$SLUG.md"; echo "removed $REPO/.doctrine/$SLUG.md"; } || true
-# drop the .doctrine dir if now empty
 rmdir "$REPO/.doctrine" 2>/dev/null || true
+python3 "$ASTRA_ROOT/tools/lib/astra_manifest.py" finish "$REPO"

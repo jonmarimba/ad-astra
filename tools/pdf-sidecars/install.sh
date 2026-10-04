@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo
 # pdf-sidecars — install the PDF text-sidecar kit into a given repo.
 #
 # Two jobs, and the previous version only did the first:
@@ -42,13 +43,22 @@ esac
 
 . "$HERE/../lib/astra-install.sh"
 astra_target "$@"
-install_deps
+# --into places this repo's files only. Machine dependencies install when this
+# script runs with no arguments, so adding a tool to a repo never runs brew or
+# uv as a side effect (2026-10-04).
+echo "note: machine dependencies are not installed by --into; run $0 with no arguments once per machine."
 # shellcheck disable=SC2086
-astra_place pdf-sidecars $KIT_FILES
+KIT_PAIRS=()
+for f in $KIT_FILES; do KIT_PAIRS+=("tools/pdf-sidecars/$f:.astra/pdf-sidecars/$f"); done
 # md2pdf resolves a bare --template NAME against ./templates/NAME.css relative to
 # its own directory, so the stylesheets have to travel with it.
-mkdir -p "$TARGET/.astra/pdf-sidecars/templates"
-cp -p "$HERE/templates/"*.css "$TARGET/.astra/pdf-sidecars/templates/" 2>/dev/null || true
+# Recorded like every other file, so a template edit in astra reaches the repo
+# and uninstall removes them (they were a bare cp until 2026-10-04).
+TPL_PAIRS=()
+for css in "$HERE"/templates/*.css; do
+  TPL_PAIRS+=("tools/pdf-sidecars/templates/$(basename "$css"):.astra/pdf-sidecars/templates/$(basename "$css")")
+done
+astra_place_at pdf-sidecars "${KIT_PAIRS[@]}" "${TPL_PAIRS[@]}"
 chmod +x "$TARGET/.astra/pdf-sidecars/"*.sh "$TARGET/.astra/pdf-sidecars/md2pdf"
 
 # ---------------------------------------------------------------------------
@@ -128,10 +138,5 @@ mv -f "$HOOK.astra-tmp" "$HOOK"
 chmod +x "$HOOK"
 echo "wired pre-commit -> .astra/pdf-sidecars/hook_pre_commit.sh"
 
-# The repo's own updater hook, so it pulls rather than astra pushing.
-POST="$HOOKS/post-commit"
-if [ ! -f "$POST" ]; then
-  cp "$HERE/../lib/astra-post-commit.hook" "$POST"
-  chmod +x "$POST"
-  echo "installed post-commit updater"
-fi
+# The updater hooks (post-commit, post-merge) are wired by astra_place above,
+# the same way for every tool; this installer no longer keeps its own copy.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # mcp-xcode-combined — point a repo at the ONE Xcode aggregator, over HTTP.
 #
 # The aggregator (tools/xcode-mcp-front, launchd job com.jonathansaggau.xcode-combined-front,

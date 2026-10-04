@@ -1,0 +1,2 @@
+Vendored from https://github.com/DietrichGebert/ponytail at 2b0ea880d461a7fcbb5388a28c3217ac71f1bc52 (MIT, see LICENSE).
+Refresh with tools/ponytail/vendor.sh; the installer copies these files, it never fetches.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: machine
 # install.sh — periphery (Swift dead-code scanner). Which-first: never a second copy.
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo
 # writing-doctrine — install Jonathan's writing doctrine (above-the-sentence rules:
 # what belongs in a document, recipient address, ask structure) as .doctrine/writing.md
 # with @-imports in CLAUDE.md/AGENTS.md. Delegates to the shared doctrine installer.

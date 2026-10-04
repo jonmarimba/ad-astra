@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # xcode-mcp-server — install ONE MCP server, into a given repo.
 #
 # Third-party Xcode server (Drew's). Runs via uvx.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: machine
 # install.sh — deps + .app build for handlebars.
 # On Andrew's machine (or any new checkout): run this once, then grant TCC
 # domains one at a time via `handlebars.sh` with no arguments to see current state.

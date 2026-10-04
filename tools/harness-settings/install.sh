@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: machine
 # install.sh — deps for harness-settings (jq + python tomlkit).
 set -euo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"

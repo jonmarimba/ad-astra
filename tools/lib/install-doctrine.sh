@@ -70,30 +70,9 @@ case "$DOC_ABS" in
   *) DOC_REL="" ;;   # doctrine from outside astra: nothing sane to record, so record nothing
 esac
 if [ -n "$DOC_REL" ]; then
-  REPO="$REPO" SLUG="$SLUG" DEST="$DEST" DOC_REL="$DOC_REL" ASTRA_ROOT="$ASTRA_ROOT" python3 - <<'PY'
-import json, os, hashlib, pathlib
-repo = pathlib.Path(os.environ["REPO"])
-slug, dest, src_rel = os.environ["SLUG"], os.environ["DEST"], os.environ["DOC_REL"]
-mpath = repo / ".astra" / "manifest.json"
-mpath.parent.mkdir(parents=True, exist_ok=True)
-try:
-    data = json.loads(mpath.read_text())
-except FileNotFoundError:
-    data = {"tools": {}}
-except Exception as e:
-    # Never overwrite a manifest we could not read — that would silently unregister every
-    # other tool in the repo.
-    raise SystemExit("install-doctrine: manifest at %s unreadable (%s); doctrine NOT registered" % (mpath, e))
-tools = data.setdefault("tools", {})
-name = "doctrine-" + slug
-fname = os.path.basename(dest)
-entry = tools.setdefault(name, {})
-entry["source"] = os.environ["ASTRA_ROOT"]
-entry.setdefault("files", {})[fname] = hashlib.sha256((repo / dest).read_bytes()).hexdigest()[:16]
-entry.setdefault("paths", {})[fname] = {"src": src_rel, "dest": dest}
-tmp = mpath.with_suffix(".json.tmp")
-tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-os.replace(tmp, mpath)
-print("registered '%s' with astra-update (%s)" % (name, dest))
-PY
+  # Same writer as every other astra install, so the doctrine updates with the
+  # rest and the hooks are wired even when it is the only thing installed.
+  python3 "$ASTRA_ROOT/tools/lib/astra_manifest.py" place "$REPO" "doctrine-$SLUG" "$DOC_REL:$DEST"
+  python3 "$ASTRA_ROOT/tools/lib/astra_manifest.py" finish "$REPO"
+  echo "registered 'doctrine-$SLUG' with astra-update ($DEST)"
 fi

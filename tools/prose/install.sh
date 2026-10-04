@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
-# prose — install the prose ORCHESTRATOR skill: runs asd-ste100, humanizer and the
-# pre-Grammarly pass in the one order that works and settles conflicts between them.
-# Ships with grammarly-prep.md. The two skills it composes are separate tools
-# (asd-ste100, humanizer) — the writing template installs all three together.
-# Usage: ./install.sh --into <repo>
+# astra-scope: repo
+# install.sh — the prose orchestrator skill, placed into <repo>/.claude/skills/ and recorded.
+# Generated on the shared pattern (2026-10-04): every per-repo tool installs
+# through astra_place/astra_place_at and uninstalls through astra_remove, so
+# its files are tracked in .astra/manifest.json, updated by the post-commit
+# hook, and gone for good once uninstalled.
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC="$HERE/../../agents-and-prompts/skills/prose"
-TARGET=""
-while [ $# -gt 0 ]; do case "$1" in --into) TARGET="${2:-}"; shift 2;; *) echo "prose: unknown argument: $1" >&2; exit 64;; esac; done
-[ -n "$TARGET" ] || { echo "usage: install.sh --into <repo>" >&2; exit 64; }
-[ -d "$TARGET" ] || { echo "prose: no such directory: $TARGET" >&2; exit 66; }
-mkdir -p "$TARGET/.claude/skills/prose"
-cp "$SRC/SKILL.md" "$SRC/grammarly-prep.md" "$TARGET/.claude/skills/prose/"
-echo "prose: installed skill (+grammarly-prep) -> $TARGET/.claude/skills/prose/"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/astra-install.sh"
+astra_target "$@"
+astra_place_at prose \
+  "agents-and-prompts/skills/prose/SKILL.md:.claude/skills/prose/SKILL.md" \
+  "agents-and-prompts/skills/prose/grammarly-prep.md:.claude/skills/prose/grammarly-prep.md"

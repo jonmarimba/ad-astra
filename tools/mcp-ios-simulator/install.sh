@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # ios-simulator — install ONE MCP server, into a given repo.
 #
 # Drive the iOS Simulator.

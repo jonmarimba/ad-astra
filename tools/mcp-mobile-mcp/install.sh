@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # mobile-mcp — install ONE MCP server, into a given repo.
 #
 # Drive physical mobile devices.

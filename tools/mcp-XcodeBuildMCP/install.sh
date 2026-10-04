@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# astra-scope: repo-config
 # XcodeBuildMCP — install ONE MCP server, into a given repo.
 #
 # Headless Xcode builds — no Xcode approval prompt.

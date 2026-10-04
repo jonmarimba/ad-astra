@@ -109,8 +109,12 @@ def resolve_source(recorded, source_remote=None):
     # repository, and a manifest that never recorded one gets no sibling fallback.
     if recorded and recorded.name and source_remote:
         sib = REPO.parent / recorded.name
-        if (sib / "tools").is_dir() and _git_remote(sib) == source_remote:
-            return sib, f" (verified sibling: its git remote matches the recorded source {source_remote})"
+        if (sib / "tools").is_dir():
+            if _git_remote(sib) == source_remote:
+                return sib, f" (verified sibling: its git remote matches the recorded source {source_remote})"
+            # A lookalike checkout is a security event, never "astra is simply
+            # not on this machine", so it is reported even from the hook.
+            return None, "REFUSED"
     return None, ""
 
 
@@ -144,6 +148,12 @@ def main():
     for tool, meta in sorted(data.get("tools", {}).items()):
         src_root, src_note = resolve_source(meta.get("source", ""),
                                             meta.get("source_remote"))
+        if src_root is None and pull and src_note != "REFUSED":
+            # No astra checkout on this machine. Astra is never a prerequisite
+            # for a repo, so a hook-driven pull has nothing to do and nothing
+            # to say; the installed files keep working as they are. An explicit
+            # status check (no --pull) still reports it below.
+            continue
         if src_root is None:
             say(f"  SOURCE GONE  {tool}  (recorded {meta.get('source')!r}; no "
                   f"$ASTRA_SOURCE, no sibling clone). Set ASTRA_SOURCE=<path to the "
