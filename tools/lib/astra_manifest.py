@@ -48,21 +48,22 @@ UPDATER_DEST = ".astra/astra-update"
 
 HOOK_BEGIN = "# >>> astra-update (managed by astra; edit outside this block) >>>"
 HOOK_END = "# <<< astra-update <<<"
-HOOK_BODY = """_astra_u="$(git rev-parse --show-toplevel 2>/dev/null)/.astra/astra-update"
-if [ -x "$_astra_u" ]; then
-  ( "$_astra_u" --pull >> "$(dirname "$_astra_u")/update.log" 2>&1 & ) >/dev/null 2>&1
+HOOK_BODY = """_astra_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -x "$_astra_root/.astra/astra-update" ]; then
+  ( "$_astra_root/.astra/astra-update" --pull --log "$_astra_root/.astra/update.log" \\
+      >/dev/null 2>&1 & ) >/dev/null 2>&1
 fi"""
 HOOK_NAMES = ("post-commit", "post-merge")
 
 # The block every hook carried before 2026-10-04, written by pdf-sidecars and by
 # hand. It is recognised and replaced, so a migrated hook never runs the
 # updater twice.
+# Both blocks hooks carried before 2026-10-04 (the plain redirect, and the
+# --log variant from 2026-10-02) start with the same comment line and end at
+# the first bare `fi`. They are recognised and replaced, so a migrated hook
+# never runs the updater twice.
 LEGACY_HOOK = re.compile(
-    r"# astra: keep this repo's vendored tools current\.\n"
-    r"(?:#.*\n)*?"
-    r"if \[ -x \"\$\(git rev-parse --show-toplevel\)/\.astra/astra-update\" \]; then\n"
-    r".*\n.*\n"
-    r"fi\n?")
+    r"# astra: keep this repo's vendored tools current\.\n(?:.*\n)*?fi(?:\n|$)")
 
 IGNORE_BEGIN = "# >>> astra (managed) >>>"
 IGNORE_END = "# <<< astra <<<"
@@ -242,6 +243,11 @@ def ignore_log(repo, on=True):
     gi = Path(repo) / ".gitignore"
     text = gi.read_text() if gi.exists() else ""
     text = strip_block(text, IGNORE_BEGIN, IGNORE_END)
+    already = re.search(r"^/?\.astra/update\.log\s*$", text, re.M)
+    if on and already:
+        on = False      # the repo ignores it already; do not add a second rule
+        if not text.strip():
+            return
     if on:
         text = text.rstrip("\n") + ("\n\n" if text.strip() else "") + \
             f"{IGNORE_BEGIN}\n{IGNORE_BODY}\n{IGNORE_END}\n"

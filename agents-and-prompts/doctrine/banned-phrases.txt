@@ -1,0 +1,129 @@
+# Banned phrases — the canonical list. One per line, case-insensitive substring.
+# Lines starting with # are comments. Blank lines ignored.
+#
+# This file exists because the list previously lived in FOUR places with four
+# different memberships — ~/.claude/CLAUDE.md, js-project-GhOST/AGENTS.md,
+# memory/feedback_crutch_words.md and memory/feedback_no_candor_disclaimers.md.
+# "delightful", "unlock" and "powerful" appeared in exactly one of them. The word
+# "honest" was banned in three and Jonathan still caught it four times in three
+# days. The 2026-08-24 instruction audit's conclusion: prose cannot hold this
+# rule, and a fifth prose copy would not hold it either. It is data now, and
+# tools/check-banned-phrases.sh is what enforces it.
+#
+# Anything added here must be a phrase that is ALWAYS wrong in GhOST's own
+# writing, never a word that is merely overused. Words that have legitimate uses
+# in quoted material or in someone else's text belong in a reviewer's judgement,
+# not in a checker.
+
+# --- candor disclaimers: they imply the default is to guess or lie ---
+honestly
+to be honest
+i'll be honest
+the honest answer
+not gonna lie
+truth be told
+in all honesty
+let me check instead of
+rather than guess
+rather than assume
+instead of assuming
+instead of guessing
+with my own eyes
+so it's real, not a guess
+i won't make this up
+rather than taking anyone's word
+rather than take anyone's word
+without taking anyone's word
+look before i answer
+we checked one thing ourselves
+checked it ourselves rather than
+ourselves rather than taking
+
+# --- LLM tells ---
+it's worth noting
+it is worth noting
+that said
+at the end of the day
+delve
+tapestry
+testament to
+crucial
+pivotal
+not just a
+seamless
+robust
+leverage
+footgun
+delightful
+unlock
+game-changer
+game changer
+best-in-class
+deep dive
+
+# --- the "matters" family ---
+# THE LIST HELD ONLY THE STOCK PHRASES, AND THE RULE IS THE WHOLE VERB. CLAUDE.md says never
+# write "matters" at all, and this section encoded six set-pieces instead — so "something that
+# matters to both reconcilers" sailed through on 2026-08-31 and Jonathan caught it by eye,
+# which is the job the file is supposed to do. Encoding the examples of a rule rather than the
+# rule is how a checker passes the thing it was written to stop.
+what matters
+why this matters
+here's why it matters
+why it matters
+this matters
+matters is
+that matters
+which matters
+it matters
+matters to
+matters more
+matters less
+matters here
+matters because
+really matters
+what actually matters
+# AND THE BARE VERB. Corrected twice now. The first pass held six stock phrases; the second
+# added compounds like "that matters" and "matters to" and STILL omitted the word alone, so
+# "Nothing matters." passed a checker enforcing a rule whose text is "Never write 'matters'".
+# Encoding progressively better examples of a rule is not encoding the rule. Found by
+# GhOST-OpenClaw against e61bd4e0.
+matters
+
+# --- finality ---
+FINAL
+_FINAL
+-FINAL
+
+# --- closing gestures and downtime management ---
+good night
+goodnight
+get some rest
+fresh eyes in the morning
+you've earned it
+you have earned it
+go relax
+wind down
+pick this up tomorrow
+let's pick this up
+hope you feel better
+take it easy
+
+# --- the self-crediting contrast clause (added 2026-09-01, he caught it live) ---
+# "X rather than Y" where Y is the lazy or dishonest thing I did not do. Naming the alternative
+# implies my default is to take it. The rule has been in CLAUDE.md the whole time and I used
+# this shape repeatedly on 2026-08-31 and again while starting the contacts project — he
+# replied with just the quoted phrase. Say what was done; the reader can see it was not guessed.
+rather than assuming
+rather than assume
+rather than guessing
+rather than guess
+instead of assuming
+instead of guessing
+rather than taking it on faith
+rather than reasoning about
+rather than theorizing
+rather than more theory
+rather than accepting it
+rather than inventing
+rather than making it up

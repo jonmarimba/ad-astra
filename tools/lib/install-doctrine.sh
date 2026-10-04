@@ -42,13 +42,16 @@ for target in "$REPO/CLAUDE.md" "$REPO/AGENTS.md" "$REPO/QWEN.md"; do
   # CLAUDE.md/AGENTS.md always; QWEN.md only if it already exists (don't invent it)
   case "$target" in *QWEN.md) [ -f "$target" ] || continue;; esac
   touch "$target"
+  NEWBLOCK="$(printf '%s\n%s\n\n%s\n%s' "$BEGIN" "Operating doctrine for '$SLUG' — read it before using that capability here:" "@$DEST" "$END")"
   if grep -qF "$BEGIN" "$target"; then
     bs=$(grep -nF "$BEGIN" "$target" | head -1 | cut -d: -f1); be=$(grep -nF "$END" "$target" | head -1 | cut -d: -f1)
     { [ -n "$bs" ] && [ -n "$be" ] && [ "$be" -gt "$bs" ]; } || { echo "markers for '$SLUG' broken in $target — fix by hand" >&2; exit 1; }
-    { head -n $((bs-1)) "$target"; tail -n +$((be+1)) "$target"; } > "$target.tmp" && mv "$target.tmp" "$target"
+    # Replace the block where it sits. Deleting it and re-appending moved it
+    # to the end of the file and left blank lines behind on every reinstall.
+    { head -n $((bs-1)) "$target"; printf '%s\n' "$NEWBLOCK"; tail -n +$((be+1)) "$target"; } > "$target.tmp" && mv "$target.tmp" "$target"
+  else
+    { echo ""; printf '%s\n' "$NEWBLOCK"; } >> "$target"
   fi
-  { echo ""; echo "$BEGIN"; echo "Operating doctrine for '$SLUG' — read it before using that capability here:"; echo ""
-    echo "@$DEST"; echo "$END"; } >> "$target"
   echo "installed doctrine '$SLUG' into $target (@$DEST)"
   wrote=$((wrote+1))
 done

@@ -90,7 +90,7 @@ chmod +x "$R/.git/hooks/post-commit"
 "$ASTRA" add check-prose --into "$R" >/dev/null 2>&1
 h="$R/.git/hooks/post-commit"
 grep -q "repo-own-guard" "$h" && ok "existing hook content preserved" || bad "existing hook content lost"
-[ "$(grep -c 'astra-update' "$h")" -le 3 ] && ! grep -q "keep this repo's vendored tools current" "$h" \
+[ "$(grep -c '>>> astra-update' "$h")" -eq 1 ] && ! grep -q "keep this repo's vendored tools current" "$h" \
   && ok "legacy block replaced, updater runs once" || bad "legacy block left alongside the new one"
 "$ASTRA" add asd-ste100 --into "$R" >/dev/null 2>&1
 [ "$(grep -c '>>> astra-update' "$h")" -eq 1 ] && ok "re-install does not duplicate the block" || bad "block duplicated"
@@ -98,6 +98,25 @@ grep -q "repo-own-guard" "$h" && ok "existing hook content preserved" || bad "ex
 grep -q "repo-own-guard" "$h" && ! grep -q "astra-update" "$h" && ok "removal strips only astra's block" || bad "removal damaged the hook"
 [ ! -e "$R/.git/hooks/post-merge" ] && ok "a hook astra created alone is deleted with the last tool" || bad "empty post-merge hook left behind"
 grep -q "astra" "$R/.gitignore" 2>/dev/null && bad "astra ignore rule left behind" || ok "ignore rule removed with the last tool"
+
+echo "== 3a. The 2026-10-02 --log variant of the old block is replaced too =="
+new_repo
+cat > "$R/.git/hooks/post-commit" <<'EOF'
+#!/bin/bash
+# astra: keep this repo's vendored tools current.
+#
+# Runs in the background so a commit never waits on it.
+ROOT="$(git rev-parse --show-toplevel)"
+if [ -x "$ROOT/.astra/astra-update" ]; then
+  ( "$ROOT/.astra/astra-update" --pull --log "$ROOT/.astra/update.log" \
+      >/dev/null 2>&1 & ) >/dev/null 2>&1
+fi
+EOF
+chmod +x "$R/.git/hooks/post-commit"
+"$ASTRA" add check-prose --into "$R" >/dev/null 2>&1
+h="$R/.git/hooks/post-commit"
+! grep -q "keep this repo's vendored tools current" "$h" && ! grep -q '^ROOT=' "$h" && [ "$(grep -c '>>> astra-update' "$h")" -eq 1 ] \
+  && ok "--log legacy block replaced by the managed one" || bad "--log legacy block survived"
 
 echo "== 3b. A hook that is not a shell script is refused, not mangled =="
 new_repo
@@ -128,6 +147,14 @@ out="$("$R/.astra/astra-update" --pull 2>&1)"; rc=$?
 out="$("$R/.astra/astra-update" 2>&1)"
 echo "$out" | grep -q "SOURCE GONE" && ok "an explicit status check still reports it" || bad "explicit status hid the missing source"
 (cd "$R" && sh .git/hooks/post-commit); [ $? -eq 0 ] && ok "hook exits 0 without astra" || bad "hook failed without astra"
+
+echo "== 3d. Reinstalling a doctrine leaves CLAUDE.md byte-identical =="
+new_repo
+printf '# Repo\n\nintro\n' > "$R/CLAUDE.md"
+"$ASTRA" add writing-doctrine --into "$R" >/dev/null 2>&1
+echo "after the block" >> "$R/CLAUDE.md"; cp "$R/CLAUDE.md" "$SCRATCH/before.md"
+"$ASTRA" add writing-doctrine --into "$R" >/dev/null 2>&1
+cmp -s "$SCRATCH/before.md" "$R/CLAUDE.md" && ok "doctrine block replaced in place, not moved" || bad "reinstall moved or duplicated the doctrine block"
 
 echo "== 5. The humanizer replaces the old untracked npx install =="
 new_repo

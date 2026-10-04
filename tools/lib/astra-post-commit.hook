@@ -1,7 +1,8 @@
 #!/bin/sh
 # >>> astra-update (managed by astra; edit outside this block) >>>
-_astra_u="$(git rev-parse --show-toplevel 2>/dev/null)/.astra/astra-update"
-if [ -x "$_astra_u" ]; then
-  ( "$_astra_u" --pull >> "$(dirname "$_astra_u")/update.log" 2>&1 & ) >/dev/null 2>&1
+_astra_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -x "$_astra_root/.astra/astra-update" ]; then
+  ( "$_astra_root/.astra/astra-update" --pull --log "$_astra_root/.astra/update.log" \
+      >/dev/null 2>&1 & ) >/dev/null 2>&1
 fi
 # <<< astra-update <<<

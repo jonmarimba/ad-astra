@@ -134,14 +134,24 @@ def _git_remote(path):
 
 def main():
     pull = "--pull" in sys.argv
-    # Output is collected and emitted at the end, because a pull with nothing
-    # to do must print NOTHING. The post-commit hook appends every run to
-    # .astra/update.log, a tracked file, so a "13 current" line per commit
-    # dirtied the tree after every commit, and committing that line fired the
-    # hook again (Jonathan, 2026-10-01). An eventful pull is stamped with the
-    # time, because a log of what happened that cannot say when is half a log.
-    lines = []
-    say = lines.append
+    # --log FILE: append one dated entry per CHANGE OF STATE, never per run. A hook that
+    # runs on every commit must not leave "14 current" four hundred times in a tracked
+    # file; CocoaPods writes Podfile.lock when the pods change and is silent otherwise,
+    # and this does the same. Jonathan, 2026-10-02: "An updater shouldn't shit in its
+    # tracking file when nothing happened."
+    #
+    # Stdout follows the same rule (2026-10-01): a --pull with nothing to report prints
+    # nothing, and an eventful one is stamped with the time. Everything except the
+    # summary is collected in `events`, which feeds both.
+    log_path = None
+    if "--log" in sys.argv:
+        i = sys.argv.index("--log")
+        if i + 1 >= len(sys.argv):
+            print("--log needs a file path", file=sys.stderr)
+            return 2
+        log_path = Path(sys.argv[i + 1])
+    events = []
+    say = events.append
     data = load()
     behind = modified = current = missing = 0
 
@@ -222,15 +232,55 @@ def main():
         parts.append(f"{modified} locally modified")
     if missing:
         parts.append(f"{missing} missing")
-    say(", ".join(parts))
+    summary = ", ".join(parts)
 
     eventful = behind or modified or missing
-    if pull and not eventful:
-        pass                            # nothing happened; say nothing
-    else:
+    if not (pull and not eventful):
         if pull:
             print(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " astra-update --pull")
-        print("\n".join(lines))
+        for e in events:
+            print(e)
+        print(summary)
+
+    if log_path is not None:
+        # Edge-triggered: write only when the FULL state — the summary AND its detail lines —
+        # differs from the LAST entry logged. Comparing the summary alone misses a changed set
+        # of flagged files at an unchanged count; keying on `events` being non-empty (the old
+        # bug) re-appended an identical block on EVERY run while a LOCAL EDITS / SOURCE GONE /
+        # MISSING condition persisted, because those events are regenerated each run. A dated
+        # line (summary) begins with a digit; detail lines begin with spaces, so they parse apart
+        # cleanly. (ghost-openclaw peer review of d9dd98b0; reproduced 2026-10-02: log grew every run.)
+        #
+        # Read, compare and append under ONE exclusive lock. Two post-commit updaters on the
+        # same log (rapid concurrent commits, or a manual run overlapping a hook) could otherwise
+        # both read the same prior state, both see the change, and both append identical blocks
+        # for one transition. flock serializes them: the first appends, the second then reads the
+        # already-written block and stays quiet. (ghost-openclaw peer review of 8cf500da.)
+        import fcntl
+        with log_path.open("a+") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            fh.seek(0)
+            last_summary = None
+            last_events = []
+            for line in fh.read().splitlines():
+                if line[:1].isdigit() and "  " in line:
+                    last_summary = line.split("  ", 1)[1]
+                    last_events = []
+                elif last_summary is not None:
+                    last_events.append(line)
+            # Test-only seam: widen the read->append window so the concurrency test can prove
+            # the lock matters. Under the lock a second updater simply waits here; without it,
+            # both read the same prior state and both append. Unset in all real runs.
+            _delay = os.environ.get("ASTRA_UPDATE_LOG_TEST_DELAY")
+            if _delay:
+                import time
+                time.sleep(float(_delay))
+            if summary != last_summary or events != last_events:
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                fh.write(f"{stamp}  {summary}\n")       # O_APPEND: always writes at EOF
+                for e in events:
+                    fh.write(f"{e}\n")
+            # lock released when the with-block closes the fd
 
     # Nonzero only for things a human must act on. Being behind is not a
     # failure when --pull just fixed it.

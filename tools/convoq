@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# convoq — the conversation-record search, with the interpreter pinned.
+#
+# Why this wrapper exists. The rule in ~/.claude/CLAUDE.md says to search the
+# conversation record before reconstructing a past decision or asking a question
+# the record already answers. It documented the invocation as bare `python3`.
+# On this Mac `python3` resolves to /usr/bin/python3, which is Xcode's 3.9.6, and
+# session_bridge/paths.py:19 uses `Optional[str | os.PathLike]` — a 3.10 union
+# type. So the documented command dies with
+#   TypeError: unsupported operand type(s) for |: 'type' and 'ABCMeta'
+# before it searches anything.
+#
+# That is not a documentation nit. It produces the exact behaviour the rule was
+# written to stop: the agent tries convoq, gets a traceback, and reconstructs
+# from scratch or asks a question the record already answered. Three panelists
+# in the 2026-08-24 instruction audit found it independently — Claude, Codex and
+# OpenClaw — and each traced it to the same line.
+#
+# Fails loudly with the remedy rather than falling back silently, because a
+# silent fallback is how the original breakage stayed invisible.
+#
+#   convoq update                 incremental index of the current session
+#   convoq search '<terms>'       full-text search; --kind human for his words
+#   convoq show <token>           jump to full context around a hit
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+
+BRIDGE="${CONVOQ_BRIDGE:-$HOME/svnCheckouts/js-llmKicker/contrib/authsec-bridge}"
+PY="${CONVOQ_PYTHON:-/opt/homebrew/bin/python3}"
+
+if [ ! -d "$BRIDGE/src/session_bridge" ]; then
+  echo "convoq: session_bridge not found at $BRIDGE/src" >&2
+  echo "convoq: set CONVOQ_BRIDGE to the authsec-bridge checkout" >&2
+  exit 3
+fi
+
+if [ ! -x "$PY" ]; then
+  echo "convoq: interpreter not executable: $PY" >&2
+  echo "convoq: session_bridge needs Python 3.10+ for its union type hints." >&2
+  echo "convoq: install one, or set CONVOQ_PYTHON to a 3.10+ interpreter." >&2
+  exit 3
+fi
+
+# Prove the interpreter is new enough BEFORE running, so the failure names the
+# cause instead of surfacing as a TypeError from deep inside an import.
+if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+  ver="$("$PY" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || echo unknown)"
+  echo "convoq: $PY is Python $ver; session_bridge needs 3.10+." >&2
+  echo "convoq: paths.py uses 'str | os.PathLike', which 3.9 cannot parse." >&2
+  echo "convoq: set CONVOQ_PYTHON to a 3.10+ interpreter." >&2
+  exit 3
+fi
+
+# `convoq update` with no token asks the upstream discovery for "the current session" and takes
+# the FIRST result. On this machine that is not the live one: on 2026-08-29 it returned skip=1 all
+# day while the live transcript grew from 105MB to 118MB, so the index froze at 10:14 and every
+# search after that answered about a session that had stopped hours earlier. An empty result from
+# a frozen index is indistinguishable from a genuine no-match, which is exactly the failure the
+# convoq-first rule exists to prevent — and it produced it: "not in convoq" was reported as a
+# finding about a decision the index simply could not see.
+#
+# There is no reason a live session cannot be indexed. It is an append-only JSONL, and the
+# indexer already reads whole lines and skips malformed ones. So resolve the newest transcript
+# for this project ourselves and name it explicitly, rather than trusting discovery's ordering.
+if [ "${1:-}" = "update" ] && [ "$#" -eq 1 ]; then
+  # Resolve the REPO ROOT, not the caller's cwd. Deriving it from pwd meant `../convoq update`
+  # from tools/tests found no project directory, fell through to the unqualified update, and
+  # silently indexed the stale discovered session again — the exact defect this block was added
+  # to fix, reachable by running it from a subdirectory. Peer review found it on the commit.
+  # git rev-parse gives the same answer from anywhere inside the tree; the wrapper's own location
+  # is the fallback for a non-git checkout.
+  REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)"
+  if [ -z "$REPO_ROOT" ]; then
+    REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  fi
+  # Claude Code names a project dir by replacing exactly these characters with '-':
+  # backslash, forward slash, colon, dot, and whitespace. It KEEPS '_' and '-' (and
+  # alphanumerics). Replacing only '/' misses a path with a '.' or space; replacing EVERY
+  # non-alphanumeric wrongly mangles '_'. Either miss sends the folder lookup astray and
+  # `update` falls through to unqualified discovery, indexing an unrelated session. Verified
+  # against real dirs: /Users/jonathan/.kicker -> -Users-jonathan--kicker. (ghost-openclaw
+  # peer review of 775599d, then 09fa603/1569394.)
+  PROJ_DIR="$HOME/.claude/projects/$(printf '%s' "$REPO_ROOT" | sed 's#[\\/:.[:space:]]#-#g')"
+  if [ -d "$PROJ_DIR" ]; then
+    NEWEST="$(ls -t "$PROJ_DIR"/*.jsonl 2>/dev/null | head -1)"
+    if [ -n "$NEWEST" ]; then
+      STEM="$(basename "$NEWEST" .jsonl)"
+      cd "$BRIDGE" || exit 3
+      PYTHONPATH=src exec "$PY" -m session_bridge.convoq.cli index --brand claude --token "$STEM"
+    fi
+  fi
+fi
+
+cd "$BRIDGE" || exit 3
+PYTHONPATH=src exec "$PY" -m session_bridge.convoq.cli "$@"
