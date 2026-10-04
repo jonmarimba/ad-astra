@@ -27,7 +27,11 @@ while [ $# -gt 0 ]; do case "$1" in
   -*) echo "astra: unknown flag $1" >&2; exit 64 ;;
   *) names+=("$1"); shift ;;
 esac; done
-[ -n "$repo" ] || repo="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "astra: not in a git repo; pass --into <repo>" >&2; exit 64; }
+# sync and list work from anywhere; every other command acts on one repo.
+case "$cmd" in
+  sync|list) ;;
+  *) [ -n "$repo" ] || repo="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "astra: not in a git repo; pass --into <repo>" >&2; exit 64; } ;;
+esac
 case "$cmd" in
   add|install)
     [ ${#names[@]} -gt 0 ] || { echo "usage: astra add <tool-or-set>..." >&2; exit 64; }

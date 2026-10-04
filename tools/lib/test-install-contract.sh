@@ -173,6 +173,14 @@ printf '{"version":1,"skills":{"humanizer":{"source":"blader/humanizer"}}}\n' > 
   && [ ! -e "$R/.agents/skills/humanizer" ] && [ ! -e "$R/skills-lock.json" ]; } \
   && ok "symlink, .agents copy and lock entry replaced by tracked files" || bad "old humanizer install not retired"
 
+echo "== 6. astra sync runs from outside any repo and wires a repo missing its hooks =="
+new_repo
+"$ASTRA" add check-prose --into "$R" >/dev/null 2>&1
+rm -f "$R/.git/hooks/post-commit" "$R/.git/hooks/post-merge"     # a fresh clone has no hooks
+out="$(cd / && "$ASTRA" sync "$SCRATCH" 2>&1)"; rc=$?
+[ $rc -eq 0 ] && hooked "$R" post-commit && hooked "$R" post-merge && ok "sync from / rewired the clone's hooks" \
+  || bad "sync failed outside a repo or did not rewire (rc=$rc): $(echo "$out" | tail -1)"
+
 echo
 echo "passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ]
