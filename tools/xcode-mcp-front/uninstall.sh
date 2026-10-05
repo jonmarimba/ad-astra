@@ -20,9 +20,11 @@ uc_rm_state "${XCODE_MCP_FRONT_HOME:-$HOME/.xcode-mcp-front}" "xcode-mcp-front s
 uc_keep uv "foundational script runner (shared by many tools)"
 
 if [ "${UNINSTALL_DEPS:-0}" = "1" ]; then
-  if [ -e "$HERE/XcodeMCPFront.app" ]; then
-    echo "  --deps: removing XcodeMCPFront.app (its TCC grant is gone with it — a reinstall will need re-granting)"
-    rm -rf "$HERE/XcodeMCPFront.app" "$HERE/xcodemcpfront_launch.sh"
+  if [ -e "$HERE/XcodeMCPFront.app" ] || [ -e "$HERE/XcodeCombinedFront.app" ] || [ -e "$HERE/Xcode27CombinedFront.app" ]; then
+    echo "  --deps: removing the three wrapper apps and their launch shims (their TCC grants go with them — a reinstall will need re-granting)"
+    rm -rf "$HERE/XcodeMCPFront.app" "$HERE/xcodemcpfront_launch.sh" \
+           "$HERE/XcodeCombinedFront.app" "$HERE/xcodecombinedfront_launch.sh" \
+           "$HERE/Xcode27CombinedFront.app" "$HERE/xcode27combinedfront_launch.sh"
   fi
 else
   [ -e "$HERE/XcodeMCPFront.app" ] && echo "  keeping XcodeMCPFront.app (holds a TCC grant) — pass --deps to remove it too"

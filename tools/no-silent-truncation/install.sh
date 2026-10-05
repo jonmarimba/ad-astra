@@ -10,6 +10,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../lib/astra-install.sh"
 astra_target "$@"
 D=.astra/no-silent-truncation
+# Move off the pre-2026-10-04 install (.claude/hooks + settings.local.json), keeping the watchlist.
+python3 "$ASTRA_MANIFEST_PY" migrate-safety-hooks "$TARGET" "$D/no-silent-truncation.watchlist" no-silent-truncation.sh
 astra_place_at no-silent-truncation \
   "tools/claude-safety-hooks/no-silent-truncation.sh:$D/no-silent-truncation.sh" \
   "--hook=PreToolUse|Bash|$D/no-silent-truncation.sh"

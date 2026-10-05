@@ -10,6 +10,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../lib/astra-install.sh"
 astra_target "$@"
 D=.astra/no-killing-other-claudes
+# Move off the pre-2026-10-04 install (.claude/hooks + settings.local.json), keeping the watchlist.
+python3 "$ASTRA_MANIFEST_PY" migrate-safety-hooks "$TARGET" "" no-killing-other-claudes.sh
 astra_place_at no-killing-other-claudes \
   "tools/claude-safety-hooks/no-killing-other-claudes.sh:$D/no-killing-other-claudes.sh" \
   "tools/claude-safety-hooks/shell_word_literal.py:$D/shell_word_literal.py" \

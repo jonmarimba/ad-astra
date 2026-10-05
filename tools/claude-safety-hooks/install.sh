@@ -66,6 +66,8 @@ if [ "$GLOBAL" -eq 0 ]; then
   . "$HERE/../lib/astra-install.sh"
   astra_target --into "$TARGET"
   D=.astra/claude-safety-hooks
+  # Move off the pre-2026-10-04 install (.claude/hooks + settings.local.json), keeping the watchlist.
+  python3 "$ASTRA_MANIFEST_PY" migrate-safety-hooks "$TARGET" "$D/no-silent-truncation.watchlist" no-silent-truncation.sh no-killing-other-claudes.sh
   astra_place_at claude-safety-hooks \
     "tools/claude-safety-hooks/no-silent-truncation.sh:$D/no-silent-truncation.sh" \
     "tools/claude-safety-hooks/no-killing-other-claudes.sh:$D/no-killing-other-claudes.sh" \

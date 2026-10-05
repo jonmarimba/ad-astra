@@ -153,7 +153,7 @@ def place(repo, tool, pairs):
     entry = {"source": str(ASTRA), "files": files, "paths": paths}
     if hook_specs:
         entry["hooks"] = hook_specs
-    add_hooks(repo, tool, hook_specs)
+    add_hooks(repo, tool, hook_specs, old.get("hooks"))
     remote = source_remote()
     if remote:
         entry["source_remote"] = remote
@@ -200,24 +200,34 @@ def _settings_path(repo):
     return Path(repo) / ".claude" / "settings.json"
 
 
-def _owned(cmd, tool):
+def _hook_command(rel):
+    return f'"$CLAUDE_PROJECT_DIR"/{rel}'
+
+
+def _owned(cmd, tool, specs):
+    """A hook belongs to a tool when its command is one the tool recorded.
+    Entries recorded before 2026-10-04 carry no specs; for those, fall back to
+    the tool's own .astra/<tool>/ directory in the command path."""
+    if specs:
+        return cmd in {_hook_command(spec.split("|", 2)[2]) for spec in specs}
     return f"/.astra/{tool}/" in cmd
 
 
-def remove_hooks(repo, tool):
-    sp = _settings_path(repo)
+def remove_hooks(repo, tool, specs=None, settings_name="settings.json", owned=None):
+    sp = Path(repo) / ".claude" / settings_name
     if not sp.exists():
         return
     try:
         cfg = json.loads(sp.read_text())
     except Exception as e:
         die(f"{sp} is unreadable ({e}); refusing to edit its hooks")
+    test = owned or (lambda cmd: _owned(cmd, tool, specs))
     hooks = cfg.get("hooks", {})
     for event in list(hooks):
         groups = []
         for g in hooks[event]:
             g = dict(g)
-            g["hooks"] = [h for h in g.get("hooks", []) if not _owned(h.get("command", ""), tool)]
+            g["hooks"] = [h for h in g.get("hooks", []) if not test(h.get("command", ""))]
             if g["hooks"]:
                 groups.append(g)
         if groups:
@@ -235,10 +245,10 @@ def remove_hooks(repo, tool):
         prune(Path(repo), sp.parent)
 
 
-def add_hooks(repo, tool, specs):
+def add_hooks(repo, tool, specs, old_specs=None):
     """specs: EVENT|MATCHER|repo-relative-script. Re-adding replaces the
     tool's previous entries, so a reinstall never duplicates a hook."""
-    remove_hooks(repo, tool)
+    remove_hooks(repo, tool, old_specs)
     if not specs:
         return
     sp = _settings_path(repo)
@@ -248,7 +258,7 @@ def add_hooks(repo, tool, specs):
         event, matcher, rel = spec.split("|", 2)
         hooks.setdefault(event, []).append({
             "matcher": matcher,
-            "hooks": [{"type": "command", "command": f'"$CLAUDE_PROJECT_DIR"/{rel}'}]})
+            "hooks": [{"type": "command", "command": _hook_command(rel)}]})
     sp.parent.mkdir(parents=True, exist_ok=True)
     sp.write_text(json.dumps(cfg, indent=2) + "\n")
 
@@ -260,7 +270,7 @@ def unplace(repo, tool):
     if entry is None:
         print(f"astra: {tool} is not recorded in {manifest_path(repo)}; nothing to remove")
         return
-    remove_hooks(repo, tool)
+    remove_hooks(repo, tool, entry.get("hooks"))
     for dest in old_dests(tool, entry):
         remove_file(repo, dest)
     save(repo, data)
@@ -335,6 +345,37 @@ def ignore_log(repo, on=True):
                     ".astra/update.log"], capture_output=True)
 
 
+LEGACY_SAFETY = ("no-silent-truncation.sh", "no-killing-other-claudes.sh", "shell_word_literal.py",
+                 "no-killing-other-claudes.reap-hint")
+
+
+def migrate_legacy_safety_hooks(repo, watchlist_dest, scripts):
+    """The pre-2026-10-04 per-repo install copied the safety-hook scripts into
+    .claude/hooks/ and wired them in .claude/settings.local.json. Remove exactly
+    those entries and files, and carry the repo's watchlist to its new home so
+    an edited list is not lost."""
+    repo = Path(repo)
+    companions = {"no-killing-other-claudes.sh": ("shell_word_literal.py", "no-killing-other-claudes.reap-hint")}
+    legacy = {f"$CLAUDE_PROJECT_DIR/.claude/hooks/{n}" for n in scripts}
+    remove_hooks(repo, "legacy-safety", settings_name="settings.local.json",
+                 owned=lambda cmd: cmd in legacy)
+    hooks_dir = repo / ".claude" / "hooks"
+    wl = hooks_dir / "no-silent-truncation.watchlist"
+    if wl.exists() and watchlist_dest and "no-silent-truncation.sh" in scripts:
+        dest = repo / watchlist_dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not dest.exists():
+            os.replace(wl, dest)
+        else:
+            wl.unlink()
+    for n in scripts:
+        for name in (n,) + companions.get(n, ()):
+            f = hooks_dir / name
+            if f.exists():
+                f.unlink()
+    prune(repo, hooks_dir)
+
+
 def finish(repo):
     repo = Path(repo)
     data = load(repo)
@@ -388,6 +429,8 @@ def main(argv):
         unplace(repo, argv[3])
     elif cmd == "finish":
         finish(repo)
+    elif cmd == "migrate-safety-hooks":
+        migrate_legacy_safety_hooks(repo, argv[3], argv[4:])
     elif cmd == "hooks":
         wire_hooks(repo, True)
     elif cmd == "status":

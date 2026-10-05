@@ -200,6 +200,29 @@ new_repo
 "$ASTRA" add idle-nag --into "$R" >/dev/null 2>&1; "$ASTRA" remove idle-nag --into "$R" >/dev/null 2>&1
 [ ! -e "$R/.claude" ] && ok "a settings.json astra created alone is removed with it" || bad "empty .claude left behind"
 
+echo "== 8. Uninstall removes only the hooks a tool recorded, matched exactly =="
+new_repo
+mkdir -p "$R/.claude"
+printf '{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"echo look in .astra/idle-nag/ for docs"}]}]}}\n' > "$R/.claude/settings.json"
+"$ASTRA" add idle-nag --into "$R" >/dev/null 2>&1
+"$ASTRA" remove idle-nag --into "$R" >/dev/null 2>&1
+grep -q "look in .astra/idle-nag/ for docs" "$R/.claude/settings.json" 2>/dev/null \
+  && ok "a repo hook that only mentions the tool's folder survives its uninstall" || bad "uninstall removed a hook the tool never installed"
+
+echo "== 9. The pre-2026-10-04 safety-hook install migrates, keeping an edited watchlist =="
+new_repo
+mkdir -p "$R/.claude/hooks"
+for s in no-silent-truncation.sh no-killing-other-claudes.sh shell_word_literal.py; do echo old > "$R/.claude/hooks/$s"; done
+printf 'my-own-search-tool\n' > "$R/.claude/hooks/no-silent-truncation.watchlist"
+printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/no-silent-truncation.sh"},{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/no-killing-other-claudes.sh"}]}]}}\n' > "$R/.claude/settings.local.json"
+"$ASTRA" add no-silent-truncation --into "$R" >/dev/null 2>&1
+grep -q "my-own-search-tool" "$R/.astra/no-silent-truncation/no-silent-truncation.watchlist" 2>/dev/null \
+  && ok "the edited watchlist moved to the new install" || bad "the edited watchlist was lost"
+! grep -q ".claude/hooks/no-silent-truncation.sh" "$R/.claude/settings.local.json" && [ ! -e "$R/.claude/hooks/no-silent-truncation.sh" ] \
+  && ok "the old truncation hook entry and script are gone" || bad "the old truncation hook is still wired"
+grep -q ".claude/hooks/no-killing-other-claudes.sh" "$R/.claude/settings.local.json" && [ -e "$R/.claude/hooks/no-killing-other-claudes.sh" ] \
+  && ok "the old kill guard, not asked about, was left alone" || bad "installing the truncation guard removed the old kill guard"
+
 echo "== 6. astra sync runs from outside any repo and wires a repo missing its hooks =="
 new_repo
 "$ASTRA" add check-prose --into "$R" >/dev/null 2>&1

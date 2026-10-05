@@ -213,6 +213,8 @@ def main():
                     help="also consider models with no request history (see the note it prints)")
     ap.add_argument("--apply", action="store_true", help="actually delete. Irreversible.")
     args = ap.parse_args()
+    if not args.host:
+        sys.exit("lms-prune: no LM Studio host. Pass --host, or set ASTRA_LMS_HOST in ~/.config/astra/config.")
 
     models = host_models(args.host, args.lms_bin)
     if models is None:
