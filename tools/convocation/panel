@@ -19,9 +19,16 @@ mkdir -p "$OUT"
 STATUS="$OUT/${TAG}_STATUS"
 : > "$STATUS"
 PROMPT="$(cat "$TASK")"
-CLAUDE_BIN="${CLAUDE_BIN:-/opt/homebrew/bin/claude}"
-CODEX_BIN="${CODEX_BIN:-/opt/homebrew/bin/codex}"
-QWEN_BIN="${QWEN_BIN:-/opt/homebrew/bin/qwen}"
+# macOS ships no `timeout` (it comes from Homebrew coreutils, which one Mac had
+# and the other did not), so a probe written as `timeout 90 qwen ...` failed on
+# every run there and panel refused any round that included qwen. perl ships
+# with macOS; alarm + exec is the portable equivalent, exit 142 on expiry.
+with_timeout() { local s="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$s" "$@"; }
+# Resolve each CLI from PATH; an *_BIN variable still overrides.
+resolve_bin() { command -v "$1" 2>/dev/null || echo "/opt/homebrew/bin/$1"; }
+CLAUDE_BIN="${CLAUDE_BIN:-$(resolve_bin claude)}"
+CODEX_BIN="${CODEX_BIN:-$(resolve_bin codex)}"
+QWEN_BIN="${QWEN_BIN:-$(resolve_bin qwen)}"
 # PIN THE MODEL. Without -m, qwen uses whatever `.model.name` happens to be in
 # ~/.qwen/settings.json, which on 2026-08-19 was an LM Studio model on the M5 laptop.
 # The M5 sleeps, so the third voice of every convocation silently depended on whether a
@@ -62,7 +69,7 @@ for a in $(echo "$AGENTS" | tr ',' ' '); do
               probe_dir="${XDG_CACHE_HOME:-$HOME/.cache}/convocation"
               probe_stamp="$probe_dir/ready-$(echo "$QWEN_MODEL" | tr '/:' '__')-$(date +%Y%m%d)"
               if [ "${PANEL_FORCE_PROBE:-0}" = "1" ] || [ ! -f "$probe_stamp" ]; then
-                if timeout 90 "$QWEN_BIN" -m "$QWEN_MODEL" -y -p 'Reply with exactly: READY' 2>/dev/null | grep -q READY; then
+                if with_timeout 90 "$QWEN_BIN" -m "$QWEN_MODEL" -y -p 'Reply with exactly: READY' 2>/dev/null | grep -q READY; then
                   mkdir -p "$probe_dir" && : > "$probe_stamp"
                   # Yesterday's stamps for this model are noise; keep the directory small.
                   find "$probe_dir" -name "ready-*" -mtime +2 -delete 2>/dev/null || true

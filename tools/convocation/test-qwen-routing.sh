@@ -70,7 +70,7 @@ echo
 echo "== qwen CLI, non-interactive =="
 # This is the claim the whole file exists to hold up: `qwen -p` DOES load the credentials in
 # .security.auth. It was once believed not to. It does.
-QOUT="$(timeout 180 qwen -m "ollamacloud/glm-5.2" -p "Reply with exactly: $MARKER" 2>&1)"
+QOUT="$(perl -e 'alarm shift; exec @ARGV' 180 qwen -m "ollamacloud/glm-5.2" -p "Reply with exactly: $MARKER" 2>&1)"
 if echo "$QOUT" | grep -q "$EXPECT"; then
   ok "qwen -p returned the marker (credentials load fine non-interactively)"
 else

@@ -20,9 +20,9 @@
 # verify each finding). Each brand call is timeout-bounded so one hang can't stall the cluster.
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+with_timeout() { local s="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$s" "$@"; }
 
 NAME=""; REPO=""; FILES=""; CONVOQ=""; OMODEL="${OLLAMA_MODEL:-glm-5.2:cloud}"; TIMEOUT=300; OUT=""
-CONVOQ_DIR="${CONVOQ_DIR:-$HOME/svnCheckouts/js-llmKicker/contrib/authsec-bridge}"
 while [ $# -gt 0 ]; do case "$1" in
   --name) NAME="$2"; shift 2;; --repo) REPO="$2"; shift 2;; --files) FILES="$2"; shift 2;;
   --convoq) CONVOQ="$2"; shift 2;; --ollama-model) OMODEL="$2"; shift 2;;
@@ -108,7 +108,7 @@ OP="$(cat "$OPROMPT")"
 run_brand(){ # $1 label  $2... command
   local label="$1"; shift
   echo "convene[$NAME]: $label starting…"
-  if timeout "$TIMEOUT" "$@" < /dev/null > "$OUT/$NAME.$label.txt" 2>&1; then
+  if with_timeout "$TIMEOUT" "$@" < /dev/null > "$OUT/$NAME.$label.txt" 2>&1; then
     echo "convene[$NAME]: $label done (rc=0)"
   else
     echo "convene[$NAME]: $label ended rc=$? (see $OUT/$NAME.$label.txt)"
