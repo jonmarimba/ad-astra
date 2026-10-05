@@ -337,6 +337,7 @@ def _apply(verb, args):
         return 65
 
     ok_n = fail_n = kept_n = 0
+    installed_this_run = []          # tracks successfully-installed members for rollback
     print(f"{verb}ing template '{name}' -> {repo}")
     keep = tools_still_claimed(repo, name) if verb == "uninstall" else set()
     for t in member_tools:
@@ -358,15 +359,23 @@ def _apply(verb, args):
         if ok:
             print(f"  {verb}ed  {t}")
             ok_n += 1
+            if verb == "install":
+                installed_this_run.append(t)
         else:
             print(f"  FAILED  {t}: {why}")
             fail_n += 1
     # ONLY A CLEAN RUN CHANGES THE RECORD. Recording an install whose members failed
     # would claim tools this template never placed; unrecording an uninstall whose
-    # members failed would orphan the tools that remain. Installers are idempotent
-    # re-runs, so the remedy for a partial failure is: fix the cause, run the same verb
-    # again, and the record changes when the run is clean. (Found by the round-one
+    # members failed would orphan the tools that remain. (Found by the round-one
     # colloquium, codex leg — record_template ran unconditionally here.)
+    #
+    # TRANSACTIONAL ROLLBACK ON INSTALL FAILURE: a partial install that succeeds for
+    # some members and fails for others leaves orphaned tools on disk with no template
+    # claiming them — uninstall refuses because the template is not recorded, so the
+    # user has no path to undo it. Roll back by uninstalling the members that succeeded
+    # this run, respecting shared claims from other templates. (GhOST-OpenClaw peer
+    # review of 362b4ba4; GhOST-Claude initially assessed as intentional design but
+    # the uninstall-direction gap is real.)
     if fail_n == 0:
         record_template(repo, name, add=(verb == "install"), resolved=member_tools)
         # The record just changed, so settle the repo against it: when this was
@@ -374,9 +383,25 @@ def _apply(verb, args):
         subprocess.run([sys.executable, str(TOOLS / "lib" / "astra_manifest.py"),
                         "finish", str(repo)], check=False)
     else:
-        print(f"NOT recording this {verb}: {fail_n} member(s) failed, and the record "
-              f"must describe what actually happened. Fix the failure and re-run "
-              f"(installers are idempotent).", file=sys.stderr)
+        if verb == "install" and installed_this_run:
+            # Roll back: uninstall the members that succeeded, respecting shared claims.
+            shared = tools_still_claimed(repo, name)
+            rolled = 0
+            for t in installed_this_run:
+                if t in shared:
+                    print(f"  KEPT    {t} during rollback — claimed by another template")
+                    continue
+                rb_ok, rb_why = run_tool(t, "uninstall", repo)
+                if rb_ok:
+                    print(f"  ROLLED BACK  {t}")
+                    rolled += 1
+                else:
+                    print(f"  ROLLBACK FAILED  {t}: {rb_why}", file=sys.stderr)
+            print(f"Rolled back {rolled} of {len(installed_this_run)} successfully-"
+                  f"installed member(s).", file=sys.stderr)
+        print(f"NOT recording this {verb}: {fail_n} member(s) failed. "
+              f"Fix the failure and re-run (installers are idempotent).",
+              file=sys.stderr)
     extra = f", {kept_n} kept (shared with another template)" if kept_n else ""
     print(f"\n{ok_n} ok, {fail_n} failed{extra}")
     return 1 if fail_n else 0
