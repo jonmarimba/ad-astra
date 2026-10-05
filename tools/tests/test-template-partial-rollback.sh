@@ -147,4 +147,17 @@ assert_file "$REPO2/.astra/stub-ok/marker.txt" \
   "stub-ok survives rollback because another template still claims it"
 assert_contains "$out4" "KEPT" "rollback reports that stub-ok was kept (shared claim)"
 
+# --- rollback leaves a tool alone that the repo had BEFORE this run ---
+# Found reviewing GhOST's rollback (2026-10-05): stub-ok installed by hand, with no
+# template claiming it, was deleted when a later template containing it failed.
+REPO3="$SB/repo3"; mkdir -p "$REPO3"; git -C "$REPO3" init -q
+"$STUB_OK/install.sh" --into "$REPO3"
+assert_file "$REPO3/.astra/stub-ok/marker.txt" "precondition: stub-ok installed by hand, no template"
+out5="$SB/preexisting-partial.out"
+ASTRA_TEMPLATES_JSON="$CAT" python3 "$TPL" install partial-test --into "$REPO3" >"$out5" 2>&1
+assert_file "$REPO3/.astra/stub-ok/marker.txt" \
+  "a tool installed before the failed run survives its rollback"
+assert_contains "$out5" "installed before this run" "rollback says why it kept stub-ok"
+assert_not_contains "$out5" "ROLLED BACK  stub-ok" "RED control: stub-ok is not rolled back"
+
 finish

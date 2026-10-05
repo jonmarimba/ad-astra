@@ -338,6 +338,20 @@ def _apply(verb, args):
 
     ok_n = fail_n = kept_n = 0
     installed_this_run = []          # tracks successfully-installed members for rollback
+    # What the repo already had before this run. A rollback undoes THIS run only: a
+    # member that was already installed (by hand, by `astra add`, by an older install)
+    # is left alone even if no template claims it. Without this, a failed template
+    # install deleted tools the repo had before it started. Both sources count: the
+    # manifest's tool records and any .astra/<tool> directory on disk.
+    present_before = set()
+    if verb == "install":
+        try:
+            present_before |= set((_read_state(repo).get("tools") or {}).keys())
+        except Exception:
+            pass                     # a corrupt manifest already refuses below
+        astra_dir = Path(repo) / ".astra"
+        if astra_dir.is_dir():
+            present_before |= {d.name for d in astra_dir.iterdir() if d.is_dir()}
     print(f"{verb}ing template '{name}' -> {repo}")
     keep = tools_still_claimed(repo, name) if verb == "uninstall" else set()
     for t in member_tools:
@@ -388,6 +402,9 @@ def _apply(verb, args):
             shared = tools_still_claimed(repo, name)
             rolled = 0
             for t in installed_this_run:
+                if t in present_before:
+                    print(f"  KEPT    {t} during rollback — it was installed before this run")
+                    continue
                 if t in shared:
                     print(f"  KEPT    {t} during rollback — claimed by another template")
                     continue
