@@ -110,12 +110,43 @@ def resolve_source(recorded, source_remote=None):
     if recorded and recorded.name and source_remote:
         sib = REPO.parent / recorded.name
         if (sib / "tools").is_dir():
-            if _git_remote(sib) == source_remote:
+            # Compare repository IDENTITY, not the raw URL string: the SAME repo recorded with a
+            # git@ (SSH) URL and reached by a sibling cloned over https is one repository, and a raw
+            # string compare wrongly REFUSED it, so --pull could not update through the documented
+            # sibling-clone path. Canonicalize both to (host, path). Impostor refusal is preserved:
+            # a different host or path still mismatches. (GhOST-OpenClaw peer review of 3daaada7.)
+            src_id = _canonical_remote(source_remote)
+            if src_id is not None and _canonical_remote(_git_remote(sib)) == src_id:
                 return sib, f" (verified sibling: its git remote matches the recorded source {source_remote})"
             # A lookalike checkout is a security event, never "astra is simply
             # not on this machine", so it is reported even from the hook.
             return None, "REFUSED"
     return None, ""
+
+
+def _canonical_remote(url):
+    # Reduce a git remote URL to its (host, path) identity so the SAME repository reached by a
+    # different transport compares equal: scp-style git@host:owner/repo, https://host/owner/repo,
+    # and ssh://git@host/owner/repo all canonicalize to ("host", "owner/repo"). The security
+    # property holds -- a different host or path yields a different tuple and is still REFUSED.
+    # Plain string operations, no regex. Returns None when there is nothing to compare.
+    if not url:
+        return None
+    u = url.strip()
+    if u.endswith(".git"):
+        u = u[:-4]
+    if "://" in u:                                   # scheme://[user@]host[:port]/owner/repo
+        rest = u.split("://", 1)[1]
+        authority, _, path = rest.partition("/")
+        if "@" in authority:
+            authority = authority.split("@", 1)[1]   # drop userinfo
+        host = authority.split(":", 1)[0]            # drop port
+        return (host.lower(), path.strip("/").lower())
+    if "@" in u and ":" in u:                        # scp-style: user@host:owner/repo
+        after_at = u.split("@", 1)[1]
+        host, _, path = after_at.partition(":")
+        return (host.lower(), path.strip("/").lower())
+    return (None, u.lower())                         # unrecognized form: compare whole, lowercased
 
 
 def _git_remote(path):
