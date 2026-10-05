@@ -120,6 +120,8 @@ def copy_atomic(src, dest):
 
 
 def place(repo, tool, pairs):
+    hook_specs = [a[len("--hook="):] for a in pairs if a.startswith("--hook=")]
+    pairs = [a for a in pairs if not a.startswith("--hook=")]
     """Copy src:dest pairs and record them under one tool entry. Re-placing a
     tool replaces its entry, so a file a newer installer no longer ships stops
     being tracked (and is removed) rather than lingering forever."""
@@ -149,6 +151,9 @@ def place(repo, tool, pairs):
     for stale in set(old_dests(tool, old)) - {p["dest"] for p in paths.values()}:
         remove_file(repo, stale)
     entry = {"source": str(ASTRA), "files": files, "paths": paths}
+    if hook_specs:
+        entry["hooks"] = hook_specs
+    add_hooks(repo, tool, hook_specs)
     remote = source_remote()
     if remote:
         entry["source_remote"] = remote
@@ -183,6 +188,71 @@ def prune(repo, d):
         d = d.parent
 
 
+# ---- Claude Code hooks, per repo -------------------------------------------
+# A tool may register hooks in <repo>/.claude/settings.json, which Claude Code
+# reads for sessions in that repo only, so a hook is never machine-wide
+# (2026-10-04: "I'd love to have hooks be non-global"). Each command runs a
+# script the tool placed, through $CLAUDE_PROJECT_DIR, so the entry is
+# portable. Ownership is the command path: everything under .astra/<tool>/
+# belongs to <tool>, which is how uninstall removes exactly its own entries.
+
+def _settings_path(repo):
+    return Path(repo) / ".claude" / "settings.json"
+
+
+def _owned(cmd, tool):
+    return f"/.astra/{tool}/" in cmd
+
+
+def remove_hooks(repo, tool):
+    sp = _settings_path(repo)
+    if not sp.exists():
+        return
+    try:
+        cfg = json.loads(sp.read_text())
+    except Exception as e:
+        die(f"{sp} is unreadable ({e}); refusing to edit its hooks")
+    hooks = cfg.get("hooks", {})
+    for event in list(hooks):
+        groups = []
+        for g in hooks[event]:
+            g = dict(g)
+            g["hooks"] = [h for h in g.get("hooks", []) if not _owned(h.get("command", ""), tool)]
+            if g["hooks"]:
+                groups.append(g)
+        if groups:
+            hooks[event] = groups
+        else:
+            del hooks[event]
+    if hooks:
+        cfg["hooks"] = hooks
+    else:
+        cfg.pop("hooks", None)
+    if cfg:
+        sp.write_text(json.dumps(cfg, indent=2) + "\n")
+    else:
+        sp.unlink()
+        prune(Path(repo), sp.parent)
+
+
+def add_hooks(repo, tool, specs):
+    """specs: EVENT|MATCHER|repo-relative-script. Re-adding replaces the
+    tool's previous entries, so a reinstall never duplicates a hook."""
+    remove_hooks(repo, tool)
+    if not specs:
+        return
+    sp = _settings_path(repo)
+    cfg = json.loads(sp.read_text()) if sp.exists() else {}
+    hooks = cfg.setdefault("hooks", {})
+    for spec in specs:
+        event, matcher, rel = spec.split("|", 2)
+        hooks.setdefault(event, []).append({
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": f'"$CLAUDE_PROJECT_DIR"/{rel}'}]})
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    sp.write_text(json.dumps(cfg, indent=2) + "\n")
+
+
 def unplace(repo, tool):
     repo = Path(repo)
     data = load(repo)
@@ -190,6 +260,7 @@ def unplace(repo, tool):
     if entry is None:
         print(f"astra: {tool} is not recorded in {manifest_path(repo)}; nothing to remove")
         return
+    remove_hooks(repo, tool)
     for dest in old_dests(tool, entry):
         remove_file(repo, dest)
     save(repo, data)

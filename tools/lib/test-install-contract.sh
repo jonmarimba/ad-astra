@@ -173,6 +173,33 @@ printf '{"version":1,"skills":{"humanizer":{"source":"blader/humanizer"}}}\n' > 
   && [ ! -e "$R/.agents/skills/humanizer" ] && [ ! -e "$R/skills-lock.json" ]; } \
   && ok "symlink, .agents copy and lock entry replaced by tracked files" || bad "old humanizer install not retired"
 
+echo "== 7. Per-repo hooks: registered in the repo, removed exactly, never global =="
+new_repo
+mkdir -p "$R/.claude"
+printf '{"model":"x","hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"repo-own-stop.sh"}]}]}}\n' > "$R/.claude/settings.json"
+"$ASTRA" add idle-nag --into "$R" >/dev/null 2>&1
+n=$(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); print(sum(1 for e in c["hooks"].values() for g in e for h in g["hooks"] if "/.astra/idle-nag/" in h["command"]))' "$R/.claude/settings.json")
+[ "$n" = 2 ] && grep -q repo-own-stop "$R/.claude/settings.json" && ok "two idle-nag hooks added beside the repo's own" || bad "hook registration wrong (owned=$n)"
+"$ASTRA" add idle-nag --into "$R" >/dev/null 2>&1
+n2=$(grep -c '/.astra/idle-nag/' "$R/.claude/settings.json")
+[ "$n2" = 2 ] && ok "reinstall does not duplicate hooks" || bad "reinstall duplicated hooks ($n2)"
+# behaviour, with a fake `say` and no display gate
+log="$SCRATCH/said.log"; rm -f "$log"
+fake="$SCRATCH/fake-say"; printf '#!/bin/sh\necho "$@" >> %s\n' "$log" > "$fake"; chmod +x "$fake"
+export IDLE_NAG_DELAY=1 IDLE_NAG_SAY="$fake" IDLE_NAG_REQUIRE_DISPLAY=0
+echo '{"session_id":"t-fire"}' | "$R/.astra/idle-nag/arm.sh"; sleep 3
+grep -q "Look over here" "$log" 2>/dev/null && ok "nag speaks after the delay" || bad "nag did not speak"
+rm -f "$log"
+echo '{"session_id":"t-cancel"}' | "$R/.astra/idle-nag/arm.sh"; echo '{"session_id":"t-cancel"}' | "$R/.astra/idle-nag/cancel.sh"; sleep 3
+[ ! -s "$log" ] && ok "a prompt before the delay cancels it" || bad "cancelled nag still spoke"
+unset IDLE_NAG_DELAY IDLE_NAG_SAY IDLE_NAG_REQUIRE_DISPLAY
+"$ASTRA" remove idle-nag --into "$R" >/dev/null 2>&1
+! grep -q '/.astra/idle-nag/' "$R/.claude/settings.json" && grep -q repo-own-stop "$R/.claude/settings.json" && grep -q '"model"' "$R/.claude/settings.json" \
+  && ok "uninstall removed only idle-nag's hooks" || bad "uninstall damaged settings.json"
+new_repo
+"$ASTRA" add idle-nag --into "$R" >/dev/null 2>&1; "$ASTRA" remove idle-nag --into "$R" >/dev/null 2>&1
+[ ! -e "$R/.claude" ] && ok "a settings.json astra created alone is removed with it" || bad "empty .claude left behind"
+
 echo "== 6. astra sync runs from outside any repo and wires a repo missing its hooks =="
 new_repo
 "$ASTRA" add check-prose --into "$R" >/dev/null 2>&1
