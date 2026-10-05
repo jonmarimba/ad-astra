@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# agent-sync — sync Claude Code, Codex and Qwen sessions between two Macs.
+#
+#   agent-sync [--peer HOST] [--brands claude,codex,qwen] [--apply] [--both]
+#   agent-sync config [--peer HOST] [--apply] [--both]     instruction files, settings, memories
+#   agent-sync scheduled                                   what launchd runs every hour
+#
+# Dry run by default: it fetches and classifies, and changes nothing in your
+# homes. --apply writes the peer's new and fast-forwarded sessions into this
+# Mac's ~/.claude, ~/.codex and ~/.qwen. --both then has the peer do the same
+# toward this Mac, so one command syncs both directions.
+#
+# How, and why it is shaped this way (2026-10-04):
+#   1. The peer must be a Tailscale MagicDNS name (*.ts.net) that resolves to a
+#      Tailscale address (100.64.0.0/10). Anything else is refused, so a sync
+#      never falls back to a LAN or public route. Default: ASTRA_PEER_HOST.
+#   2. On the peer, the session stores are APFS-cloned (cp -c) into a staging
+#      folder: an instant point-in-time view that costs almost no space, so the
+#      transfer never reads files a live session is appending to. Codex's SQLite
+#      state is cloned with its WAL and checkpointed in the clone.
+#   3. This Mac pulls the staging clone into a standing mirror with rsync 3.x:
+#      delta transfer, zstd on the wire (ssh's own compression off), so after
+#      the first run only new bytes cross the internet. The clone is deleted.
+#   4. session-bridge sync --into a applies "theirs -> mine" only: new sessions
+#      and clean fast-forwards. Diverged sessions are kept on both sides and
+#      flagged, never clobbered; sessions written in the last two minutes are
+#      skipped as likely live. Each Mac only ever writes into its own homes.
+#      Applied sessions are cloned from the mirror, so they share its blocks.
+#   5. install.sh puts a launchd agent on EACH Mac that runs "agent-sync
+#      scheduled" hourly: pull the peer into this Mac, nothing more. Either Mac
+#      may be asleep or off the tailnet, so each one catching up on its own is
+#      what keeps them in sync, and an unreachable peer is a skipped run, not an
+#      error. launchd runs a missed interval once on wake. A lock keeps two runs
+#      from overlapping; an interrupted transfer just resumes by delta next time.
+set -euo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:$PATH"
+HERE="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")" && pwd)"
+ASTRA_ROOT="$(cd "$HERE/../.." && pwd)"
+. "$ASTRA_ROOT/tools/lib/astra-config.sh"
+RSYNC="$(command -v /opt/homebrew/bin/rsync || command -v rsync)"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/agent-sync"
+# A peer that sleeps mid-transfer must not hang the run: give up on a dead link
+# within a minute or so and let the next run resume by delta.
+SSH_OPTS="-o BatchMode=yes -o Compression=no -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+die() { echo "agent-sync: $*" >&2; exit 1; }
+
+# Session-store parts each brand's footprint can touch (session-bridge's
+# native movers read these). Cloning is free, so err on the side of including.
+parts_claude="projects file-history session-env tasks uploads todos"
+parts_qwen="projects file-history todos plans"
+parts_codex="sessions"
+
+snapshot() {  # run ON the source Mac: clone the stores, print the staging path
+  local brands="$1" out="$CACHE/outgoing"
+  rm -rf "$out"; mkdir -p "$out"
+  local b p
+  for b in $(echo "$brands" | tr ',' ' '); do
+    local home="$HOME/.$b" parts; eval "parts=\$parts_$b"
+    [ -d "$home" ] || continue
+    mkdir -p "$out/.$b"
+    for p in $parts; do
+      [ -e "$home/$p" ] && cp -c -R -p "$home/$p" "$out/.$b/$p"
+    done
+    if [ "$b" = codex ]; then
+      for db in "$home"/state_*.sqlite; do
+        [ -e "$db" ] || continue
+        cp -c -p "$db" "$out/.codex/"
+        for side in -wal -shm; do [ -e "$db$side" ] && cp -c -p "$db$side" "$out/.codex/"; done
+        # Fold the cloned WAL into the cloned database, so the reader sees
+        # every committed row without ever opening the live file.
+        sqlite3 "$out/.codex/$(basename "$db")" 'PRAGMA wal_checkpoint(TRUNCATE);' >/dev/null 2>&1 || true
+        rm -f "$out/.codex/$(basename "$db")-wal" "$out/.codex/$(basename "$db")-shm"
+      done
+    fi
+  done
+  echo "$out"
+}
+
+tailnet_peer() {  # refuse anything that is not a Tailscale name at a Tailscale address
+  local h="$1" ip
+  case "$h" in *.ts.net) ;; *) die "peer '$h' is not a Tailscale MagicDNS name (*.ts.net); refusing" ;; esac
+  ip="$(dscacheutil -q host -a name "$h" 2>/dev/null | awk '/ip_address/{print $2; exit}')"
+  [ -n "$ip" ] || die "peer '$h' does not resolve; is Tailscale up?"
+  python3 -c 'import ipaddress,sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network("100.64.0.0/10") else 1)' "$ip" \
+    || die "peer '$h' resolved to $ip, which is not a Tailscale address; refusing"
+}
+
+# Configuration: instruction files, settings, hooks, skills, memories, and each
+# project's memory folder. Not sessions, so not session-bridge: a file only the
+# peer has is copied here, an identical file is skipped, and a file that differs
+# is REPORTED and left alone. Config is merged by a person, never by take-latest.
+# Nothing is ever deleted. Not included: ~/.claude/hooks (hooks are per repo now,
+# through astra) and ~/.claude/skills/synced (Claude's own per-machine cloud-sync
+# state).
+config_paths="
+.claude/CLAUDE.md .claude/settings.json .claude/commands .claude/agents .claude/skills .claude/statusline-command.sh
+.claude/projects/*/memory
+.codex/AGENTS.md .codex/AGENTS.carried-memories.md .codex/config.toml .codex/prompts .codex/memories
+.qwen/QWEN.md .qwen/settings.json .qwen/memories .qwen/output-language.md"
+
+config_sync() {  # $1 peer, $2 apply(0/1)
+  local peer="$1" apply="$2" mirror="$CACHE/config/$1"
+  rm -rf "$mirror"; mkdir -p "$mirror"
+  # Pull exactly the listed paths, keeping their layout (--relative); the peer
+  # expands the projects/*/memory glob. Naming sources rather than filtering a
+  # walk of the whole home is the difference between a second and ten minutes.
+  local srcs=() p
+  for p in $config_paths; do srcs+=("$peer:$p"); done
+  "$RSYNC" -aR --ignore-missing-args --compress --compress-choice=zstd --compress-level=9 \
+    --rsync-path=/opt/homebrew/bin/rsync -e "ssh $SSH_OPTS" \
+    "${srcs[@]}" "$mirror/"
+  local new=0 same=0 differ=0 rel
+  rm -rf "$mirror/.claude/skills/synced"
+  while IFS= read -r -d '' f; do
+    rel="${f#$mirror/}"
+    if [ ! -e "$HOME/$rel" ]; then
+      new=$((new+1)); echo "  NEW     $rel"
+      if [ "$apply" = 1 ]; then mkdir -p "$(dirname "$HOME/$rel")"; cp -p "$f" "$HOME/$rel"; fi
+    elif cmp -s "$f" "$HOME/$rel"; then
+      same=$((same+1))
+    else
+      differ=$((differ+1)); echo "  DIFFERS $rel   (left alone; compare: diff ~/$rel '$f')"
+    fi
+  done < <(find "$mirror" -type f -print0)
+  echo "  config $([ "$apply" = 1 ] && echo APPLIED || echo dry): new=$new identical=$same differs=$differ (differing files are never overwritten)"
+}
+
+scheduled() {  # launchd's entry point: pull the peer into this Mac if it is there
+  local log="$CACHE/scheduled.log" lock="$CACHE/scheduled.lock" peer ip
+  mkdir -p "$CACHE"
+  # Keep the log bounded: past 5 MB, keep its last 5,000 lines.
+  if [ -f "$log" ] && [ "$(stat -f %z "$log")" -gt 5242880 ]; then
+    tail -n 5000 "$log" > "$log.tmp" && mv "$log.tmp" "$log"
+  fi
+  exec >>"$log" 2>&1
+  echo "=== $(date '+%F %T') scheduled run"
+  if ! mkdir "$lock" 2>/dev/null; then
+    if kill -0 "$(cat "$lock/pid" 2>/dev/null)" 2>/dev/null; then
+      echo "  previous run (pid $(cat "$lock/pid")) still going; skipped"; return 0
+    fi
+    echo "  clearing a stale lock"; rm -rf "$lock"; mkdir "$lock"
+  fi
+  echo $$ > "$lock/pid"
+  trap "rm -rf '$lock'" EXIT
+  peer="$(astra_config ASTRA_PEER_HOST)"
+  [ -n "$peer" ] || { echo "  ASTRA_PEER_HOST is not set in ~/.config/astra/config; nothing to do"; return 0; }
+  ip="$(dscacheutil -q host -a name "$peer" | awk '/ip_address/{print $2; exit}')"
+  if [ -z "$ip" ]; then echo "  $peer does not resolve (Tailscale down here?); skipped"; return 0; fi
+  if ! ssh $SSH_OPTS "$peer" true; then echo "  $peer unreachable (asleep or offline); skipped"; return 0; fi
+  "$0" --peer "$peer" --apply
+  echo "=== $(date '+%F %T') done"
+}
+
+cmd="${1:-}"
+if [ "$cmd" = snapshot ]; then snapshot "${2:-claude,codex,qwen}"; exit 0; fi
+if [ "$cmd" = scheduled ]; then scheduled; exit $?; fi
+CONFIG=0
+if [ "$cmd" = config ]; then CONFIG=1; shift; fi
+
+PEER=""; BRANDS="claude,codex,qwen"; APPLY=0; BOTH=0
+while [ $# -gt 0 ]; do case "$1" in
+  --peer) PEER="${2:-}"; shift 2 ;;
+  --brands) BRANDS="${2:-}"; shift 2 ;;
+  --apply) APPLY=1; shift ;;
+  --both) BOTH=1; shift ;;
+  -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) die "unknown argument $1 (see --help)" ;;
+esac; done
+[ -n "$PEER" ] || PEER="$(astra_config_required ASTRA_PEER_HOST)" || exit 64
+tailnet_peer "$PEER"
+"$RSYNC" --version 2>/dev/null | grep -q 'zstd' || die "need rsync 3.x with zstd: run $HERE/install.sh"
+PEER_ASTRA="$(astra_config ASTRA_PEER_ASTRA)"; PEER_ASTRA="${PEER_ASTRA:-$ASTRA_ROOT}"
+SSH=(ssh $SSH_OPTS "$PEER")
+if [ "$CONFIG" = 1 ]; then
+  echo "agent-sync config: $PEER -> $(hostname -s)  $([ $APPLY = 1 ] && echo APPLY || echo dry-run)"
+  config_sync "$PEER" "$APPLY"
+  if [ "$BOTH" = 1 ]; then
+    self="$(astra_config ASTRA_SELF_HOST)"
+    [ -n "$self" ] || self="$(/Applications/Tailscale.app/Contents/MacOS/Tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null)"
+    [ -n "$self" ] || die "--both: cannot tell this Mac's Tailscale name; set ASTRA_SELF_HOST"
+    "${SSH[@]}" "'$PEER_ASTRA/tools/agent-sync/agent-sync' config --peer '$self' $([ "$APPLY" = 1 ] && echo --apply)"
+  fi
+  exit 0
+fi
+BRIDGE="$ASTRA_ROOT/vendor/authsec-bridge"
+[ -d "$BRIDGE/src/session_bridge" ] || die "session-bridge missing: git -C $ASTRA_ROOT submodule update --init"
+
+echo "agent-sync: $PEER -> $(hostname -s)  brands=$BRANDS  $([ $APPLY = 1 ] && echo APPLY || echo dry-run)"
+staged="$("${SSH[@]}" "'$PEER_ASTRA/tools/agent-sync/agent-sync' snapshot '$BRANDS'")" || die "snapshot on $PEER failed"
+mirror="$CACHE/mirror/$PEER"; mkdir -p "$mirror"
+echo "  pulling $PEER's snapshot (zstd, delta) into $mirror"
+"$RSYNC" -a --delete --compress --compress-choice=zstd --compress-level=9 --stats \
+  --rsync-path=/opt/homebrew/bin/rsync -e "ssh $SSH_OPTS" \
+  "$PEER:$staged/" "$mirror/" | grep -E 'Total transferred file size|Total bytes received|Number of regular files transferred' | sed 's/^/    /'
+"${SSH[@]}" "rm -rf '$staged'"
+
+for b in $(echo "$BRANDS" | tr ',' ' '); do
+  [ -d "$mirror/.$b" ] || { echo "  [$b] peer has no store; skipped"; continue; }
+  mkdir -p "$HOME/.$b"
+  if [ "$b" = codex ] && [ "$APPLY" = 1 ]; then
+    mkdir -p "$CACHE/backups"
+    for db in "$HOME"/.codex/state_*.sqlite; do
+      [ -e "$db" ] && sqlite3 "$db" ".backup '$CACHE/backups/$(basename "$db").$(date +%Y%m%d-%H%M%S)'"
+    done
+  fi
+  echo "  [$b]"
+  (cd "$BRIDGE" && uv run --quiet session-bridge sync --brand "$b" \
+      --root-a "$HOME/.$b" --root-b "$mirror/.$b" --into a $([ "$APPLY" = 1 ] && echo --apply)) \
+    | grep -vE '^(skip \(fresh|NEW  A->B|FF   A->B|REPAIR A->B)' | sed 's/^/    /'
+done
+
+if [ "$BOTH" = 1 ]; then
+  self="$(astra_config ASTRA_SELF_HOST)"
+  [ -n "$self" ] || self="$(/Applications/Tailscale.app/Contents/MacOS/Tailscale status --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null)"
+  [ -n "$self" ] || die "--both: cannot tell this Mac's Tailscale name; set ASTRA_SELF_HOST"
+  echo "agent-sync: now $PEER pulls from $self"
+  "${SSH[@]}" "'$PEER_ASTRA/tools/agent-sync/agent-sync' --peer '$self' --brands '$BRANDS' $([ "$APPLY" = 1 ] && echo --apply)"
+fi
