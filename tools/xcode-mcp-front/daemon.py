@@ -988,14 +988,25 @@ def _rewrite_refs(text: str, table: dict) -> str:
     table maps old bare name -> the name actually published this composition, so a
     degraded alias rewrites to its prefixed fallback, never to a name that is not on
     the surface. A regex is deliberate — whole-word replacement is the one job plain
-    scanning cannot do without reimplementing \\b (the roadmap's red case: a tool named
-    'read' mangling 'already'). Alternatives sorted longest-first, because Python's
+    scanning cannot do without boundary-aware matching (the roadmap's red case: a tool
+    named 'read' mangling 'already'). Boundaries use explicit tool-name-character
+    lookaround rather than \\b, which fails when a name starts or ends with a non-word
+    character like '-'. Alternatives sorted longest-first, because Python's
     alternation is first-match: with 'foo' before 'foo-bar', the phase-3 panel measured
     'use foo-bar' rewriting as 'use <mapped>-bar'."""
     if not text or not table:
         return text
+    # \b is wrong when a tool name starts or ends with a non-word character
+    # (hyphen, dot).  \b requires a word↔non-word transition, so "read-" followed
+    # by a space has no \b after the hyphen (both are non-word).  Use explicit
+    # tool-name-character boundaries instead: a match must not be preceded or
+    # followed by a character that can appear in a tool name.  (GhOST-OpenClaw
+    # peer review of 9dc9c2e9 / 91858cd5.)
+    _TC = r"a-zA-Z0-9_\-"
     pattern = re.compile(
-        r"\b(" + "|".join(re.escape(k) for k in sorted(table, key=len, reverse=True)) + r")\b")
+        r"(?<![" + _TC + r"])("
+        + "|".join(re.escape(k) for k in sorted(table, key=len, reverse=True))
+        + r")(?![" + _TC + r"])")
     return pattern.sub(lambda m: table[m.group(1)], text)
 
 
@@ -1315,6 +1326,13 @@ def build_server(upstreams: list[Upstream]) -> Server:
                 if result is None:
                     return _not_connected_result(candidate)
                 return result
+            # Availability first (2.3): a disconnected upstream is reported as unavailable
+            # regardless of its sieve decisions. Checking the block before availability makes
+            # a call to a blocked tool on a dead upstream return "blocked" instead of "not
+            # connected", violating the declared evaluation order. (GhOST-OpenClaw peer review
+            # of 321b6ca2.)
+            if candidate.session is None:
+                return _not_connected_result(candidate)
             pfx = prefix_of[candidate]
             bare = name[len(pfx):] if pfx and name.startswith(pfx) else name
             if bare in candidate.blocks:
