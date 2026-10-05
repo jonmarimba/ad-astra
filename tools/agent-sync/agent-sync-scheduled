@@ -1,0 +1,5 @@
+#!/bin/bash
+# agent-sync-scheduled — what AgentSync.app runs. launchd starts the app, not this
+# script, so the run has a stable app identity to hold any permission it needs and
+# keeps working after a restart. Edit this freely; editing the .app kills its grants.
+exec /bin/bash "$(cd "$(dirname "$0")" && pwd)/agent-sync" scheduled

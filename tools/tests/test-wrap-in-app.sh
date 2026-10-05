@@ -35,7 +35,9 @@ assert_eq "com.apple.automator.TestJobWrapper" "$(plutil -extract CFBundleIdenti
 codesign -v "$APP" 2>/dev/null && pass "signature verifies" || fail "signature does not verify"
 # the stub must be arm64-native — an Intel-only stub is the real reason an old applet needs a
 # one-time re-save (macOS is dropping Rosetta); a minted app must not carry that time bomb
-lipo -archs "$APP/Contents/MacOS/Automator Application Stub" 2>/dev/null | grep -qw arm64 && pass "minted app's stub runs natively on Apple Silicon (survives Rosetta removal)" || fail "minted app's stub is not arm64-native — will die when macOS drops Rosetta"
+EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+[ "$EXE" != "Automator Application Stub" ] && [ -x "$APP/Contents/MacOS/$EXE" ] && pass "minted app's executable is named after the app ($EXE)" || fail "minted app's executable is still 'Automator Application Stub' or missing"
+lipo -archs "$APP/Contents/MacOS/$EXE" 2>/dev/null | grep -qw arm64 && pass "minted app's stub runs natively on Apple Silicon (survives Rosetta removal)" || fail "minted app's stub is not arm64-native — will die when macOS drops Rosetta"
 
 # ---- run it for real: noisy run -> log + shim output ----
 touch "$SB/be_noisy"

@@ -130,7 +130,9 @@ LAUNCHD_LABEL="com.jonathansaggau.xcode-mcp-front"
 LAUNCHD_OLD_LABEL="local.xcode-mcp-front"  # pre-2026-08-14 label, cleaned up below if present
 LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
 LAUNCHD_TARGET="gui/$(id -u)/$LAUNCHD_LABEL"
-LAUNCHD_APP_BIN="$HERE/XcodeMCPFront.app/Contents/MacOS/Automator Application Stub"
+# The executable's name comes from the app's own Info.plist: older wrappers carry
+# Automator's "Automator Application Stub", newer ones are named after the app.
+LAUNCHD_APP_BIN="$HERE/XcodeMCPFront.app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$HERE/XcodeMCPFront.app/Contents/Info.plist" 2>/dev/null || echo 'Automator Application Stub')"
 
 cmd_launchd_install() {
   [ -x "$LAUNCHD_APP_BIN" ] || {

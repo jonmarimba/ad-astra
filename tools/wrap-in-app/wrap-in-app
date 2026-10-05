@@ -92,6 +92,12 @@ ip = f"{app}/Contents/Info.plist"
 d = plistlib.load(open(ip, "rb"))
 d["CFBundleIdentifier"] = f"com.apple.automator.{slug}"   # Automator's own applet convention
 d["CFBundleName"] = name
+# Name the executable after the app. Every Automator applet ships its binary as
+# "Automator Application Stub", and launchd jobs point straight at that binary
+# (see xcode-mcp-front/README.md), so Activity Monitor, Login Items and `ps`
+# would otherwise show every wrapper under the same meaningless name.
+os.rename(f"{app}/Contents/MacOS/Automator Application Stub", f"{app}/Contents/MacOS/{name}")
+d["CFBundleExecutable"] = name
 plistlib.dump(d, open(ip, "wb"), fmt=plistlib.FMT_XML)
 print(f"app command -> {script}\napp log     -> {log}")
 PY
@@ -127,6 +133,7 @@ SHIMEOF
 chmod +x "$SHIM"
 
 echo "wrote $APP (ad-hoc signed, id com.apple.automator.$slug)"
+echo "executable $APP/Contents/MacOS/$NAME (point a launchd job that must own the process HERE)"
 echo "wrote $SHIM (point the scheduler at THIS, not the app or the script)"
 echo ""
 echo "NEXT STEPS:"

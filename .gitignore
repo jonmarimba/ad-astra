@@ -29,3 +29,5 @@ tools/xcode-mcp-front/*.app/
 tools/xcode-mcp-front/*_launch.sh
 tools/handlebars/Handlebars.app/
 tools/handlebars/handlebars_launch.sh
+tools/agent-sync/AgentSync.app/
+tools/agent-sync/agentsync_launch.sh

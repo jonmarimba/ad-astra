@@ -146,7 +146,18 @@ scheduled() {  # launchd's entry point: pull the peer into this Mac if it is the
   [ -n "$peer" ] || { echo "  ASTRA_PEER_HOST is not set in ~/.config/astra/config; nothing to do"; return 0; }
   ip="$(dscacheutil -q host -a name "$peer" | awk '/ip_address/{print $2; exit}')"
   if [ -z "$ip" ]; then echo "  $peer does not resolve (Tailscale down here?); skipped"; return 0; fi
-  if ! ssh $SSH_OPTS "$peer" true; then echo "  $peer unreachable (asleep or offline); skipped"; return 0; fi
+  # Asleep or offline is normal and skips quietly. A refused key is not: it fails
+  # every run until someone fixes it, so it is logged as an error and exits nonzero.
+  local err
+  if ! err="$(ssh $SSH_OPTS "$peer" true 2>&1)"; then
+    case "$err" in
+      *"Permission denied"*|*"Host key verification failed"*|*"no such identity"*)
+        echo "  ERROR: $peer refused SSH: $err"
+        echo "  (a scheduled run needs the key's passphrase in the Keychain: ssh-add --apple-use-keychain ~/.ssh/id_rsa)"
+        return 1 ;;
+    esac
+    echo "  $peer unreachable (asleep or offline): $err; skipped"; return 0
+  fi
   "$0" --peer "$peer" --apply
   echo "=== $(date '+%F %T') done"
 }
