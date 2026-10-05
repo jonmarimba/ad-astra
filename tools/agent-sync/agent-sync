@@ -158,13 +158,27 @@ scheduled() {  # launchd's entry point: pull the peer into this Mac if it is the
     esac
     echo "  $peer unreachable (asleep or offline): $err; skipped"; return 0
   fi
-  "$0" --peer "$peer" --apply
+  if ! "$0" --peer "$peer" --apply; then
+    echo "  ERROR: the sync from $peer failed; see above"
+    return 1
+  fi
   echo "=== $(date '+%F %T') done"
+}
+
+notify_failure() {  # a failed scheduled run must reach a person, not just a log
+  local why="$1"
+  osascript -e "display notification \"$why\" with title \"agent-sync failed\" subtitle \"see ~/.cache/agent-sync/scheduled.log\"" 2>/dev/null || true
 }
 
 cmd="${1:-}"
 if [ "$cmd" = snapshot ]; then snapshot "${2:-claude,codex,qwen}"; exit 0; fi
-if [ "$cmd" = scheduled ]; then scheduled; exit $?; fi
+if [ "$cmd" = scheduled ]; then
+  rc=0; scheduled || rc=$?
+  if [ "$rc" != 0 ]; then
+    notify_failure "$(grep -h 'ERROR' "$CACHE/scheduled.log" | tail -n 1 | sed 's/^ *ERROR: //; s/"//g' | cut -c1-120)"
+  fi
+  exit "$rc"
+fi
 CONFIG=0
 if [ "$cmd" = config ]; then CONFIG=1; shift; fi
 

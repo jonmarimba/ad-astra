@@ -50,8 +50,6 @@ if [ "$schedule" = 1 ]; then
   <array><string>$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")</string></array>
   <key>StartInterval</key><integer>$((interval * 60))</integer>
   <key>RunAtLoad</key><false/>
-  <key>ProcessType</key><string>Background</string>
-  <key>LowPriorityIO</key><true/>
   <key>StandardOutPath</key><string>$CACHE/launchd.log</string>
   <key>StandardErrorPath</key><string>$CACHE/launchd.log</string>
 </dict>
