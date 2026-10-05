@@ -1,5 +1,5 @@
 #!/bin/bash
-# astra-scope: repo-config
+# astra-scope: repo
 # install.sh — install claude-safety-hooks either into a target repo (--into) or into the
 # user's GLOBAL Claude config (--global), wiring them into PreToolUse/Bash (merged
 # additively, never clobbering existing hooks).
@@ -55,6 +55,31 @@ if [ "$GLOBAL" -eq 0 ] && [ -z "$TARGET" ]; then
   echo "usage: install.sh --into /path/to/target-repo | --global  [--reap-hint TEXT]" >&2
   exit 1
 fi
+# --into: the shared astra path. Scripts are placed and tracked in
+# .astra/claude-safety-hooks/, the hooks are registered in the repo's
+# .claude/settings.json through $CLAUDE_PROJECT_DIR, updates arrive through the
+# repo's post-commit hook, and `astra remove claude-safety-hooks` takes out
+# exactly these entries. The watchlist is the repo's own: seeded once, never
+# overwritten by an update. (2026-10-04: hooks should not be global.)
+if [ "$GLOBAL" -eq 0 ]; then
+  [ -d "$TARGET" ] || { echo "install.sh: target repo not found: $TARGET" >&2; exit 1; }
+  . "$HERE/../lib/astra-install.sh"
+  astra_target --into "$TARGET"
+  D=.astra/claude-safety-hooks
+  astra_place_at claude-safety-hooks \
+    "tools/claude-safety-hooks/no-silent-truncation.sh:$D/no-silent-truncation.sh" \
+    "tools/claude-safety-hooks/no-killing-other-claudes.sh:$D/no-killing-other-claudes.sh" \
+    "tools/claude-safety-hooks/shell_word_literal.py:$D/shell_word_literal.py" \
+    "--hook=PreToolUse|Bash|$D/no-silent-truncation.sh" \
+    "--hook=PreToolUse|Bash|$D/no-killing-other-claudes.sh"
+  [ -f "$TARGET/$D/no-silent-truncation.watchlist" ] \
+    || cp "$HERE/no-silent-truncation.watchlist.default" "$TARGET/$D/no-silent-truncation.watchlist"
+  [ -z "$REAP_HINT" ] || printf '%s' "$REAP_HINT" > "$TARGET/$D/no-killing-other-claudes.reap-hint"
+  exit 0
+fi
+
+# --global: the old machine-wide install into ~/.claude, kept only until the
+# Macs that still use it have moved to per-repo installs.
 if ! command -v jq >/dev/null 2>&1; then
   echo "install.sh: jq is required (brew install jq)" >&2
   exit 1

@@ -1,25 +1,19 @@
-# no-silent-truncation.sh watchlist — one substring per line, matched against the raw
-# Bash command text. Any command CONTAINING one of these lines as a substring is treated
-# as "a search over protected data," and piping it through head/tail/sed -n/--limit gets
-# blocked (see the hook's own comments for why).
+# no-silent-truncation watchlist: the repo's own, seeded once by astra and never overwritten.
+# Starts with the personal-data search tools and sqlite over the macOS protected stores
+# (low false-positive: each only fires where the tool exists). Add this repo's own data
+# searches below, e.g. "grep && 05_DocsFromPortal".
 #
-# install.sh copies this file to .claude/hooks/no-silent-truncation.watchlist in the
-# target repo and stops there — it does NOT try to guess your tools. Edit the installed
-# copy to name the things that actually search your protected data: a mail indexer, a
-# notes search, a call log, a transcript search, grep over specific data directories,
-# whatever exists in this repo. Lines starting with # are comments; blank lines ignored.
-#
-# A line containing ' && ' (space-ampersand-ampersand-space) is a compound AND condition --
-# every part must be present, not just one. Use this for a tool too generic to watch alone
-# (grep fires on every unrelated call anywhere) combined with a path that scopes it to your
-# actual data: `grep && ~/my-data-dir`.
-#
-# Starter examples (uncomment/adapt, or delete and write your own):
-# mailq
-# notesq
-# shotq
-# imsgq
-# callq
-# recall
-# convoq
-# grep && ~/my-protected-data-dir
+# One substring per line; ' && ' means all parts must be present. # comments, blanks ignored.
+mailq
+notesq
+shotq
+imsgq
+callq
+recall
+convoq
+triage_ledger
+sqlite3 && chat.db
+sqlite3 && Envelope Index
+sqlite3 && CallHistory
+sqlite3 && NoteStore
+sqlite3 && AddressBook

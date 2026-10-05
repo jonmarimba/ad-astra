@@ -32,6 +32,16 @@ if [ "$GLOBAL" -eq 0 ] && [ -z "$TARGET" ]; then
   echo "usage: uninstall.sh --into /path/to/target-repo | --global  [--keep-watchlist]" >&2
   exit 1
 fi
+if [ "$GLOBAL" -eq 0 ]; then
+  HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  . "$HERE/../lib/astra-install.sh"
+  astra_target --into "$TARGET"
+  D="$TARGET/.astra/claude-safety-hooks"
+  if [ "$KEEP_WATCHLIST" -eq 0 ]; then rm -f "$D/no-silent-truncation.watchlist"; fi
+  rm -f "$D/no-killing-other-claudes.reap-hint"
+  astra_remove claude-safety-hooks
+  exit 0
+fi
 if ! command -v jq >/dev/null 2>&1; then
   echo "uninstall.sh: jq is required (brew install jq)" >&2
   exit 1
