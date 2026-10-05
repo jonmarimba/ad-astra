@@ -30,6 +30,14 @@ check("ssh:// url == https (same repo)",     m._canonical_remote(SSHURL) == m._c
 check("different owner is not equal",        m._canonical_remote(OTHER) != m._canonical_remote(HTTPS))
 check("different host is not equal",         m._canonical_remote(OTHERHOST) != m._canonical_remote(HTTPS))
 check("empty url -> None",                   m._canonical_remote("") is None)
+# A different PORT is a different endpoint -> must NOT be equal (GhOST-OpenClaw peer review of 563f8c33).
+check("different ssh port is not equal",
+      m._canonical_remote("ssh://git@git.example:2222/owner/repo.git")
+      != m._canonical_remote("ssh://git@git.example:22/owner/repo.git"))
+# A case-sensitive git host makes Team/SafeRepo and team/saferepo distinct -> path is case-sensitive.
+check("path case difference is not equal",
+      m._canonical_remote("https://git.example/Team/SafeRepo.git")
+      != m._canonical_remote("https://git.example/team/saferepo.git"))
 
 # 2. resolve_source: recorded path dead, sibling present with a DIFFERENT-transport remote of the
 #    same repo -> verified; impostor -> REFUSED. Both directions.

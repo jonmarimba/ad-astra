@@ -135,18 +135,22 @@ def _canonical_remote(url):
     u = url.strip()
     if u.endswith(".git"):
         u = u[:-4]
+    # KEEP the port and do NOT lowercase the PATH (GhOST-OpenClaw peer review of 563f8c33):
+    # host:2222 and host:22 can serve DIFFERENT repositories, and on a case-sensitive git host
+    # Team/SafeRepo and team/saferepo are DIFFERENT repositories -- conflating either would let a
+    # same-basename sibling from an unrelated repo pass verification and supply tool content. Only
+    # the HOST is case-folded (DNS is case-insensitive); the authority keeps its port.
     if "://" in u:                                   # scheme://[user@]host[:port]/owner/repo
         rest = u.split("://", 1)[1]
         authority, _, path = rest.partition("/")
         if "@" in authority:
-            authority = authority.split("@", 1)[1]   # drop userinfo
-        host = authority.split(":", 1)[0]            # drop port
-        return (host.lower(), path.strip("/").lower())
-    if "@" in u and ":" in u:                        # scp-style: user@host:owner/repo
+            authority = authority.split("@", 1)[1]   # drop userinfo, keep host[:port]
+        return (authority.lower(), path.strip("/"))  # host[:port] folded; path case-sensitive
+    if "@" in u and ":" in u:                        # scp-style: user@host:owner/repo (no port)
         after_at = u.split("@", 1)[1]
         host, _, path = after_at.partition(":")
-        return (host.lower(), path.strip("/").lower())
-    return (None, u.lower())                         # unrecognized form: compare whole, lowercased
+        return (host.lower(), path.strip("/"))       # host folded; path case-sensitive
+    return (None, u)                                 # unrecognized form: compare whole, as-is
 
 
 def _git_remote(path):
