@@ -8,7 +8,7 @@
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 . ./lib.sh
-TOOL="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/lms-prune"
+TOOL="$ASTRA_ROOT/tools/ambrosio/lms-prune"
 [ -f "$TOOL" ] || { fail "lms-prune missing at $TOOL"; finish; exit 1; }
 need python3 "install python3"
 need sqlite3 "brew install sqlite"

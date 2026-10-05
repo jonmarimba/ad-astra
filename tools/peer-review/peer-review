@@ -50,7 +50,11 @@ while [ $# -gt 0 ]; do
     *) echo "peer-review: unknown argument '$1'" >&2; exit 64;;
   esac
 done
-[ ${#REPOS[@]} -gt 0 ] || REPOS=("$HOME/svnCheckouts/js-db-ad-astra" "$HOME/svnCheckouts/js-project-GhOST")
+# astra's root, from this script's real location (symlinks followed), so the
+# sibling tools resolve in any checkout, not only ~/svnCheckouts/js-db-ad-astra.
+ASTRA_ROOT="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/../.." && pwd)"
+with_timeout() { local s="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$s" "$@"; }
+[ ${#REPOS[@]} -gt 0 ] || REPOS=("$ASTRA_ROOT" "$HOME/svnCheckouts/js-project-GhOST")
 
 [ -x "$REVIEWER_BIN" ] || { echo "peer-review: reviewer binary $REVIEWER_BIN is not executable — no review ran" >&2; exit 2; }
 
@@ -187,7 +191,7 @@ for repo in "${REPOS[@]}"; do
       rm -f "$task"; continue
     fi
 
-    out="$(timeout 600 "$REVIEWER_BIN" agent --agent "$REVIEWER_AGENT" \
+    out="$(with_timeout 600 "$REVIEWER_BIN" agent --agent "$REVIEWER_AGENT" \
              --session-key "$REVIEWER_SESSION" --message-file "$task" --json 2>/dev/null)"
     rc=$?
     rm -f "$task"

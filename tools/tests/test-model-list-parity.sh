@@ -78,7 +78,7 @@ assert_nonempty "$(cat "$SB/qwen_full.out")" "qwen TUI capture (against a throwa
 
 # ---- copy's opencode: scriptable, no TUI needed, same throwaway HOME as the qwen leg above so
 #      both tools are compared against the exact same snapshot ----
-oc_out="$(cd "$SB" && HOME="$HOME" timeout 15 opencode models 2>"$SB/opencode.err")"
+oc_out="$(cd "$SB" && HOME="$HOME" with_timeout 15 opencode models 2>"$SB/opencode.err")"
 echo "$oc_out" > "$SB/opencode_full.out"
 assert_nonempty "$oc_out" "opencode models output (against the same throwaway copy) is non-empty"
 

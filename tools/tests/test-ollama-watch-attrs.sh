@@ -14,7 +14,7 @@ set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 . ./lib.sh
 TOOL="$(cd ../../js-db-ad-astra/tools/ollama-watch 2>/dev/null && pwd)/ollama-watch"
-[ -x "$TOOL" ] || TOOL="$HOME/svnCheckouts/js-db-ad-astra/tools/ollama-watch/ollama-watch"
+[ -x "$TOOL" ] || TOOL="$ASTRA_ROOT/tools/ollama-watch/ollama-watch"
 [ -x "$TOOL" ] || { fail "ollama-watch not executable at $TOOL"; finish; exit 1; }
 PARSER="$(dirname "$TOOL")/parse_model_attrs.py"
 need python3 "install python3"

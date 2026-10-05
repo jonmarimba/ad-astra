@@ -130,7 +130,7 @@ export CURL_BIN="$SB/bin/curl" SSH_BIN="$SB/bin/ssh" OMNIROUTE_BIN="$SB/bin/omni
 assert_contains "$SB/ssh.log" "Qwen3-30B-A3B-4bit" "sandboxed ambrosio actually delivered the fixture model (setup sanity check before the real-CLI assertions below)"
 
 # ---- REAL opencode: scriptable, no TUI needed ----
-oc_out="$(cd "$SB" && HOME="$HOME" timeout 15 opencode models 2>"$SB/opencode.err")"
+oc_out="$(cd "$SB" && HOME="$HOME" with_timeout 15 opencode models 2>"$SB/opencode.err")"
 echo "$oc_out" > "$SB/opencode_models.out"
 assert_contains "$SB/opencode_models.out" "omniroute/lms/qwen3-30b-a3b-4bit" "REAL opencode CLI (not the config file) lists the delivered model — opencode models"
 assert_contains "$SB/opencode_models.out" "omniroute/lms/pre-existing-model" "REAL opencode CLI still lists the pre-existing model too (delivery is additive, not destructive)"
@@ -184,7 +184,7 @@ cat > "$NEVER_DELIVERED_HOME/.config/opencode/opencode.jsonc" <<'EOF'
   }
 }
 EOF
-never_out="$(cd "$SB" && HOME="$NEVER_DELIVERED_HOME" timeout 15 opencode models 2>/dev/null)"
+never_out="$(cd "$SB" && HOME="$NEVER_DELIVERED_HOME" with_timeout 15 opencode models 2>/dev/null)"
 printf '%s' "$never_out" > "$SB/opencode_models_never_delivered.out"
 assert_not_contains "$SB/opencode_models_never_delivered.out" "qwen3-30b-a3b-4bit" "RED, proven not assumed: a HOME the delivery never touched does not show the delivered model in real opencode output — confirms the positive check above is reading something real, not passing regardless"
 

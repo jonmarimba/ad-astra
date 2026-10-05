@@ -10,7 +10,7 @@
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 BOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/botmsg"
-[ -x "$BOT" ] || BOT="$HOME/svnCheckouts/js-db-ad-astra/tools/botmsg/botmsg"
+[ -x "$BOT" ] || BOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/botmsg"
 [ -x "$BOT" ] || { echo "FATAL: botmsg not found"; exit 1; }
 
 pass=0; fail=0

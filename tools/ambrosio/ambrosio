@@ -44,7 +44,10 @@ AMBROSIO_DIR="$(cd "$(dirname "$(readlink "$0" || echo "$0")")" && pwd)"
 AMBROSIO_HOME="${AMBROSIO_HOME:-$HOME/.ambrosio}"
 mkdir -p "$AMBROSIO_HOME"
 CONF="$AMBROSIO_HOME/config"
-BOTLINE="${BOTLINE_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/botline/botline}"
+# astra's root, from this script's real location (symlinks followed), so the
+# sibling tools resolve in any checkout, not only ~/svnCheckouts/js-db-ad-astra.
+ASTRA_ROOT="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/../.." && pwd)"
+BOTLINE="${BOTLINE_BIN:-$ASTRA_ROOT/tools/botline/botline}"
 SEEN="$AMBROSIO_HOME/seen.txt"; touch "$SEEN"
 TRENDSEEN="$AMBROSIO_HOME/trending_told.txt"
 WANTLIST="$AMBROSIO_HOME/wantlist.txt"
@@ -511,8 +514,8 @@ run_local() {
 # Both binaries are injectable so tests can stub them, and a missing binary is REPORTED,
 # not skipped silently — a front door that quietly stops checking a surface is worse than
 # three separate jobs.
-OLLAMA_WATCH_BIN="${OLLAMA_WATCH_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/ollama-watch/ollama-watch}"
-OMNIROUTE_SYNC_BIN="${OMNIROUTE_SYNC_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/omniroute-model-sync/omniroute-model-sync}"
+OLLAMA_WATCH_BIN="${OLLAMA_WATCH_BIN:-$ASTRA_ROOT/tools/ollama-watch/ollama-watch}"
+OMNIROUTE_SYNC_BIN="${OMNIROUTE_SYNC_BIN:-$ASTRA_ROOT/tools/omniroute-model-sync/omniroute-model-sync}"
 
 run_cloud() {
   [ "${CLOUD:-1}" = "1" ] || { log "cloud surfaces disabled (CLOUD=0)"; return 0; }

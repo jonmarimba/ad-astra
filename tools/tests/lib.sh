@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+
+# The astra checkout this test file belongs to, wherever it lives. Tests used to
+# assume ~/svnCheckouts/js-db-ad-astra and failed in any other checkout.
+ASTRA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# macOS has no `timeout` (GNU coreutils); perl's alarm+exec is the portable
+# equivalent and exits 142 when the limit is hit.
+with_timeout() { local s="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$s" "$@"; }
 # lib.sh — shared assertions for the @astra tool tests. Source from every test-*.sh.
 #
 # The rules these tests follow are Jonathan's own (js-llmKicker/docs/TAUTOLOGY-AUDIT-20260801.md,

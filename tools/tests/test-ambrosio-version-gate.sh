@@ -14,7 +14,7 @@
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 . ./lib.sh
-GATE="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/version_gate.py"
+GATE="$ASTRA_ROOT/tools/ambrosio/version_gate.py"
 [ -f "$GATE" ] || { fail "version_gate.py missing at $GATE"; finish; exit 1; }
 need python3 "install python3"
 
@@ -96,7 +96,7 @@ esac
 # grepping for a pattern, because the pattern cannot tell a setting added last week from one
 # that has always been there.
 # ---------------------------------------------------------------------------
-AMB="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
+AMB="$ASTRA_ROOT/tools/ambrosio/ambrosio"
 OLDHOME="$SB/oldhome"; mkdir -p "$OLDHOME"
 cat > "$OLDHOME/config" <<'CFG'
 HOST="unreachable.invalid"
@@ -114,7 +114,7 @@ CFG
 # CURL points at a stub so no assertion touches the network; the host is unreachable so the
 # local half is a no-op. What is under test is only whether the script survives its own config.
 printf '#!/usr/bin/env bash\nexit 0\n' > "$SB/bin-curl"; chmod +x "$SB/bin-curl" 2>/dev/null || { mkdir -p "$SB"; printf '#!/usr/bin/env bash\nexit 0\n' > "$SB/bin-curl"; chmod +x "$SB/bin-curl"; }
-out="$(AMBROSIO_HOME="$OLDHOME" CURL="$SB/bin-curl" BOTLINE_BIN=/nonexistent timeout 120 bash "$AMB" check --dry-run 2>&1)"
+out="$(AMBROSIO_HOME="$OLDHOME" CURL="$SB/bin-curl" BOTLINE_BIN=/nonexistent with_timeout 120 bash "$AMB" check --dry-run 2>&1)"
 case "$out" in
   *"unbound variable"*) fail "a config predating tonight's settings aborts the run: $out";;
   *) pass "a config written before the newest settings does not abort the run";;
@@ -130,7 +130,7 @@ esac
 # Checked against the tool's own reason string rather than by running the network: "new org"
 # alone must not qualify; "off-watchlist" must.
 # ---------------------------------------------------------------------------
-AMB2="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
+AMB2="$ASTRA_ROOT/tools/ambrosio/ambrosio"
 gate_block="$(sed -n '/ONLY report a model whose FAMILY is unknown/,/esac/p' "$AMB2")"
 case "$gate_block" in
   *"off-watchlist"*continue*) pass "trending watch reports only families off the watchlist";;
@@ -151,7 +151,7 @@ esac
 # which is the usual spelling, and that name uses the other one. These variants are exactly
 # what the junk list exists to keep out of a channel he has already objected to as noisy.
 # ---------------------------------------------------------------------------
-AMB3="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
+AMB3="$ASTRA_ROOT/tools/ambrosio/ambrosio"
 missing_junk=""
 for filt in $(grep -c "obliterat" "$AMB3"); do :; done
 [ "$(grep -c "obliterat" "$AMB3")" -eq 3 ] \
@@ -170,7 +170,7 @@ LT="$SB/locktest.sh"
 # the moment another function was added between them — it stopped at that function's brace and
 # never included acquire_lock at all, so three assertions failed on a lock that was fine.
 awk '/^LOCKDIR=/{c=1} c{print} c && /^acquire_lock\(\)/{a=1} a && /^}/{exit}' \
-  "$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio" > "$SB/lockfns.sh"
+  "$ASTRA_ROOT/tools/ambrosio/ambrosio" > "$SB/lockfns.sh"
 grep -q "^acquire_lock" "$SB/lockfns.sh" || fail "lock extraction did not capture acquire_lock — the assertions below would be meaningless"
 cat > "$LT" <<EOF
 #!/usr/bin/env bash
@@ -206,7 +206,7 @@ cat > "$FIX2" <<'JSON'
  {"id":"a/x16"},{"id":"a/x17"},{"id":"a/x18"},{"id":"a/x19"},{"id":"a/x20"},
  {"id":"latelab/TooLate-30B"}]
 JSON
-AMB4="$HOME/svnCheckouts/js-db-ad-astra/tools/ambrosio/ambrosio"
+AMB4="$ASTRA_ROOT/tools/ambrosio/ambrosio"
 # Run only the filter body, fed the fixture, with the same environment the script gives it.
 filter_out="$(sed -n '/^trending_watch(){/,/^}/p' "$AMB4" \
   | sed -n '/python3 -c "/,/^" 2/p' | sed '1d;$d' \

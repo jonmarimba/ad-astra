@@ -9,7 +9,11 @@
 set -u
 A="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 command -v jq >/dev/null || { echo "MISSING DEPENDENCY: jq"; exit 1; }
-T="$(mktemp -d)/repo"; git clone --quiet ~/svnCheckouts/js-llmKicker "$T" 2>/dev/null || { echo "clone failed"; exit 1; }
+# A throwaway git repo to install into. This used to clone ~/svnCheckouts/js-llmKicker,
+# which made the test depend on another project being checked out at that path.
+fixture_repo() { mkdir -p "$1" && git -C "$1" init -q && printf '# fixture\n' > "$1/CLAUDE.md" \
+  && git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -qm fixture; }
+T="$(mktemp -d)/repo"; fixture_repo "$T" || { echo "fixture repo failed"; exit 1; }
 fail=()
 
 iout="$(python3 "$A/tools/lib/template.py" install swift-ios --into "$T" 2>&1)"
@@ -68,7 +72,7 @@ fi
 # never placed (found by the round-one colloquium, codex leg, verified at the call
 # site). Installers are idempotent re-runs, so the honest record after a partial
 # failure is "not installed": fix the cause, re-run, and only then record.
-T2="$(mktemp -d)/repo"; git clone --quiet ~/svnCheckouts/js-llmKicker "$T2" 2>/dev/null || { echo "clone failed"; exit 1; }
+T2="$(mktemp -d)/repo"; fixture_repo "$T2" || { echo "fixture repo failed"; exit 1; }
 BROKEN_TPL="$(mktemp -d)/templates.json"
 cat > "$BROKEN_TPL" <<'EOF'
 {"templates": {"half-broken": {"description": "test template with a member that cannot install",

@@ -12,7 +12,10 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 HOME_DIR="${OLLAMA_WATCH_HOME:-$HOME/.ollama-watch}"
 mkdir -p "$HOME_DIR"
 CONF="$HOME_DIR/config"
-BOTLINE="${BOTLINE_BIN:-$HOME/svnCheckouts/js-db-ad-astra/tools/botline/botline}"
+# astra's root, from this script's real location (symlinks followed), so the
+# sibling tools resolve in any checkout, not only ~/svnCheckouts/js-db-ad-astra.
+ASTRA_ROOT="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/../.." && pwd)"
+BOTLINE="${BOTLINE_BIN:-$ASTRA_ROOT/tools/botline/botline}"
 if [ ! -f "$CONF" ]; then
   cat > "$CONF" <<'CFG'
 # name substrings that count as frontier/interesting (case-insensitive). Edit freely.
