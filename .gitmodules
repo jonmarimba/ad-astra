@@ -1,0 +1,3 @@
+[submodule "vendor/authsec-bridge"]
+	path = vendor/authsec-bridge
+	url = git@github.com:jonmarimba/authsec-bridge.git

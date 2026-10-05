@@ -25,12 +25,18 @@
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
 
-BRIDGE="${CONVOQ_BRIDGE:-$HOME/svnCheckouts/js-llmKicker/contrib/authsec-bridge}"
+# The engine is a git submodule of astra (vendor/authsec-bridge, from
+# jonmarimba/authsec-bridge), so astra carries its own pinned copy and never
+# reaches into another repo's checkout. Until 2026-10-04 this defaulted to
+# js-llmKicker's submodule, which on one Mac was pinned two months behind with
+# a crash in `convoq update`. CONVOQ_BRIDGE still overrides it.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+BRIDGE="${CONVOQ_BRIDGE:-$HERE/../vendor/authsec-bridge}"
 PY="${CONVOQ_PYTHON:-/opt/homebrew/bin/python3}"
 
 if [ ! -d "$BRIDGE/src/session_bridge" ]; then
   echo "convoq: session_bridge not found at $BRIDGE/src" >&2
-  echo "convoq: set CONVOQ_BRIDGE to the authsec-bridge checkout" >&2
+  echo "convoq: run 'git -C $HERE/.. submodule update --init' (or set CONVOQ_BRIDGE)" >&2
   exit 3
 fi
 
