@@ -24,5 +24,7 @@ if [ "${UNINSTALL_DEPS:-0}" = 1 ]; then
 fi
 if [ -n "$INTO" ]; then
   "$HERE/../lib/uninstall-doctrine.sh" "$INTO" --slug convocation
+  . "$HERE/../lib/astra-install.sh"; astra_target --into "$INTO"
+  astra_remove convocation-skill
 fi
 echo "done."

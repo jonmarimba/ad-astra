@@ -18,7 +18,11 @@ for a in "$@"; do
 done
 if [ -n "$INTO" ]; then
   HERE="$(cd "$(dirname "$0")" && pwd)"
-  exec "$HERE/../lib/install-doctrine.sh" "$INTO" "$HERE/convocation-doctrine.md" --slug convocation
+  "$HERE/../lib/install-doctrine.sh" "$INTO" "$HERE/convocation-doctrine.md" --slug convocation
+  # The skill that walks an agent through a convocation, installed with its doctrine.
+  . "$HERE/../lib/astra-install.sh"; astra_target --into "$INTO"
+  astra_place_at convocation-skill "agents-and-prompts/skills/convocation/SKILL.md:.claude/skills/convocation/SKILL.md"
+  exit 0
 fi
 
 have() {  # present anywhere on PATH? report where + how it resolves, and skip install

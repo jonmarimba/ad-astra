@@ -27,4 +27,9 @@ fi
 astra_place_at humanizer \
   "agents-and-prompts/skills/humanizer/upstream/SKILL.md:.claude/skills/humanizer/SKILL.md" \
   "agents-and-prompts/skills/humanizer/SKILL.md:.claude/skills/humanizer/voice-calibration.md" \
-  "agents-and-prompts/skills/humanizer/upstream/LICENSE:.claude/skills/humanizer/LICENSE"
+  "agents-and-prompts/skills/humanizer/upstream/LICENSE:.claude/skills/humanizer/LICENSE" \
+  "agents-and-prompts/voice/00_README.md:.claude/skills/humanizer/voice/00_README.md" \
+  "agents-and-prompts/voice/attorney.md:.claude/skills/humanizer/voice/attorney.md" \
+  "agents-and-prompts/voice/business-friendly-client.md:.claude/skills/humanizer/voice/business-friendly-client.md" \
+  "agents-and-prompts/voice/casual-contractor-and-text.md:.claude/skills/humanizer/voice/casual-contractor-and-text.md" \
+  "agents-and-prompts/voice/neighbors-and-public.md:.claude/skills/humanizer/voice/neighbors-and-public.md"

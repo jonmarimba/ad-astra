@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Attach files to a Jira issue and build/extend its comments or description.
+from __future__ import annotations  # `str | None` hints on Xcode's python3 3.9
 
 ATTACH ONLY (default):
     jira-attach MHMAPPS-1 shot.png a.pdf

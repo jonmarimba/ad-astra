@@ -24,7 +24,7 @@ Jonathan's standing rule: a pass over live client-facing content changes voice o
 
 De-slopping alone produces generic prose that "sounds like nobody." Voice calibration adds the person.
 
-Voice register files live at `js-db-ad-astra/agents-and-prompts/voice/` (canonical as of 2026-09-19; the old `js-project-GhOST/reference/voice/` path is now a symlink here). Each file is grounded in Jonathan's actual sent mail and texts. Pick the register that fits the recipient:
+Voice register files are installed beside this skill, in `voice/`. Each file is grounded in Jonathan's actual sent mail and texts. Pick the register that fits the recipient:
 
 - `attorney.md` — for Jake and legal correspondence
 - `business-friendly-client.md` — for Maharam, Nicole, Agat, David

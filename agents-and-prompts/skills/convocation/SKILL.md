@@ -13,15 +13,13 @@ Write ONE task file all agents will receive identically. Include the question, w
 ## Round 1 — ISOLATED
 Each agent gets the identical task file, a separate working directory, and NO sight of any other agent's output. Diversity of engines beats diversity of prompts: different vendors (claude / codex / qwen) fail differently, which is the point. Headless one-shots:
 
+The runner does this round: one call dispatches every brand through its own CLI, validates each voice before it starts, and refuses a short-handed round.
+
 ```sh
-/opt/homebrew/bin/claude -p "$(cat TASK.md)" > out/claude.md
-/opt/homebrew/bin/codex exec "$(cat TASK.md)" > out/codex.md
-/opt/homebrew/bin/qwen -p "$(cat TASK.md)" > out/qwen.md
+~/svnCheckouts/js-db-ad-astra/tools/convocation/panel TASK.md --out out --agents claude,codex,qwen --tag round1
 ```
 
-(Full binary paths on purpose — bare names break from launchd/cron/ssh contexts. The runner: /Users/jonathan/svnCheckouts/js-db-ad-astra/tools/convocation/panel, binaries overridable via CLAUDE_BIN/CODEX_BIN/QWEN_BIN.)
-
-(The runner at /Users/jonathan/svnCheckouts/js-db-ad-astra/tools/convocation/panel does this round for you.) Resist the urge to peek and steer mid-round — a steered agent is a copy of you.
+It finds `claude`, `codex` and `qwen` on PATH; `CLAUDE_BIN`, `CODEX_BIN` and `QWEN_BIN` override them. Resist the urge to peek and steer mid-round — a steered agent is a copy of you.
 
 ## Round 2 — ADVERSARIAL
 Each agent receives the OTHER agents' round-1 outputs with instructions to attack, not review: "Find what is WRONG. Fact-check every checkable claim with a live probe. Being polite about an error is a failure. Produce corrections with receipts." Feed A's output to B and C, B's to A and C, etc. Same headless mechanics, new task file per agent.

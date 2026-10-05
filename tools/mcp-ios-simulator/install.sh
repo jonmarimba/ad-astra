@@ -40,7 +40,9 @@ if ! command -v idb >/dev/null; then
   echo "ios-simulator: installing fb-idb (the idb CLI the server spawns)"
   pipx install fb-idb || { echo "ios-simulator: FAIL — pipx install fb-idb" >&2; exit 69; }
 fi
-# GUI-spawned servers get a minimal PATH; make idb reachable from /opt/homebrew/bin.
-[ -x /opt/homebrew/bin/idb ] || ln -sf "$(command -v idb)" /opt/homebrew/bin/idb
+# GUI-spawned servers get a minimal PATH; make idb reachable from Homebrew's bin,
+# wherever this Mac's Homebrew lives (/opt/homebrew on Apple Silicon, /usr/local on Intel).
+BREW_BIN_DIR="$(brew --prefix)/bin"
+[ -x "$BREW_BIN_DIR/idb" ] || ln -sf "$(command -v idb)" "$BREW_BIN_DIR/idb"
 
 exec "$BUNDLE/install.sh" "$@" ios-simulator
