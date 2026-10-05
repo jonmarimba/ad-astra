@@ -5,11 +5,11 @@ A "convocation" is a multi-agent review/panel — a per-tool bug hunt, a design 
 **1. Convoq-first is the rule for every round.** Before firing a convocation on a tool or subsystem, search convoq. Pull the known bugs, edge cases, and past decisions already hit on that exact tool, and feed those into the reviewers' prompts. The reviewers then start from what is already known instead of re-deriving it from zero. We forget; the record does not. A convocation that rediscovers what convoq already holds burned the run for nothing.
 
 ```
-~/svnCheckouts/js-db-ad-astra/tools/convoq update
-~/svnCheckouts/js-db-ad-astra/tools/convoq search '<tool name / bug term>' --kind human
+.astra/convoq/convoq update
+.astra/convoq/convoq search '<tool name / bug term>' --kind human
 ```
 
-This is astra's OWN convoq wrapper — ad astra does not depend on any GhOST checkout existing (the toolbox runs on every machine, GhOST does not). Use the wrapper rather than a bare `python3 -m session_bridge.convoq.cli`. The bare form is what this doctrine used to prescribe, and on Jonathan's Mac it fails before searching. `python3` resolves to Xcode's 3.9.6, which cannot parse the `str | os.PathLike` union in `session_bridge/paths.py:19`. A convocation that opens with a traceback and proceeds anyway is the exact waste this rule was written to prevent. The wrapper pins a 3.10+ interpreter and exits 3 with the remedy.
+That is the repo's installed copy of astra's convoq wrapper (`astra add convoq` if it is missing) — ad astra does not depend on any GhOST checkout existing (the toolbox runs on every machine, GhOST does not). Use the wrapper rather than a bare `python3 -m session_bridge.convoq.cli`. The bare form is what this doctrine used to prescribe, and on Jonathan's Mac it fails before searching. `python3` resolves to Xcode's 3.9.6, which cannot parse the `str | os.PathLike` union in `session_bridge/paths.py:19`. A convocation that opens with a traceback and proceeds anyway is the exact waste this rule was written to prevent. The wrapper pins a 3.10+ interpreter and exits 3 with the remedy.
 
 **2. Mix models AND brands — a same-brand panel is an echo chamber wearing a quorum's clothes.** The panel must span multiple model *brands*. It must not be N copies of one model. Independent architectures fail differently, so brand diversity is the whole point. It is what makes the panel catch what one model's blind spots would silently pass. Route review slices and verifiers across brands deliberately, and state which brand ran which slice so the diversity is auditable, not assumed. Proven local brands:
 

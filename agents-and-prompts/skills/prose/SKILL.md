@@ -36,7 +36,7 @@ On **rhythm**, the humanizer wins over STE, in one direction only. STE pushed to
 
 **Fragments: nobody wins, they are banned.** "A fragment is not concise, it is ambiguous." No skill may produce one, whatever it buys.
 
-The **banned vocabulary** list outranks all three. The authority is `agents-and-prompts/doctrine/banned-phrases.txt` in this repo (js-db-ad-astra), enforced by `tools/check-banned-phrases.sh` in the same repo. **Those paths are repo-relative to js-db-ad-astra, not to wherever this skill is installed** — resolve them from that checkout. If that checkout is not present on the machine, say the check could not run; never report the draft as clean. A skill that silently skips its own highest-priority rule is worse than one that never claimed it. If a suggested phrase is on that list, the list wins, silently.
+The **banned vocabulary** list outranks all three. Run the repo's installed copy, `.astra/check-banned-phrases/check-banned-phrases.sh`, which carries its own copy of the list and is kept current like every astra tool. If the repo does not have it, `astra add check-banned-phrases` installs it; until then say the check could not run, and never report the draft as clean. A skill that silently skips its own highest-priority rule is worse than one that never claimed it. If a suggested phrase is on that list, the list wins, silently.
 
 On **passive voice**, STE wins, with an exception. STE wants the active voice for anything the reader must do. Where the actor is genuinely unknown or deliberately unnamed — which happens constantly in the legal drafts — the passive stays. In that case, Grammarly's flag is ignored.
 

@@ -16,7 +16,11 @@
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIST="${BANNED_PHRASES:-$HERE/../agents-and-prompts/doctrine/banned-phrases.txt}"
+# An installed copy (astra add check-banned-phrases) carries its own list beside
+# it; run from the astra checkout, it reads the canonical one.
+if [ -n "${BANNED_PHRASES:-}" ]; then LIST="$BANNED_PHRASES"
+elif [ -f "$HERE/banned-phrases.txt" ]; then LIST="$HERE/banned-phrases.txt"
+else LIST="$HERE/../../agents-and-prompts/doctrine/banned-phrases.txt"; fi
 
 [ -f "$LIST" ] || { echo "check-banned-phrases: list not found at $LIST" >&2; exit 3; }
 

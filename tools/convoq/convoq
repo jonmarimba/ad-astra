@@ -30,13 +30,23 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$P
 # reaches into another repo's checkout. Until 2026-10-04 this defaulted to
 # js-llmKicker's submodule, which on one Mac was pinned two months behind with
 # a crash in `convoq update`. CONVOQ_BRIDGE still overrides it.
+# Run from the astra checkout, the engine sits beside it. An installed copy
+# (<repo>/.astra/convoq/convoq) finds astra through the manifest's recorded
+# source, then ~/svnCheckouts/js-db-ad-astra. convoq searches THIS machine's
+# transcripts, so needing astra's engine on the machine is inherent to it.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-BRIDGE="${CONVOQ_BRIDGE:-$HERE/../vendor/authsec-bridge}"
+if [ -n "${CONVOQ_BRIDGE:-}" ]; then BRIDGE="$CONVOQ_BRIDGE"
+elif [ -d "$HERE/../../vendor/authsec-bridge/src" ]; then BRIDGE="$HERE/../../vendor/authsec-bridge"
+else
+  ASTRA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tools"]["convoq"]["source"])' "$HERE/../manifest.json" 2>/dev/null)"
+  [ -d "${ASTRA:-/nonexistent}/vendor/authsec-bridge/src" ] || ASTRA="$HOME/svnCheckouts/js-db-ad-astra"
+  BRIDGE="$ASTRA/vendor/authsec-bridge"
+fi
 PY="${CONVOQ_PYTHON:-/opt/homebrew/bin/python3}"
 
 if [ ! -d "$BRIDGE/src/session_bridge" ]; then
   echo "convoq: session_bridge not found at $BRIDGE/src" >&2
-  echo "convoq: run 'git -C $HERE/.. submodule update --init' (or set CONVOQ_BRIDGE)" >&2
+  echo "convoq: it needs the astra checkout with its submodule: git -C <astra> submodule update --init (or set CONVOQ_BRIDGE)" >&2
   exit 3
 fi
 

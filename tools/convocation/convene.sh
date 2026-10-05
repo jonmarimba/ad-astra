@@ -34,7 +34,7 @@ esac; done
 OUT="${OUT:-$REPO/.convocation}"; mkdir -p "$OUT"
 # Default to astra's OWN convoq (resolved relative to this script), never a GhOST checkout — ad
 # astra must not depend on GhOST existing on the machine (it runs on the M5 beside other robots).
-CONVOQ_BIN="${CONVOQ_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/convoq}"
+CONVOQ_BIN="${CONVOQ_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/convoq/convoq}"
 if [ -n "${CONVOQ:-}" ] && [ ! -x "$CONVOQ_BIN" ]; then
   echo "convene: convoq wrapper not executable at $CONVOQ_BIN" >&2
   echo "convene: convoq-first is doctrine; refusing to run a convocation blind." >&2
