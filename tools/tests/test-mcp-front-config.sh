@@ -111,6 +111,17 @@ printf '{"mcpServers": {"x": {"command": "c", "env": {"A": 1}}}}' > "$SB/badenv.
 red "env values that are not strings are rejected" 65 "'env' must be an object of string values" \
   python3 "$LOADER" validate "$SB/badenv.json"
 
+# --- env key names that are invalid POSIX identifiers (GhOST-OpenClaw peer review of 4333ffbc) ---
+# execve splits on the first '=' in each NAME=VALUE string, so an env key containing '='
+# silently mangles the variable name; empty and NUL keys are undefined.
+printf '{"mcpServers": {"x": {"command": "c", "env": {"BAD=NAME": "v"}}}}' > "$SB/eqenv.json"
+red "env key containing = is rejected" 65 "not a valid POSIX environment variable name" \
+  python3 "$LOADER" validate "$SB/eqenv.json"
+
+printf '{"mcpServers": {"x": {"command": "c", "env": {"": "v"}}}}' > "$SB/emptykey.json"
+red "empty env key is rejected" 65 "not a valid POSIX environment variable name" \
+  python3 "$LOADER" validate "$SB/emptykey.json"
+
 # --- unknown TOP-LEVEL keys are rejected too (all three phase-1 panel brands) ---
 # Phase 2's sieve and Phase 3's map land at top level; a typo'd stanza that validates
 # silently is a limiting policy that never applies.

@@ -33,7 +33,20 @@ after="$(jq -r '.mcpServers|keys|join(",")' "$T/.mcp.json" 2>/dev/null)"
 
 # swift-ios's MCP servers since 2026-09-01: the combined Xcode aggregator,
 # mac-control (shared with kicker-dev, so it must be KEPT) and the simulator.
+# mac-control-mcp may be ABSENT from the project .mcp.json if the user scope
+# (~/.claude/.claude.json) already runs the same binary — the installer dedupes
+# it to avoid doubling all 64 tools in sessions that merge scopes. When deduped
+# the server is still available through user scope, so its absence is correct.
+_user_has_mac_control=false
+if [ -f "$HOME/.claude/.claude.json" ]; then
+  _mc_bin="$(jq -r '.mcpServers["mac-control"].command // .mcpServers["mac-control-mcp"].command // empty' "$HOME/.claude/.claude.json" 2>/dev/null)"
+  [ -z "$_mc_bin" ] || _user_has_mac_control=true
+fi
 for need in xcode-combined mac-control-mcp ios-simulator; do
+  if [ "$need" = "mac-control-mcp" ] && $_user_has_mac_control; then
+    echo "  mac-control-mcp deduped to user scope (correct — user scope already runs it)"
+    continue
+  fi
   echo "$after" | grep -q "$need" || fail+=("swift-ios lost $need after uninstalling an overlapping template")
 done
 echo "$after" | grep -q kickerd && fail+=("kickerd survived its own template's uninstall")

@@ -117,6 +117,11 @@ def _parse_server(name, spec, strict=True):
     if not isinstance(env, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
         raise ConfigError("server '%s': 'env' must be an object of string values" % name)
+    for k in env:
+        if not k or "=" in k or "\0" in k:
+            raise ConfigError(
+                "server '%s': env key %r is not a valid POSIX environment variable name "
+                "(empty, contains '=' or NUL)" % (name, k))
 
     version = spec.get("version")
     if version is not None and (not isinstance(version, str) or not version.strip()):
