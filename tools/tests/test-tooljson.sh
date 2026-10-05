@@ -48,7 +48,19 @@ red "a descriptor without a description is rejected" 65 "has no 'description'" \
   python3 "$READER" validate "$D/tool.json"
 
 printf '{"name": "fake-tool", "description": "d", "provides": "mcp-server", "dependencies": []}' > "$D/tool.json"
-red "provides mcp-server without a server name is rejected" 65 "provides 'mcp-server' but names no 'server'" \
+red "provides mcp-server without a server name is rejected" 65 "'server' is missing or not a non-empty string" \
+  python3 "$READER" validate "$D/tool.json"
+
+printf '{"name": "fake-tool", "description": "d", "provides": "mcp-server", "server": 1, "dependencies": []}' > "$D/tool.json"
+red "provides mcp-server with a non-string server is rejected" 65 "'server' is missing or not a non-empty string" \
+  python3 "$READER" validate "$D/tool.json"
+
+printf '{"name": "fake-tool", "description": "d", "provides": "cli", "dependencies": [], "backed_by": "/etc/passwd"}' > "$D/tool.json"
+red "an absolute backed_by path is rejected" 65 "is absolute or contains" \
+  python3 "$READER" validate "$D/tool.json"
+
+printf '{"name": "fake-tool", "description": "d", "provides": "cli", "dependencies": [], "backed_by": "../../../etc/passwd"}' > "$D/tool.json"
+red "a traversal backed_by path is rejected" 65 "is absolute or contains" \
   python3 "$READER" validate "$D/tool.json"
 
 printf '{"name": "fake-tool", "description": "d", "provides": "cli", "dependencies": ["cargo:ripgrep"]}' > "$D/tool.json"

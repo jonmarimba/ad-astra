@@ -93,10 +93,12 @@ def parse(path, expect_dirname=None):
     provides = d["provides"]
     if not isinstance(provides, str) or not provides:
         raise DescriptorError("%s has no 'provides'" % path)
-    if provides == "mcp-server" and not d.get("server"):
-        raise DescriptorError(
-            "%s provides 'mcp-server' but names no 'server' — the MCP server key is "
-            "what installers configure" % path)
+    if provides == "mcp-server":
+        srv = d.get("server")
+        if not isinstance(srv, str) or not srv.strip():
+            raise DescriptorError(
+                "%s provides 'mcp-server' but 'server' is missing or not a non-empty "
+                "string — the MCP server key is what installers configure" % path)
 
     deps = d["dependencies"]
     if not isinstance(deps, list) or not all(isinstance(x, str) for x in deps):
@@ -134,7 +136,21 @@ def parse(path, expect_dirname=None):
     if backed_by is not None:
         if not isinstance(backed_by, str):
             raise DescriptorError("%s: 'backed_by' must be a string path" % path)
-        if not (ASTRA / backed_by).exists():
+        # An absolute path or '..' component escapes the Astra-relative constraint:
+        # pathlib's / operator resolves an absolute right operand by discarding the
+        # left, so ASTRA / "/etc/passwd" == Path("/etc/passwd").  (GhOST-OpenClaw
+        # peer review of 1d5b4bc4.)
+        from pathlib import PurePosixPath
+        parts = PurePosixPath(backed_by).parts
+        if backed_by.startswith("/") or ".." in parts:
+            raise DescriptorError(
+                "%s: backed_by '%s' is absolute or contains '..'; it must be a "
+                "relative path under %s" % (path, backed_by, ASTRA))
+        resolved = (ASTRA / backed_by).resolve()
+        if not str(resolved).startswith(str(ASTRA.resolve())):
+            raise DescriptorError(
+                "%s: backed_by '%s' resolves outside %s" % (path, backed_by, ASTRA))
+        if not resolved.exists():
             raise DescriptorError("%s: backed_by '%s' does not exist under %s"
                                   % (path, backed_by, ASTRA))
 
