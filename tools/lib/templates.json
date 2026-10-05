@@ -74,14 +74,14 @@
    ]
   },
   "base": {
-   "description": "What EVERY repo gets regardless of kind (Jonathan, 2026-09-01): the writing discipline (any repo eventually produces prose a human reads, and the doctrine's standing order \u2014 run the tools, your opinion of your own prose is not evidence \u2014 only fires if it is installed) and convocation (cross-brand panels, whose doctrine carries the convoq-first rule: search the record before reconstructing or asking). convoq is installed with it, as .astra/convoq/convoq, so the doctrine's commands work in the repo. Also the claude-safety-hooks (no silent truncation of personal-data searches, no killing other Claude sessions), installed per repo so no hook is machine-wide.",
+   "description": "What EVERY repo gets regardless of kind (Jonathan, 2026-09-01): the writing discipline (any repo eventually produces prose a human reads, and the doctrine's standing order \u2014 run the tools, your opinion of your own prose is not evidence \u2014 only fires if it is installed) and convocation (cross-brand panels, whose doctrine carries the convoq-first rule: search the record before reconstructing or asking). convoq is installed with it, as .astra/convoq/convoq, so the doctrine's commands work in the repo. Also the no-silent-truncation guard, installed per repo so no hook is machine-wide. The kill guard (no-killing-other-claudes) is opt-in because it fails closed on any command it cannot read.",
    "templates": [
     "writing"
    ],
    "tools": [
     "convocation",
     "convoq",
-    "claude-safety-hooks"
+    "no-silent-truncation"
    ]
   }
  }
