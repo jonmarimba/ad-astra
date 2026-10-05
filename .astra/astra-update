@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""
+astra-update — vendored into every repo at .astra/astra-update.
+
+WHAT THIS IS
+------------
+The pull half of astra's tool distribution. A repo that has astra tools
+installed carries this script and a manifest saying where each tool came from
+and what it looked like on arrival. This asks the source whether anything has
+moved on, and updates in place.
+
+WHY IT IS HERE AND NOT IN ASTRA (Jonathan, 2026-08-18)
+------------------------------------------------------
+The first design had astra push: a post-commit hook in astra rewrote files
+across six checkouts, deciding what belonged to it by matching filenames. That
+put the blast radius in the wrong place. A bug in astra could destroy work in a
+legal repo, and it did — the fork guard was unreachable, so an edited copy was
+silently overwritten.
+
+Pull inverts it. Each repo asks, on its own schedule, from its own hook. Astra
+never reaches into anything. A repo can be cloned, moved, or taken offline and
+this still behaves correctly, which a central list of absolute paths cannot.
+
+THE SAFETY RULE, learned the hard way
+-------------------------------------
+Update a file only when it is EXACTLY what we installed. The manifest records
+the hash of every file at install time, so a local edit is a fact rather than
+an inference. Matching hash means nobody touched it and replacing it loses
+nothing. Anything else is reported and left alone — never silently overwritten,
+and never silently skipped either, because a watcher that hides work is how the
+real problem gets missed.
+
+    .astra/astra-update            report what is behind, change nothing
+    .astra/astra-update --pull     update the unmodified, report the rest;
+                                   silent when there is nothing to report
+
+The updater is itself an entry in the manifest, under the same rule as every
+tool: replaced when untouched, reported when edited. An update script that
+cannot keep itself current goes stale in every repo it was ever copied into.
+"""
+import hashlib
+import json
+from datetime import datetime
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent          # <repo>/.astra
+REPO = HERE.parent                              # the repo that owns this install
+MANIFEST = HERE / "manifest.json"
+
+
+def sha(p):
+    try:
+        return hashlib.sha256(Path(p).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def load():
+    try:
+        return json.loads(MANIFEST.read_text())
+    except FileNotFoundError:
+        print(f"no manifest at {MANIFEST} — nothing installed here", file=sys.stderr)
+        raise SystemExit(0)
+    except Exception as e:
+        # A corrupt manifest must never be treated as "nothing installed".
+        # That reading would make a broken repo look like a clean one.
+        print(f"manifest unreadable ({e}) — refusing to guess", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def save(data):
+    tmp = MANIFEST.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, MANIFEST)
+
+
+def resolve_source(recorded, source_remote=None):
+    """The manifest records an ABSOLUTE source path, which broke every cloned repo:
+    on a machine without that exact path, nothing could update — and third-party
+    adoption is impossible if a checkout only works where it was first installed
+    (ROADMAP phase 6). Resolution order, first hit wins:
+
+      1. the recorded path itself (the common case, unchanged);
+      2. $ASTRA_SOURCE — the explicit override for unusual layouts;
+      3. a sibling of this repo's parent named like the recorded source's basename —
+         the cloned-workspace convention (~/checkouts/js-db-ad-astra next to
+         ~/checkouts/consumer clones as /elsewhere/js-db-ad-astra next to
+         /elsewhere/consumer).
+
+    Returns (path or None, note). The note says when a fallback was used, because a
+    silently substituted source is how the wrong checkout feeds an update."""
+    recorded = Path(recorded) if recorded else None
+    if recorded and (recorded / "tools").is_dir():
+        return recorded, ""            # the recorded path exists — same machine, trusted
+    env = os.environ.get("ASTRA_SOURCE")
+    if env and (Path(env) / "tools").is_dir():
+        return Path(env), " (resolved via $ASTRA_SOURCE)"   # operator-set, trusted
+    # A SIBLING is GUESSED from a basename, so it must PROVE it is the same project
+    # before it may feed content. A stray checkout, fork, or unpacked tarball that
+    # merely shares the directory name is otherwise an arbitrary-content injection
+    # (adversarial round, SEVERE: a sibling containing `curl evil | sh` was copied in
+    # and run, exit 0). The recorded source path is DEAD in this branch by construction
+    # (that is why we are guessing), so the identity anchor is the source's git-remote
+    # URL recorded in the manifest at install time — the sibling must be the SAME
+    # repository, and a manifest that never recorded one gets no sibling fallback.
+    if recorded and recorded.name and source_remote:
+        sib = REPO.parent / recorded.name
+        if (sib / "tools").is_dir():
+            if _git_remote(sib) == source_remote:
+                return sib, f" (verified sibling: its git remote matches the recorded source {source_remote})"
+            # A lookalike checkout is a security event, never "astra is simply
+            # not on this machine", so it is reported even from the hook.
+            return None, "REFUSED"
+    return None, ""
+
+
+def _git_remote(path):
+    # Catch only the ways git-the-subprocess can legitimately fail (not installed,
+    # hung). A broad `except Exception` here once swallowed a NameError from a missing
+    # `import subprocess` and returned None for EVERY sibling — the whole verified-
+    # sibling feature was silently dead and the impostor test passed by accident. A
+    # programming error must surface, not read as "no remote".
+    try:
+        r = subprocess.run(["git", "-C", str(path), "remote", "get-url", "origin"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def main():
+    pull = "--pull" in sys.argv
+    # --log FILE: append one dated entry per CHANGE OF STATE, never per run. A hook that
+    # runs on every commit must not leave "14 current" four hundred times in a tracked
+    # file; CocoaPods writes Podfile.lock when the pods change and is silent otherwise,
+    # and this does the same. Jonathan, 2026-10-02: "An updater shouldn't shit in its
+    # tracking file when nothing happened."
+    #
+    # Stdout follows the same rule (2026-10-01): a --pull with nothing to report prints
+    # nothing, and an eventful one is stamped with the time. Everything except the
+    # summary is collected in `events`, which feeds both.
+    log_path = None
+    if "--log" in sys.argv:
+        i = sys.argv.index("--log")
+        if i + 1 >= len(sys.argv):
+            print("--log needs a file path", file=sys.stderr)
+            return 2
+        log_path = Path(sys.argv[i + 1])
+    events = []
+    say = events.append
+    data = load()
+    behind = modified = current = missing = 0
+
+    for tool, meta in sorted(data.get("tools", {}).items()):
+        src_root, src_note = resolve_source(meta.get("source", ""),
+                                            meta.get("source_remote"))
+        if src_root is None and pull and src_note != "REFUSED":
+            # No astra checkout on this machine. Astra is never a prerequisite
+            # for a repo, so a hook-driven pull has nothing to do and nothing
+            # to say; the installed files keep working as they are. An explicit
+            # status check (no --pull) still reports it below.
+            continue
+        if src_root is None:
+            say(f"  SOURCE GONE  {tool}  (recorded {meta.get('source')!r}; no "
+                  f"$ASTRA_SOURCE, no sibling clone). Set ASTRA_SOURCE=<path to the "
+                  f"source checkout> or clone it beside this repo.")
+            missing += 1
+            continue
+        if src_note:
+            say(f"  note: {tool} source{src_note}")
+        src_dir = src_root / "tools" / tool
+        dest_dir = HERE / tool
+
+        # A tool whose files all carry explicit paths need not have a tools/<tool> directory.
+        if not src_dir.is_dir() and not meta.get("paths"):
+            # The source checkout exists but no longer carries this tool.
+            say(f"  SOURCE GONE  {tool}  (looked in {src_dir})")
+            missing += 1
+            continue
+
+        # A tool may place files OUTSIDE .astra — doctrine installs to <repo>/.doctrine/<slug>.md.
+        # Those entries carry explicit repo-relative src and dest, because the default layout
+        # (<source>/tools/<tool>/<file> -> <repo>/.astra/<tool>/<file>) cannot express them.
+        #
+        # This gap is why four installed copies of the convocation doctrine sat stale through a
+        # rename on 2026-08-26: install-doctrine.sh never registered them, so the updater did not
+        # know they existed and reported everything current. A distribution mechanism that is
+        # silent about what it does not cover is worse than one that covers less and says so.
+        paths = meta.get("paths", {})
+        for fname, installed_sha in sorted(meta.get("files", {}).items()):
+            override = paths.get(fname, {})
+            src = (src_root / override["src"]) if override.get("src") else (src_dir / fname)
+            dest = (REPO / override["dest"]) if override.get("dest") else (dest_dir / fname)
+            upstream, live = sha(src), sha(dest)
+
+            if upstream is None:
+                say(f"  SOURCE GONE  {tool}/{fname}")
+                missing += 1
+            elif live is None:
+                say(f"  MISSING      {tool}/{fname} — reinstall the tool")
+                missing += 1
+            elif live == upstream:
+                current += 1
+            elif live != installed_sha:
+                # Diverged from what we put here. Could be a deliberate local
+                # change or an accident; either way it is not ours to discard.
+                say(f"  LOCAL EDITS  {tool}/{fname} — differs from what was "
+                      f"installed; not touching it")
+                modified += 1
+            elif pull:
+                tmp = dest.with_name(dest.name + ".astra-tmp")
+                shutil.copy2(src, tmp)
+                os.replace(tmp, dest)       # atomic: never a truncated tool
+                meta["files"][fname] = upstream
+                say(f"  updated      {tool}/{fname}")
+                behind += 1
+            else:
+                say(f"  BEHIND       {tool}/{fname} — run .astra/astra-update --pull")
+                behind += 1
+
+    if pull and behind:
+        save(data)
+
+    parts = [f"{current} current"]
+    if behind:
+        parts.append(f"{behind} {'updated' if pull else 'behind'}")
+    if modified:
+        parts.append(f"{modified} locally modified")
+    if missing:
+        parts.append(f"{missing} missing")
+    summary = ", ".join(parts)
+
+    eventful = behind or modified or missing
+    if not (pull and not eventful):
+        if pull:
+            print(datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " astra-update --pull")
+        for e in events:
+            print(e)
+        print(summary)
+
+    if log_path is not None:
+        # Edge-triggered: write only when the FULL state — the summary AND its detail lines —
+        # differs from the LAST entry logged. Comparing the summary alone misses a changed set
+        # of flagged files at an unchanged count; keying on `events` being non-empty (the old
+        # bug) re-appended an identical block on EVERY run while a LOCAL EDITS / SOURCE GONE /
+        # MISSING condition persisted, because those events are regenerated each run. A dated
+        # line (summary) begins with a digit; detail lines begin with spaces, so they parse apart
+        # cleanly. (ghost-openclaw peer review of d9dd98b0; reproduced 2026-10-02: log grew every run.)
+        #
+        # Read, compare and append under ONE exclusive lock. Two post-commit updaters on the
+        # same log (rapid concurrent commits, or a manual run overlapping a hook) could otherwise
+        # both read the same prior state, both see the change, and both append identical blocks
+        # for one transition. flock serializes them: the first appends, the second then reads the
+        # already-written block and stays quiet. (ghost-openclaw peer review of 8cf500da.)
+        import fcntl
+        with log_path.open("a+") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            fh.seek(0)
+            last_summary = None
+            last_events = []
+            for line in fh.read().splitlines():
+                if line[:1].isdigit() and "  " in line:
+                    last_summary = line.split("  ", 1)[1]
+                    last_events = []
+                elif last_summary is not None:
+                    last_events.append(line)
+            # Test-only seam: widen the read->append window so the concurrency test can prove
+            # the lock matters. Under the lock a second updater simply waits here; without it,
+            # both read the same prior state and both append. Unset in all real runs.
+            _delay = os.environ.get("ASTRA_UPDATE_LOG_TEST_DELAY")
+            if _delay:
+                import time
+                time.sleep(float(_delay))
+            if summary != last_summary or events != last_events:
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+                fh.write(f"{stamp}  {summary}\n")       # O_APPEND: always writes at EOF
+                for e in events:
+                    fh.write(f"{e}\n")
+            # lock released when the with-block closes the fd
+
+    # Nonzero only for things a human must act on. Being behind is not a
+    # failure when --pull just fixed it.
+    return 1 if (modified or missing or (behind and not pull)) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

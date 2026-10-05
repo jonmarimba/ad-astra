@@ -12,3 +12,13 @@ tools/lib/installed.json
 .codex/
 .qwen/
 __pycache__/
+
+# Panel stderr dumps and scratch: logs, never source (removed from git 2026-10-04).
+*.err
+tmp/
+*.pyc
+
+# >>> astra (managed) >>>
+# Per-machine log of automatic tool updates; not shared state.
+.astra/update.log
+# <<< astra <<<

@@ -22,7 +22,7 @@ It configures the same set for three agents that each store config differently:
 
 Every write lands inside the target repo. `setup-mcp.sh` already honoured this — it only ever uses `--scope project` and repo-relative paths. The wrappers now *assert* it: a target under `$HOME`, `~/.claude`, `~/.agents`, `~/.config` or `~/Library` is refused with exit 78. Targets are resolved with `pwd -P` so a symlinked repo (js-speedway is one) resolves to its real path instead of being skipped.
 
-On 2026-08-18 the global installs that had accumulated were removed. They were five skills under `~/.claude/skills` (including astra's own graphify), `~/.agents`, and an `xcode-mcp-server` entry in the Claude Desktop config. Backups are in `_removed-globals-20260818/` — restore from there rather than reinstalling globally.
+On 2026-08-18 the global installs that had accumulated were removed. They were five skills under `~/.claude/skills` (including astra's own graphify), `~/.agents`, and an `xcode-mcp-server` entry in the Claude Desktop config. Backups were kept in `_removed-globals-20260818/`, removed from the tree on 2026-10-04 and still in history: `git show db36cc8ools/mcp-bundle/_removed-globals-20260818/<file>`. Restore from there rather than reinstalling globally.
 
 ## Where this went
 

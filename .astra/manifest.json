@@ -1,0 +1,48 @@
+{
+  "template_tools": {
+    "ponytail": [
+      "ponytail"
+    ]
+  },
+  "templates": [
+    "ponytail"
+  ],
+  "tools": {
+    "astra-update": {
+      "files": {
+        ".astra/astra-update": "d877e10fe8d059e2"
+      },
+      "paths": {
+        ".astra/astra-update": {
+          "dest": ".astra/astra-update",
+          "src": "tools/lib/astra-update"
+        }
+      },
+      "source": "/Users/jonathan/svnCheckouts/js-db-ad-astra",
+      "source_remote": "git@github.com:jonmarimba/ad-astra.git"
+    },
+    "ponytail": {
+      "files": {
+        ".claude/skills/ponytail-audit/SKILL.md": "554b7ac9c78a6b1a",
+        ".claude/skills/ponytail/LICENSE": "fb1bc6909ac3ef82",
+        ".claude/skills/ponytail/SKILL.md": "1316a2f3f95741d2"
+      },
+      "paths": {
+        ".claude/skills/ponytail-audit/SKILL.md": {
+          "dest": ".claude/skills/ponytail-audit/SKILL.md",
+          "src": "agents-and-prompts/skills/ponytail/ponytail-audit/SKILL.md"
+        },
+        ".claude/skills/ponytail/LICENSE": {
+          "dest": ".claude/skills/ponytail/LICENSE",
+          "src": "agents-and-prompts/skills/ponytail/LICENSE"
+        },
+        ".claude/skills/ponytail/SKILL.md": {
+          "dest": ".claude/skills/ponytail/SKILL.md",
+          "src": "agents-and-prompts/skills/ponytail/ponytail/SKILL.md"
+        }
+      },
+      "source": "/Users/jonathan/svnCheckouts/js-db-ad-astra",
+      "source_remote": "git@github.com:jonmarimba/ad-astra.git"
+    }
+  }
+}
