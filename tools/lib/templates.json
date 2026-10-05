@@ -73,7 +73,7 @@
    ]
   },
   "base": {
-   "description": "What EVERY repo gets regardless of kind (Jonathan, 2026-09-01): the writing discipline (any repo eventually produces prose a human reads, and the doctrine's standing order \u2014 run the tools, your opinion of your own prose is not evidence \u2014 only fires if it is installed) and convocation (cross-brand panels, whose doctrine carries the convoq-first rule: search the record before reconstructing or asking). convoq itself is machine-level tooling in js-project-GhOST; the per-repo piece is the doctrine that orders bots to use it.",
+   "description": "What EVERY repo gets regardless of kind (Jonathan, 2026-09-01): the writing discipline (any repo eventually produces prose a human reads, and the doctrine's standing order \u2014 run the tools, your opinion of your own prose is not evidence \u2014 only fires if it is installed) and convocation (cross-brand panels, whose doctrine carries the convoq-first rule: search the record before reconstructing or asking). convoq itself is astra's tools/convoq, run from the astra checkout; the per-repo piece is the doctrine that orders bots to use it.",
    "templates": [
     "writing"
    ],
