@@ -97,7 +97,9 @@ run_agent(){ # run_agent <name> <outfile> <cmd...>
     # carries one. Anything too short to be a review is a failure with its content quoted.
     # An agent that answers into a sidecar file (codex -o) has its answer moved into place
     # before the size check, or the check would reject a perfectly good review.
-    [ -s "$o.last" ] && { cat "$o.last" >> "$o"; rm -f "$o.last"; }
+    # codex prints its final message to stdout AND writes it to -o; appending the
+    # sidecar recorded every codex answer twice. The sidecar is the answer.
+    [ -s "$o.last" ] && mv -f "$o.last" "$o"
     local bytes; bytes="$(wc -c < "$o" | tr -d ' ')"
     if [ "$bytes" -lt "$MIN_ANSWER_BYTES" ]; then
       printf 'FAIL  %s  answered %s bytes: %s\n' "$a" "$bytes" "$(tr '\n' ' ' < "$o")" >> "$STATUS"
