@@ -269,4 +269,29 @@ assert_eq "0" "$?" "single-upstream env overrides still resolve"
 assert_contains "$out" "uvx drews-xcode-mcp" "single-upstream CMD/ARGS overrides survive"
 assert_not_contains "$out" "require_xcode" "REQUIRE_XCODE=0 drops the quirk"
 
+# --- daemon launch path: BAD=NAME config must fail BEFORE the stub executes ---
+# The daemon calls resolve_specs() at startup (before spawning any child). A config
+# with an invalid env key must be rejected at that point, not after the child runs.
+# Prove it by pointing the command at a marker stub and checking it never fires.
+marker="$SB/daemon-launch-marker"
+stub="$SB/daemon-stub.sh"
+cat > "$stub" <<STUB
+#!/bin/sh
+touch "$marker"
+STUB
+chmod +x "$stub"
+badcfg="$SB/daemon-badkey.json"
+printf '{"mcpServers": {"x": {"command": "%s", "env": {"BAD=NAME": "v"}}}}' "$stub" > "$badcfg"
+out="$SB/daemon-launch.out"
+env -u XCODE_MCP_FRONT_UPSTREAMS XCODE_MCP_FRONT_MCP_INFO="$badcfg" \
+  python3 "$LOADER" resolve >"$out" 2>&1
+rc=$?
+[ "$rc" -eq 65 ] && pass "daemon resolve rejects BAD=NAME config (rc=65)" \
+                  || fail "daemon resolve did not reject BAD=NAME config (rc=$rc)"
+[ ! -e "$marker" ] && pass "marker stub never executed — validator fired before child spawn" \
+                    || fail "marker stub executed — child ran despite invalid config"
+grep -q "not a valid POSIX environment variable name" "$out" 2>/dev/null \
+  && pass "daemon resolve names the env key violation" \
+  || fail "daemon resolve did not name the env key violation"
+
 finish
