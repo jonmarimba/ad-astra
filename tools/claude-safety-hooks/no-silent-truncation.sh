@@ -54,12 +54,38 @@ except Exception: print('')
 
 [ -z "$cmd" ] && exit 0
 
-# PROSE IS NOT A SEARCH, AND THIS GUARD CAN BLOCK ITS OWN FIX. It matches the raw command
-# string, so a `git commit -m` whose message DESCRIBES the problem — naming a tool, a grep,
-# a pipe into head while explaining the repair — trips every test and refuses the commit.
-case "$cmd" in
-  *"git commit"*|*"git tag"*|*"git merge"*|*"git notes"*) exit 0 ;;
-esac
+# PROSE IS NOT A SEARCH, AND THIS GUARD CAN BLOCK ITS OWN FIX. A `git commit -m` whose message
+# DESCRIBES the problem — naming a tool, a grep, a pipe into head while explaining the repair —
+# must pass. The old code exempted the WHOLE command if "git commit" appeared ANYWHERE in it, so a
+# truncated protected-data search CHAINED before a commit sailed through:
+#   mailq search urgent | head -10; git commit --allow-empty -m x   <- bypassed the guard entirely.
+# (GhOST-OpenClaw peer review of 92797811.) Fix: SEGMENT-scope the exemption. Split the command on
+# the command separators ; && || and newline (NOT on | -- a `search | head` is one pipeline that
+# must stay intact and be scanned as a unit), drop only the segments that ARE a git commit/tag/merge/
+# notes command (first word git, second word the subcommand, after any leading VAR=val assignments --
+# so a SEARCH whose text merely contains "git commit" is NOT exempted), and scan what remains. A pure
+# commit leaves nothing to scan and passes; a chained truncated search keeps its segment and blocks.
+cmd="$(SRC="$cmd" python3 -c "
+import os
+src = os.environ.get('SRC','')
+for sep in ('&&', '||', ';'):
+    src = src.replace(sep, '\n')
+kept = []
+for seg in src.split('\n'):
+    words = seg.strip().split()
+    i = 0
+    while i < len(words):
+        w = words[i]; eq = w.find('=')
+        if eq > 0 and '/' not in w[:eq] and w[:eq].replace('_','').isalnum():
+            i += 1            # leading VAR=val assignment, skip it
+        else:
+            break
+    if ' '.join(words[i:i+2]) in ('git commit','git tag','git merge','git notes'):
+        continue              # a git-commit-family segment: exempt (drop from the scan)
+    kept.append(seg)
+print('\n'.join(kept))
+" 2>/dev/null)"
+[ -z "$(printf '%s' "$cmd" | tr -d '[:space:]')" ] && exit 0   # nothing left after removing commit segments
 
 # Is this a search over protected data? Plain substring tests against the configured
 # watchlist, no regex. A line containing ' && ' is a compound AND condition -- every part
