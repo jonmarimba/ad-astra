@@ -18,11 +18,16 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
 BOTLINE_HOME="${BOTLINE_HOME:-$HOME/.botline}"
 mkdir -p "$BOTLINE_HOME/inbox"
 CONF="$BOTLINE_HOME/config"
+# The recipient is personal, so it comes from the machine's astra config, never
+# from this file: ASTRA_NOTIFY_PHONE and ASTRA_NOTIFY_CHAT_ID (lib/astra-config.sh).
+ASTRA_ROOT="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/../.." && pwd)"
+. "$ASTRA_ROOT/tools/lib/astra-config.sh"
 if [ ! -f "$CONF" ]; then
+  num="$(astra_config_required ASTRA_NOTIFY_PHONE)" || exit 1
   cat > "$CONF" <<CFG
-# botline config — the recipient (Jonathan's phone via the Google Voice thread)
-JS_NUMBER="+17049185655"
-JS_CHAT_ID="1903"
+# botline config — the recipient, seeded from the astra config on first run
+JS_NUMBER="$num"
+JS_CHAT_ID="$(astra_config ASTRA_NOTIFY_CHAT_ID)"
 CFG
 fi
 # shellcheck disable=SC1090

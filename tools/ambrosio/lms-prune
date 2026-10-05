@@ -51,7 +51,23 @@ import sys
 import tempfile
 
 GB = 1024 ** 3
-DEFAULT_HOST = os.environ.get("LMS_HOST", "jonathans-macbook-pro-m5-max.tail2abcb6.ts.net")
+def _astra_config(key):
+    """Personal per-machine values live in ~/.config/astra/config, never in code."""
+    if os.environ.get(key):
+        return os.environ[key]
+    p = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "astra", "config")
+    val = ""
+    try:
+        for line in open(p):
+            line = line.strip()
+            if line.startswith(key + "="):
+                val = line.split("=", 1)[1].split("#", 1)[0].strip().strip('"')
+    except OSError:
+        pass
+    return val
+
+
+DEFAULT_HOST = os.environ.get("LMS_HOST") or _astra_config("ASTRA_LMS_HOST")
 DEFAULT_KEEPLIST = os.path.expanduser("~/.ambrosio/keeplist.txt")
 OMNIROUTE_DB = os.environ.get("OMNIROUTE_DB", os.path.expanduser("~/.omniroute/storage.sqlite"))
 

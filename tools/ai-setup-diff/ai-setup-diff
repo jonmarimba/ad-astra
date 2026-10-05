@@ -5,7 +5,9 @@
 #   ai-setup-diff [remote-host]     (default: the M5)
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
-R="${1:-jonathans-macbook-pro-m5-max.tail2abcb6.ts.net}"
+# The other Mac comes from the machine's astra config (ASTRA_PEER_HOST), never from this file.
+. "$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/../lib" && pwd)/astra-config.sh"
+R="${1:-$(astra_config_required ASTRA_PEER_HOST)}" || exit 64
 # ssh injectable for tests: the shim evaluates remote commands against a fake remote $HOME,
 # which is what catches the quoting regression where '$HOME' never expanded remotely
 SSH="${SSH_BIN:-ssh}"

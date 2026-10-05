@@ -60,11 +60,15 @@ cat > "$WANTLIST" <<'WL'
 WL
 fi
 if [ ! -f "$CONF" ]; then
+# The LM Studio host is personal, so the first-run config is seeded from the
+# machine's astra config (ASTRA_LMS_HOST), never from this file.
+. "$ASTRA_ROOT/tools/lib/astra-config.sh"
+LMSH="$(astra_config_required ASTRA_LMS_HOST)" || exit 1
 cat > "$CONF" <<'CFG'
-# Headroom host running LM Studio (the play host). M5 now; repoint to the Strix Linux box later.
-HOST="jonathans-macbook-pro-m5-max.tail2abcb6.ts.net"
+# Headroom host running LM Studio (the play host).
+HOST="__ASTRA_LMS_HOST__"
 LMS_PORT="1234"
-SSH_TARGET="jonathans-macbook-pro-m5-max.tail2abcb6.ts.net"   # ssh over Tailscale; lms must be on PATH there
+SSH_TARGET="__ASTRA_LMS_HOST__"   # ssh over Tailscale; lms must be on PATH there
 WATCHLIST="glm kimi deepseek qwen3 qwen4 minimax gpt-oss nemotron llama4 llama5 mistral-large command-a ornith"
 SIZE_CAP_GB="80"
 OMNIROUTE_NODE="LM Studio M5"
@@ -77,6 +81,7 @@ TREND_LIMIT="${TREND_LIMIT:-80}"   # how deep into HF trending the WATCH looks (
 # local-only again.
 CLOUD="1"
 CFG
+sed -i '' "s/__ASTRA_LMS_HOST__/$LMSH/g" "$CONF"
 fi
 # shellcheck disable=SC1090
 . "$CONF"

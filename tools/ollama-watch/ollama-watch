@@ -99,7 +99,7 @@ notify() {
   elif [ -x "$BOTLINE" ]; then
     "$BOTLINE" send --from ollama-watch "$msg" && echo "notified JS via botline: $what"
   else
-    imsg send --to "${JS_NUMBER:-+17049185655}" --text "[ollama-watch] $msg" && echo "notified JS via imsg: $what"
+    imsg send --to "${JS_NUMBER:-$(. "$ASTRA_ROOT/tools/lib/astra-config.sh"; astra_config ASTRA_NOTIFY_PHONE)}" --text "[ollama-watch] $msg" && echo "notified JS via imsg: $what"
   fi
 }
 

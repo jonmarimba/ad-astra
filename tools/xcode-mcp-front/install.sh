@@ -9,15 +9,22 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 command -v uv >/dev/null || { echo "uv not found — install via 'brew install uv'" >&2; exit 1; }
 mkdir -p "$HOME/.xcode-mcp-front"
 
-APP="$HERE/XcodeMCPFront.app"
-if [ ! -e "$APP" ]; then
-  echo "wrapping xcode-mcp-front-run.sh in an app (TCC needs a stable identity to grant Accessibility/Automation to)"
-  "$HERE/../wrap-in-app/wrap-in-app" "$HERE/xcode-mcp-front-run.sh" \
-    --log "$HOME/.xcode-mcp-front/daemon.log" --name XcodeMCPFront --outdir "$HERE"
-else
-  echo "XcodeMCPFront.app already exists — leaving it alone (re-wrapping would kill any TCC grant it holds)"
-fi
-
+# The wrapper apps are generated per machine and never committed: each points
+# at this checkout's script by absolute path, and its TCC grant is tied to its
+# exact bytes, so a committed app only works on the Mac that built it. Build any
+# that are missing; never rebuild one that exists (that would kill its grant).
+for spec in "XcodeMCPFront:xcode-mcp-front-run.sh:.xcode-mcp-front" \
+            "XcodeCombinedFront:xcode-combined-front-run.sh:.xcode-combined-front" \
+            "Xcode27CombinedFront:xcode27-combined-front-run.sh:.xcode27-combined-front"; do
+  name="${spec%%:*}"; rest="${spec#*:}"; script="${rest%%:*}"; logdir="${rest#*:}"
+  mkdir -p "$HOME/$logdir"
+  if [ ! -e "$HERE/$name.app" ]; then
+    echo "wrapping $script in $name.app (TCC needs a stable identity to grant Accessibility/Automation to)"
+    "$HERE/../wrap-in-app/wrap-in-app" "$HERE/$script" --log "$HOME/$logdir/daemon.log" --name "$name" --outdir "$HERE"
+  else
+    echo "$name.app already exists — leaving it alone (re-wrapping would kill any TCC grant it holds)"
+  fi
+done
 "$HERE/xcode-mcp-front" launchd-install
 
 cat <<'EOF'

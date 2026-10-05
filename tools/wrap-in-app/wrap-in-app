@@ -74,7 +74,7 @@ fi
 
 cp -R "$HERE/template.app" "$APP"
 
-APP="$APP" SCRIPT="$SCRIPT" LOG="$LOG" NAME="$NAME" SLUG="$slug" /opt/homebrew/bin/python3 - <<'PY'
+APP="$APP" SCRIPT="$SCRIPT" LOG="$LOG" NAME="$NAME" SLUG="$slug" "$(command -v python3)" - <<'PY'
 import os, plistlib
 app, script, log, name, slug = (os.environ[k] for k in ("APP", "SCRIPT", "LOG", "NAME", "SLUG"))
 wf = f"{app}/Contents/document.wflow"
