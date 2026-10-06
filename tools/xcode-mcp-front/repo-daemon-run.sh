@@ -61,11 +61,19 @@ if [ -f "$PIDFILE" ]; then
   fi
 fi
 
-PORT=$BASE_PORT
-while lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; do
-  PORT=$((PORT + 1))
-done
-echo "$PORT" > "$HERE/port"
+# Port selection serialized with flock so two concurrent launchers cannot both
+# see the same port as free and race to bind it.  (GhOST-OpenClaw peer review
+# of efa84ec.)
+LOCKFILE="$HERE/.port-lock"
+(
+  flock -n 9 || { echo "repo-daemon: another launcher holds the port lock — exiting" >&2; exit 75; }
+  PORT=$BASE_PORT
+  while lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; do
+    PORT=$((PORT + 1))
+  done
+  echo "$PORT" > "$HERE/port"
+) 9>"$LOCKFILE"
+PORT=$(cat "$HERE/port")
 
 # Record the resolved endpoint where clients look. A jq failure here (a hand-edited
 # .mcp.json with a stray comma) must kill the launch where launchd can see it — a

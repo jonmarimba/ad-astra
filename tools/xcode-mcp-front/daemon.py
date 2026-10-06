@@ -1443,6 +1443,18 @@ def build_server(upstreams: list[Upstream]) -> Server:
         lifespan=lambda app: _lifespan(app, upstreams, broadcast_list_changed),
     )
 
+    # REGISTER downstream sessions at initialization (not just at first list/call).
+    # A client that initializes and opens a GET event stream before its first
+    # tools/list was absent from downstream_sessions and missed relay notifications.
+    # (GhOST-OpenClaw peer review of 782c1de.)
+    async def _on_initialized(
+        ctx: ServerRequestContext, _params: types.NotificationParams
+    ) -> None:
+        _remember_downstream(ctx)
+
+    server.add_notification_handler(
+        "notifications/initialized", types.NotificationParams, _on_initialized)
+
     # ADVERTISE tools.listChanged (4.1). The runner builds initialization options with
     # default NotificationOptions at each session's initialize; the SDK's own comment
     # says list_changed flags "require NotificationOptions to be passed externally", and
