@@ -83,6 +83,7 @@ import argparse
 import base64
 import codecs
 import contextlib
+import enum
 import getpass
 import http.client
 import json
@@ -128,9 +129,9 @@ TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
 
 
 class _Ambiguous(Exception):
-    """A mutating request failed with no server response, so it may or may not have
-    committed. Destructive rollback is unsafe (it could delete a committed write's
-    attachment), so these are handled without deleting."""
+    """A mutating request got no usable answer (none, a lost or unparseable one, or a
+    3xx/5xx), so it may or may not have committed. Destructive rollback is unsafe (it
+    could delete a committed write's attachment), so these are handled without deleting."""
 
 # Conservative detector for wiki/markdown formatting that append cannot honor.
 # Deliberately targets clear intent (headings, macros, lists, tables, links,
@@ -388,11 +389,17 @@ class _StripAuthCrossOrigin(urllib.request.HTTPRedirectHandler):
     origin — otherwise a redirect off api.atlassian.com would leak the token. Any
     redirect to a non-https URL is refused: on the same host it would send the token
     in plaintext, on another host the content; nothing legitimate here leaves https."""
+    # urllib follows 308 only from Python 3.11; Xcode's python3 is 3.9.
+    http_error_308 = urllib.request.HTTPRedirectHandler.http_error_302
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         target = urlsplit(newurl)
         if target.scheme != "https":
             raise urllib.error.HTTPError(req.full_url, code, f"{msg}; refusing redirect to "
                                          f"non-https URL {newurl}", headers, fp)
+        # For a read, 308 means exactly what 307 does, and 3.9's base class rejects 308.
+        if code == 308 and not _is_write(req.get_method()):
+            code = 307
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new is not None and target.netloc.lower() != urlsplit(req.full_url).netloc.lower():
             new.remove_header("Authorization")
@@ -403,11 +410,17 @@ _no_redirect_opener = urllib.request.build_opener(_NoRedirect)
 _opener = urllib.request.build_opener(_StripAuthCrossOrigin)
 
 
-def _opener_for(method: str) -> urllib.request.OpenerDirector:
+def _is_write(method: str) -> bool:
+    """Whether a request with this method may change server state. Anything but GET
+    counts, so a method added later gets a write's cautious handling by default."""
+    return method != "GET"
+
+
+def _opener_for(request: urllib.request.Request) -> urllib.request.OpenerDirector:
     """Only reads follow redirects. urllib re-sends a redirected POST as a GET of the
     new URL and hands back that body as if it were the write's response, and a
     redirect on a write says nothing certain about whether it committed."""
-    return _opener if method == "GET" else _no_redirect_opener
+    return _no_redirect_opener if _is_write(request.get_method()) else _opener
 
 
 def _write_outcome_unknown(status: int) -> bool:
@@ -415,6 +428,14 @@ def _write_outcome_unknown(status: int) -> bool:
     can follow a commit, and a 3xx (303 See Other above all) can report one; only a
     4xx is a definite rejection."""
     return 300 <= status < 400 or status >= 500
+
+
+# What urllib raises unwrapped after the whole request was sent, while awaiting or
+# reading the response: a timeout, a dropped connection, a malformed reply, a body short
+# of its Content-Length. A write may have committed. Catch URLError (an OSError, which
+# urllib wraps around connect and send failures) and http.client.InvalidURL (raised
+# before anything is sent) first.
+LOST_RESPONSE_ERRORS = (OSError, http.client.HTTPException)
 
 
 def get_cloud_id(settings: Settings) -> str:
@@ -436,24 +457,51 @@ def api(method: str, url: str, credentials: Credentials, *, json_body=None) -> d
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with _opener_for(method).open(request, timeout=HTTP_TIMEOUT) as response:
-            raw = response.read()
-            return json.loads(raw) if raw else None
+        with _opener_for(request).open(request, timeout=HTTP_TIMEOUT) as response:
+            status, reason, raw = response.status, response.reason, response.read()
     except urllib.error.HTTPError as error:
-        # Ambiguous like a lost connection, so rollback must not delete anything.
-        if method in ("POST", "PUT") and _write_outcome_unknown(error.code):
-            body = error.read().decode(errors="replace")
-            raise _Ambiguous(f"Jira returned {error.code} {error.reason}{_redirect_note(error)} to a "
-                             f"{method} ({url}); the write may or may not have committed — verify "
-                             f"the issue.\n{body}")
-        _die_http(error, url)
+        # Every caught HTTPError is closed (`with error:`) so its connection is released
+        # now; Python 3.14 warns on stderr about one left to garbage collection.
+        with error:
+            # Ambiguous like a lost connection, so rollback must not delete anything.
+            if _is_write(method) and _write_outcome_unknown(error.code):
+                body = error.read().decode(errors="replace")
+                raise _Ambiguous(f"Jira returned {error.code} {error.reason}"
+                                 f"{_redirect_note(error)} to a {method} ({url}); the write may "
+                                 f"or may not have committed — verify the issue.\n{body}")
+            _die_http(error, url)
     except urllib.error.URLError as error:
-        # A GET that never reached the server is a safe, definitive failure. A POST/PUT
+        # A read that never reached the server is a safe, definitive failure. A write
         # with no response may or may not have committed — surface that ambiguity.
-        if method in ("POST", "PUT"):
+        if _is_write(method):
             raise _Ambiguous(f"Network error during a {method} to {url} ({error.reason}); "
                              "the write may or may not have committed — verify the issue.")
         sys.exit(f"Could not reach the Jira gateway: {error.reason}")
+    except http.client.InvalidURL as error:
+        sys.exit(f"Invalid request URL {url} ({error}); nothing was sent to Jira.")
+    except (TimeoutError, socket.timeout):
+        # socket.timeout only became an alias of TimeoutError in Python 3.10.
+        _response_unusable(method, url, "Timed out awaiting Jira's response")
+    except LOST_RESPONSE_ERRORS as error:
+        _response_unusable(method, url, "Got no usable response", f" ({error!r})")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError as error:
+        # JSONDecodeError, or UnicodeDecodeError for a reply that is not UTF-8.
+        _response_unusable(method, url, f"Jira answered {status} {reason}",
+                           f", but the reply is not JSON ({error})")
+
+
+def _response_unusable(method: str, url: str, problem: str, detail: str = "") -> None:
+    """The whole request was sent, so a write may have committed even though its answer
+    is missing or unreadable; for a read the failure is simply definitive."""
+    message = f"{problem} to the {method} of {url}{detail}"
+    if _is_write(method):
+        raise _Ambiguous(f"{message}; the write may or may not have committed — verify "
+                         "the issue.")
+    sys.exit(f"{message}.")
 
 
 def _redirect_note(error: urllib.error.HTTPError) -> str:
@@ -485,20 +533,41 @@ def _require_json(result, what: str):
     return result
 
 
-def _best_effort(method: str, url: str, credentials: Credentials, json_body=None) -> bool:
-    """A DELETE/PUT used only for rollback cleanup; never raises. Returns whether
-    the request appeared to succeed (2xx)."""
+class CleanupOutcome(enum.Enum):
+    """What a rollback request did. Only DONE lets rollback go on to delete attachments."""
+    DONE = "done"
+    FAILED = "failed"        # a 4xx: definitely not applied
+    UNCERTAIN = "uncertain"  # a 3xx, a 5xx, or no answer: may or may not have applied
+
+
+def _best_effort(method: str, url: str, credentials: Credentials,
+                 json_body=None) -> CleanupOutcome:
+    """A DELETE/PUT used only for rollback cleanup; never raises an Exception."""
     data = json.dumps(json_body).encode() if json_body is not None else None
     headers = {"Authorization": credentials.auth_header}
     if data is not None:
         headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with _opener_for(method).open(urllib.request.Request(url, data=data, method=method,
-                                                             headers=headers),
-                                      timeout=HTTP_TIMEOUT) as response:
-            return 200 <= response.status < 300
+        with _opener_for(request).open(request, timeout=HTTP_TIMEOUT) as response:
+            return (CleanupOutcome.DONE if 200 <= response.status < 300
+                    else CleanupOutcome.UNCERTAIN)
+    except urllib.error.HTTPError as error:
+        with error:
+            return (CleanupOutcome.UNCERTAIN if _write_outcome_unknown(error.code)
+                    else CleanupOutcome.FAILED)
     except Exception:
-        return False
+        # Refused, dropped, timed out or garbled: as in api(), a write without an
+        # answer may have applied.
+        return CleanupOutcome.UNCERTAIN
+
+
+def _cleanup_message(outcome: CleanupOutcome, *, done: str, attempt: str) -> str:
+    """`done` and `attempt` are the past and infinitive forms, e.g. "deleted comment 9"
+    and "delete comment 9"."""
+    return {CleanupOutcome.DONE: done,
+            CleanupOutcome.FAILED: f"FAILED to {attempt}",
+            CleanupOutcome.UNCERTAIN: f"MAY OR MAY NOT have {done}"}[outcome]
 
 
 class Rollback:
@@ -508,14 +577,17 @@ class Rollback:
 
     Order matters for safety: content (a replaced comment/description or a just-
     created comment) is cleaned up FIRST, and the uploaded attachments are removed
-    only if that succeeded — otherwise the attachments may still be referenced, so
-    they are left in place and the failure is reported truthfully."""
+    only if that definitely succeeded — otherwise the attachments may still be
+    referenced, so they are left in place and the outcome is reported truthfully."""
 
     def __init__(self, base3: str, credentials: Credentials, issue: str):
         self.base3, self.credentials, self.issue = base3, credentials, issue
         self.attachment_ids: list[str] = []
         self.delete_comment_id: str | None = None
         self.restore: tuple[str, dict] | None = None
+        # Set just before a content write that has no undo (an append). From then on, only
+        # a definite rejection proves the uploads unreferenced.
+        self.irreversible_write_sent = False
 
     def run(self, destructive: bool = True) -> None:
         if not destructive:
@@ -528,22 +600,31 @@ class Rollback:
         actions: list[str] = []
         content_ok = True
         if self.restore:
-            ok = _best_effort("PUT", self.restore[0], self.credentials, self.restore[1])
-            content_ok = content_ok and ok
-            actions.append("restored prior content" if ok else "FAILED to restore prior content")
+            outcome = _best_effort("PUT", self.restore[0], self.credentials, self.restore[1])
+            content_ok = content_ok and outcome is CleanupOutcome.DONE
+            actions.append(_cleanup_message(outcome, done="restored prior content",
+                                            attempt="restore prior content"))
         if self.delete_comment_id:
-            ok = _best_effort("DELETE", f"{self.base3}/issue/{self.issue}/comment/{self.delete_comment_id}", self.credentials)
-            content_ok = content_ok and ok
-            actions.append(f"deleted comment {self.delete_comment_id}" if ok
-                           else f"FAILED to delete comment {self.delete_comment_id}")
+            cid = self.delete_comment_id
+            outcome = _best_effort("DELETE", f"{self.base3}/issue/{self.issue}/comment/{cid}",
+                                   self.credentials)
+            content_ok = content_ok and outcome is CleanupOutcome.DONE
+            actions.append(_cleanup_message(outcome, done=f"deleted comment {cid}",
+                                            attempt=f"delete comment {cid}"))
         if self.attachment_ids:
             if content_ok:
-                removed = sum(_best_effort("DELETE", f"{self.base3}/attachment/{aid}", self.credentials)
-                              for aid in self.attachment_ids)
-                actions.append(f"removed {removed}/{len(self.attachment_ids)} attachment(s)")
+                outcomes = [_best_effort("DELETE", f"{self.base3}/attachment/{aid}",
+                                         self.credentials)
+                            for aid in self.attachment_ids]
+                summary = (f"removed {outcomes.count(CleanupOutcome.DONE)}/"
+                           f"{len(self.attachment_ids)} attachment(s)")
+                uncertain = outcomes.count(CleanupOutcome.UNCERTAIN)
+                if uncertain:
+                    summary += f" ({uncertain} more MAY OR MAY NOT have been removed)"
+                actions.append(summary)
             else:
                 actions.append(f"LEFT {len(self.attachment_ids)} attachment(s) in place "
-                               "(content cleanup failed; remove manually if orphaned)")
+                               "(content cleanup not confirmed; remove manually if orphaned)")
         if actions:
             print("Rollback: " + "; ".join(actions) + ".", file=sys.stderr)
 
@@ -610,7 +691,7 @@ def fetch(url: str, credentials: Credentials, destination: Path | None) -> int |
                   else "any output written is incomplete")
     replaced_handlers = _raise_on_termination_signals()
     try:
-        with _opener_for("GET").open(request, timeout=HTTP_TIMEOUT) as response:
+        with _opener_for(request).open(request, timeout=HTTP_TIMEOUT) as response:
             if destination is not None:
                 return _save_to_new_file(response, destination)
             # Like curl: binary written to a terminal garbles it, so refuse before any
@@ -625,7 +706,8 @@ def fetch(url: str, credentials: Credentials, destination: Path | None) -> int |
             sys.stdout.buffer.flush()
             return None
     except urllib.error.HTTPError as error:
-        _die_http(error, url)
+        with error:
+            _die_http(error, url)
     except urllib.error.URLError as error:
         sys.exit(f"Could not fetch {url}: {error.reason}")
     except BrokenPipeError:
@@ -766,22 +848,36 @@ def attach_one(base3: str, credentials: Credentials, issue: str, path: Path) -> 
             "Accept": "application/json",
         },
     )
+    # Every failure here is definitive for rollback (no content references this run's
+    # uploads yet), but a message must not imply the file was not stored unless Jira
+    # never received all of it.
+    uncertain = f"it may or may not have been attached — verify {issue}'s attachments"
     try:
-        with _opener_for("POST").open(request, timeout=HTTP_TIMEOUT) as response:
-            records = json.loads(response.read())
+        with _opener_for(request).open(request, timeout=HTTP_TIMEOUT) as response:
+            status, reason, raw = response.status, response.reason, response.read()
     except urllib.error.HTTPError as error:
-        # Still a definitive failure for rollback (no content references this run's
-        # uploads yet), but the message must not claim the file was not stored.
-        if _write_outcome_unknown(error.code):
-            body = error.read().decode(errors="replace")
-            sys.exit(f"Jira returned {error.code} {error.reason}{_redirect_note(error)} uploading "
-                     f"{path.name}; it may or may not have been attached — verify {issue}'s "
-                     f"attachments.\n{body}")
-        _die_http(error, f"{base3}/issue/{issue}/attachments")
+        with error:
+            if _write_outcome_unknown(error.code):
+                body = error.read().decode(errors="replace")
+                sys.exit(f"Jira returned {error.code} {error.reason}{_redirect_note(error)} "
+                         f"uploading {path.name}; {uncertain}.\n{body}")
+            _die_http(error, f"{base3}/issue/{issue}/attachments")
     except urllib.error.URLError as error:
-        # An attachment is not referenced by any content yet, so cleanup of the other
-        # confirmed uploads is safe — treat this as a definitive failure.
-        sys.exit(f"Could not reach the Jira gateway uploading {path.name}: {error.reason}")
+        sys.exit(f"Could not send {path.name} to the Jira gateway ({error.reason}); Jira never "
+                 "received the complete upload.")
+    except http.client.InvalidURL as error:
+        sys.exit(f"Invalid request URL uploading {path.name} ({error}); nothing was sent to Jira.")
+    except (TimeoutError, socket.timeout):
+        # socket.timeout only became an alias of TimeoutError in Python 3.10.
+        sys.exit(f"Timed out awaiting Jira's response to the upload of {path.name}; {uncertain}.")
+    except LOST_RESPONSE_ERRORS as error:
+        sys.exit(f"Got no usable response to the upload of {path.name} ({error!r}); {uncertain}.")
+    try:
+        records = json.loads(raw)
+    except ValueError as error:
+        # JSONDecodeError, or UnicodeDecodeError for a reply that is not UTF-8.
+        sys.exit(f"Jira answered {status} {reason} uploading {path.name}, but the reply is not "
+                 f"JSON ({error}); {uncertain}.")
     if len(records) != 1:
         sys.exit(f"Uploading {path.name} returned {len(records)} record(s); expected 1.")
     return records[0]
@@ -795,12 +891,13 @@ def resolve_media_id(base3: str, credentials: Credentials, attachment_id: str) -
     try:
         _no_redirect_opener.open(request, timeout=HTTP_TIMEOUT)
     except urllib.error.HTTPError as error:
-        if error.code in (301, 302, 303, 307, 308):
-            match = UUID_IN_MEDIA_URL.search(error.headers.get("Location", ""))
-            if match:
-                return match.group(1)
-            sys.exit(f"No media id in redirect for attachment {attachment_id}.")
-        _die_http(error, f"{base3}/attachment/content/{attachment_id}")
+        with error:
+            if error.code in (301, 302, 303, 307, 308):
+                match = UUID_IN_MEDIA_URL.search(error.headers.get("Location", ""))
+                if match:
+                    return match.group(1)
+                sys.exit(f"No media id in redirect for attachment {attachment_id}.")
+            _die_http(error, f"{base3}/attachment/content/{attachment_id}")
     except urllib.error.URLError as error:
         sys.exit(f"Could not reach the Jira gateway: {error.reason}")
     sys.exit(f"Expected a redirect resolving media id for attachment {attachment_id}.")
@@ -1109,15 +1206,28 @@ def main() -> None:
     base2 = f"{GATEWAY}/{cloud_id}/rest/api/2"
 
     if not embedding:
-        _print_attached(issue, [attach_one(base3, credentials, issue, path) for path in file_parts])
+        attached: list[dict] = []
+        try:
+            for path in file_parts:
+                attached.append(attach_one(base3, credentials, issue, path))
+        except BaseException:
+            # Nothing is rolled back in attach-only mode, so name the confirmed uploads
+            # before the error surfaces; a retry of every file would attach them twice.
+            # On stderr, like Rollback's reports, so they stay in order with the error.
+            if attached:
+                with contextlib.redirect_stdout(sys.stderr):
+                    _print_attached(issue, attached)
+            raise
+        _print_attached(issue, attached)
         print(f"  {settings.site}/browse/{issue}")
         return
 
     # All post-attach work runs under a rollback, constructed BEFORE any upload so a
     # failure can never escape before cleanup exists. A definitive failure undoes
-    # partial work; an ambiguous one (a mutating request with no response) is left in
-    # place and reported, since the write may have committed. Output is deferred past
-    # the transactional region so a broken pipe on success can't trigger a rollback.
+    # partial work; an ambiguous one (a mutating request with no usable answer, or an
+    # interruption once an append was sent) is left in place and reported, since the
+    # write may have committed. Output is deferred past the transactional region so a
+    # broken pipe on success can't trigger a rollback.
     rollback = Rollback(base3, credentials, issue)
     try:
         attachments: list[dict] = []
@@ -1197,6 +1307,7 @@ def main() -> None:
                 url3 = f"{base3}/issue/{issue}/comment/{cid}"
                 existing = _require_json(api("GET", url3, credentials), "the comment")["body"]
                 existing["content"] = existing.get("content", []) + new_nodes
+                rollback.irreversible_write_sent = True
                 api("PUT", url3, credentials, json_body={"body": existing})
                 outcome = f"Appended {len(new_nodes)} node(s) to comment {cid}."
             else:
@@ -1207,14 +1318,19 @@ def main() -> None:
                     existing["content"] = existing["content"] + new_nodes
                 else:
                     existing = {"type": "doc", "version": 1, "content": new_nodes}
+                rollback.irreversible_write_sent = True
                 api("PUT", f"{base3}/issue/{issue}", credentials,
                     json_body={"fields": {"description": existing}})
                 outcome = f"Appended {len(new_nodes)} node(s) to the description."
     except _Ambiguous as error:
         rollback.run(destructive=False)
         sys.exit(str(error))
-    except BaseException:
-        rollback.run(destructive=True)
+    except BaseException as error:
+        # Once a write with no undo is sent, the only SystemExit is api()'s definite 4xx
+        # rejection. Anything else (Ctrl-C, an unforeseen error) may follow its commit,
+        # and that content would reference the uploads.
+        rollback.run(destructive=isinstance(error, SystemExit)
+                     or not rollback.irreversible_write_sent)
         raise
 
     if attachments:

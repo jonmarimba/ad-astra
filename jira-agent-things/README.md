@@ -137,6 +137,6 @@ jira-attach --fetch-url 'https://your-site.atlassian.net/rest/api/3/issue/ABC-12
 
 `--fetch-url` takes your site's `/rest/...` and `/secure/attachment/<id>/...` URLs, or `https://api.atlassian.com/ex/jira/...` URLs, and refuses any other host so the token only goes to Atlassian. Without `-o` the response body is the only thing written to stdout, and a binary body is refused when stdout is a terminal. `-o FILE` writes a new file and never overwrites an existing one. A download that fails, ends short, or is interrupted leaves no partial file behind.
 
-Run the regression tests with `python3 test_jira_attach.py`. They talk only to a local test server and never read the keychain.
+Run the regression tests with `python3 test_jira_attach.py`. They talk only to local test servers and never read the keychain. The TLS tests need the `openssl` command, which macOS includes.
 
 Run `jira-attach --help` for the full option list; the script's module docstring has the long-form notes.
