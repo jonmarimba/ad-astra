@@ -30,9 +30,10 @@ FETCH A URL  (authenticated GET):
     jira-attach --fetch-url https://your-team.atlassian.net/rest/api/3/attachment/content/10001 > shot.png
     jira-attach --fetch-url 'https://your-team.atlassian.net/rest/api/3/issue/MHMAPPS-1?fields=summary'
 
-    Without -o/--output the response body is the only thing written to stdout. With it,
-    the body goes to a NEW file: an existing file is never overwritten, and a failed
-    download removes the partial file.
+    Without -o/--output the response body is the only thing written to stdout; a binary
+    body is refused when stdout is a terminal (use -o, or redirect/pipe it). With -o the
+    body goes to a NEW file: an existing file is never overwritten, and a failed, short or
+    interrupted (Ctrl-C, SIGTERM, SIGHUP) download removes the partial file.
 
     Site URLs are rewritten onto the api.atlassian.com gateway (scoped tokens only work
     there): /rest/... keeps its path and query, and an attachment page link
@@ -57,6 +58,16 @@ SETUP:
     The first ordinary run prompts for anything still missing. Per-run overrides:
     --site / --email.
 
+    API Tokens can be set up here:
+    https://id.atlassian.com/manage-profile/security/api-tokens
+
+    Scopes required:
+    Write
+        write:attachment:jira
+    Read
+        read:issue:jira
+        read:attachment:jira
+
 The Atlassian API token is kept in the macOS keychain (never on a command line, never
 in the config file). Requests use the api.atlassian.com gateway addressed by cloudId,
 fetched from the site's public /_edge/tenant_info endpoint.
@@ -70,14 +81,17 @@ from __future__ import annotations  # `str | None` hints on Xcode's python3 3.9
 
 import argparse
 import base64
-import http.client
+import codecs
 import contextlib
 import getpass
+import http.client
 import json
 import mimetypes
 import os
 import re
 import shutil
+import signal
+import socket
 import struct
 import subprocess
 import sys
@@ -86,7 +100,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 GATEWAY_HOST = "api.atlassian.com"
 GATEWAY = f"https://{GATEWAY_HOST}/ex/jira"
@@ -96,6 +110,8 @@ CONFIG_PATH = Path(os.environ.get("JIRA_ATTACH_CONFIG")
 TOKEN_URL = "https://id.atlassian.com/manage-profile/security/api-tokens"
 
 HTTP_TIMEOUT = 60          # seconds, per network request
+# How much of a fetched body is inspected for binary before any of it reaches a terminal.
+TERMINAL_SNIFF_BYTES = 64 * 1024
 KEYCHAIN_TIMEOUT = 15      # seconds, per `security` invocation
 
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
@@ -105,6 +121,10 @@ ATTACHMENT_PAGE_PATH = re.compile(r"^/secure/attachment/(\d+)(/|$)")
 # Every character that is legal in a URL path or query; quote() escapes everything
 # else (spaces, control characters, non-ASCII) and leaves existing %XX escapes alone.
 URL_LEGAL_CHARACTERS = "%!$&'()*+,/:;=?@[]~"
+# What lenient servers treat as a path separator once %XX escapes are decoded.
+PATH_SEPARATOR_PATTERN = re.compile(r"[/\\]")
+DOT_SEGMENTS = (".", "..")
+TERMINATION_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
 
 
 class _Ambiguous(Exception):
@@ -365,10 +385,16 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class _StripAuthCrossOrigin(urllib.request.HTTPRedirectHandler):
     """Follow redirects, but never carry the Authorization header to a different
-    origin — otherwise a redirect off api.atlassian.com would leak the token."""
+    origin — otherwise a redirect off api.atlassian.com would leak the token. Any
+    redirect to a non-https URL is refused: on the same host it would send the token
+    in plaintext, on another host the content; nothing legitimate here leaves https."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urlsplit(newurl)
+        if target.scheme != "https":
+            raise urllib.error.HTTPError(req.full_url, code, f"{msg}; refusing redirect to "
+                                         f"non-https URL {newurl}", headers, fp)
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is not None and urlsplit(newurl).netloc != urlsplit(req.full_url).netloc:
+        if new is not None and target.netloc.lower() != urlsplit(req.full_url).netloc.lower():
             new.remove_header("Authorization")
         return new
 
@@ -420,13 +446,17 @@ def _die_http(error: urllib.error.HTTPError, url: str) -> None:
     detail = error.read().decode(errors="replace")
     if error.code == 401 and "scope does not match" in detail:
         detail += ("\n\nThe stored token is valid but lacks a scope this endpoint needs. "
-                   f"Add the scope at {TOKEN_URL}, or use a classic (unscoped) token.")
+                   f"Create a token with that scope, or a classic (unscoped) one, at {TOKEN_URL}, "
+                   "then re-run with --reset-token.")
     elif error.code == 401:
         detail += "\n\nThe stored token may be revoked. Re-run with --reset-token."
     elif error.code == 404:
-        detail += ("\n\nA 404 here usually means the token can't SEE the issue/comment — "
-                   "it needs the coarse 'read:jira-work' scope. A classic (unscoped) or "
-                   "coarsely-scoped token fixes this.")
+        # Jira answers 404, not 403, when the token lacks permission to see a resource,
+        # so "missing" and "hidden" are indistinguishable here.
+        detail += ("\n\nEither it does not exist or the stored token can't see it. If it "
+                   "exists, the token likely lacks the coarse 'read:jira-work' scope. Create "
+                   f"one with that scope, or a classic (unscoped) one, at {TOKEN_URL}, then "
+                   "re-run with --reset-token.")
     sys.exit(f"Jira returned {error.code} {error.reason} for {url}\n{detail}")
 
 
@@ -502,6 +532,13 @@ class Rollback:
 # Fetch a URL to stdout
 # --------------------------------------------------------------------------- #
 
+def has_dot_segment(path: str) -> bool:
+    """Whether path holds a "." or ".." segment, including encoded forms (%2e%2e,
+    ..%2F, ..%5C) and Tomcat-style ";parameters" (..;x), all of which servers resolve."""
+    segments = PATH_SEPARATOR_PATTERN.split(unquote(path))
+    return any(segment.split(";", 1)[0] in DOT_SEGMENTS for segment in segments)
+
+
 def gateway_url_for_fetch(url: str, settings: Settings) -> str:
     """The api.atlassian.com URL to GET for a user-supplied site or gateway URL.
 
@@ -517,14 +554,18 @@ def gateway_url_for_fetch(url: str, settings: Settings) -> str:
         raise ValueError(f"'{url}' is not an https URL")
     host = parts.netloc.lower()
     site_host = urlsplit(settings.site).netloc.lower()
+    if host not in (GATEWAY_HOST, site_host):
+        raise ValueError(f"refusing to send the Jira API token to '{parts.netloc}'; only "
+                         f"{site_host} and {GATEWAY_HOST} URLs can be fetched")
+    if has_dot_segment(path):
+        # The gateway resolves "." and ".." (RFC 3986 section 5.2.4), so one could climb
+        # out of the /ex/jira/ or /rest/ prefix checked below into another product's API.
+        raise ValueError(f"'{url}' has a '.' or '..' path segment; give the resolved URL")
     if host == GATEWAY_HOST:
         if not path.startswith("/ex/jira/"):
             raise ValueError(f"'{url}' is not a Jira gateway URL (expected "
                              f"https://{GATEWAY_HOST}/ex/jira/<cloudId>/...)")
         return f"https://{GATEWAY_HOST}{path}" + (f"?{query}" if query else "")
-    if host != site_host:
-        raise ValueError(f"refusing to send the Jira API token to '{parts.netloc}'; only "
-                         f"{site_host} and {GATEWAY_HOST} URLs can be fetched")
     attachment = ATTACHMENT_PAGE_PATH.match(path)
     if attachment:
         path, query = f"/rest/api/3/attachment/content/{attachment.group(1)}", ""
@@ -541,16 +582,26 @@ def fetch(url: str, credentials: Credentials, destination: Path | None) -> int |
     followed without carrying the token off-origin.
 
     The file is only created once the server has answered with success, so an HTTP
-    error never leaves an empty file behind."""
+    error never leaves an empty file behind. A body cut short of its Content-Length, or
+    an interruption, fails the fetch instead of passing as complete."""
     request = urllib.request.Request(
         url, headers={"Authorization": credentials.auth_header, "Accept": "*/*"})
-    incomplete = ("the partial file was removed" if destination
+    incomplete = (f"nothing was saved to {destination}" if destination is not None
                   else "any output written is incomplete")
+    replaced_handlers = _raise_on_termination_signals()
     try:
         with _opener.open(request, timeout=HTTP_TIMEOUT) as response:
             if destination is not None:
                 return _save_to_new_file(response, destination)
-            shutil.copyfileobj(response, sys.stdout.buffer)
+            # Like curl: binary written to a terminal garbles it, so refuse before any
+            # byte is written. Pipes and redirects are never inspected or altered.
+            if sys.stdout.isatty():
+                head = response.read(TERMINAL_SNIFF_BYTES)
+                if _looks_binary(head):
+                    sys.exit(f"{url} returned binary or non-UTF-8 data; not writing it to "
+                             "the terminal. Save it with -o FILE or > FILE.")
+                sys.stdout.buffer.write(head)
+            _copy_whole_body(response, sys.stdout.buffer)
             sys.stdout.buffer.flush()
             return None
     except urllib.error.HTTPError as error:
@@ -562,14 +613,79 @@ def fetch(url: str, credentials: Credentials, destination: Path | None) -> int |
         # interpreter's final flush can't raise a second BrokenPipeError at exit.
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         sys.exit(1)
-    except TimeoutError:
+    except (TimeoutError, socket.timeout):
+        # socket.timeout only became an alias of TimeoutError in Python 3.10.
         sys.exit(f"Timed out fetching {url}; {incomplete}.")
     except (OSError, http.client.HTTPException) as error:
-        # A dropped connection or short read mid-body, or a failed write.
+        # A dropped connection, a body short of its Content-Length, or a failed write.
         sys.exit(f"Fetching {url} failed: {error!r}; {incomplete}.")
+    except (KeyboardInterrupt, _TerminationSignal) as interruption:
+        print(f"Interrupted; {incomplete}.", file=sys.stderr)
+        _die_by_signal(interruption.signum if isinstance(interruption, _TerminationSignal)
+                       else signal.SIGINT)
+    finally:
+        for signum, handler in replaced_handlers.items():
+            signal.signal(signum, handler)
 
 
-def _save_to_new_file(source, destination: Path) -> int:
+def _looks_binary(head: bytes) -> bool:
+    """curl's test (a NUL byte) plus invalid UTF-8, which also catches the PDFs and
+    other binaries whose opening bytes hold no NUL. The decoder is left non-final so a
+    multibyte character cut off at the end of head is not mistaken for binary."""
+    if b"\0" in head:
+        return True
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(head)
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def _copy_whole_body(response: http.client.HTTPResponse, sink) -> None:
+    shutil.copyfileobj(response, sink)
+    # http.client ends a body cut short of its Content-Length with a quiet EOF and
+    # leaves the missing byte count in .length. It is None when the body isn't framed
+    # by Content-Length: chunked raises IncompleteRead itself, and read-to-close has
+    # nothing to check against.
+    if response.length:
+        raise http.client.HTTPException(
+            f"body ended {response.length} byte(s) short of its Content-Length")
+
+
+class _TerminationSignal(BaseException):
+    """Raised by the SIGTERM/SIGHUP handler so a fetch unwinds through its cleanup
+    instead of the process vanishing mid-write. A BaseException, like
+    KeyboardInterrupt, so no `except Exception` swallows it."""
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _raise_termination_signal(signum: int, frame) -> None:
+    raise _TerminationSignal(signum)
+
+
+def _raise_on_termination_signals() -> dict:
+    """Route SIGTERM and SIGHUP (e.g. the terminal closing) through _TerminationSignal
+    and return the handlers replaced. A signal the parent set to be ignored (nohup)
+    stays ignored."""
+    replaced = {}
+    for signum in TERMINATION_SIGNALS:
+        if signal.getsignal(signum) is signal.SIG_DFL:
+            replaced[signum] = signal.signal(signum, _raise_termination_signal)
+    return replaced
+
+
+def _die_by_signal(signum: int) -> None:
+    """Exit the way the signal itself would have, now that cleanup has run. Shells
+    check for this: a bash loop stops on a child killed by SIGINT, but carries on
+    after a plain exit status of 130."""
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+    raise SystemExit(128 + signum)  # the default action terminates before this line
+
+
+def _save_to_new_file(source: http.client.HTTPResponse, destination: Path) -> int:
     """Copy source into destination, which must not exist yet. Exclusive creation
     claims the name atomically, so a file that appears after the up-front check is
     still never overwritten. A failed copy removes the partial file (which this call
@@ -582,7 +698,7 @@ def _save_to_new_file(source, destination: Path) -> int:
         sys.exit(f"Could not create {destination}: {error.strerror}")
     try:
         with file:
-            shutil.copyfileobj(source, file)
+            _copy_whole_body(source, file)
             return file.tell()
     except BaseException:
         destination.unlink(missing_ok=True)
@@ -800,6 +916,13 @@ def splice_media(base3: str, credentials: Credentials, issue: str,
 # CLI
 # --------------------------------------------------------------------------- #
 
+def _output_path(text: str) -> Path:
+    # curl and most tools read "-" as stdout; silently creating a file named "-" would surprise.
+    if text == "-":
+        raise argparse.ArgumentTypeError("'-' (stdout) is not supported; omit -o to write to stdout")
+    return Path(text)
+
+
 class OrderedPart(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         parts = getattr(namespace, "parts", None)
@@ -848,7 +971,7 @@ def main() -> None:
     parser.add_argument("--fetch-url", metavar="URL", dest="fetch_url",
                         help="GET a Jira site or api.atlassian.com URL with the stored token "
                              "and write the response body to stdout (or to --output)")
-    parser.add_argument("-o", "--output", metavar="FILE", type=Path,
+    parser.add_argument("-o", "--output", metavar="FILE", type=_output_path,
                         help="With --fetch-url: write the body to this new file instead of "
                              "stdout (never overwrites an existing file)")
     # A bare run is someone asking what this is, not a usage error: show the full help
@@ -862,21 +985,28 @@ def main() -> None:
 
     if args.output is not None and args.fetch_url is None:
         parser.error("--output only applies to --fetch-url")
+    setup_only = args.configure or args.reset_token
     if args.fetch_url is not None:
-        if (args.issue or args.files or getattr(args, "parts", None)
-                or args.comment or args.replace_comment or args.append_comment
-                or args.replace_description or args.append_description
-                or args.configure or args.reset_token):
+        if _issue_work_requested(args) or setup_only:
             parser.error("--fetch-url only fetches, so it must be run without an issue, "
                          "content, a build/append mode, --configure, or --reset-token")
         # Caught here so a mistake costs no network round trip; the exclusive create in
-        # _save_to_new_file is what actually guarantees no overwrite.
+        # _save_to_new_file is what actually guarantees no overwrite. lstat() rather than
+        # pathlib's exists()/is_dir(): a dangling symlink still blocks the exclusive create,
+        # and an unreachable path is an error on every Python version, where those checks
+        # raise on some versions and silently answer False on others.
         if args.output is not None:
-            if args.output.is_dir():
-                parser.error(f"--output {args.output} is a directory; give a file path")
-            if args.output.exists():
+            try:
+                args.output.lstat()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                parser.error(f"--output {args.output} cannot be created: {error.strerror}")
+            else:
+                if os.path.isdir(args.output):
+                    parser.error(f"--output {args.output} is a directory; give a file path")
                 parser.error(f"--output {args.output} already exists; not overwriting it")
-            if not args.output.parent.is_dir():
+            if not os.path.isdir(args.output.parent):
                 parser.error(f"--output directory {args.output.parent} does not exist")
         # stdout carries only the fetched bytes; any first-run prompts or status lines
         # from settings/token resolution go to stderr instead.
@@ -892,11 +1022,8 @@ def main() -> None:
             print(f"Saved {args.output}  ({size / 1024:.0f} KB)")
         return
 
-    setup_only = args.configure or args.reset_token
     if setup_only:
-        if (args.issue or args.files or getattr(args, "parts", None)
-                or args.comment or args.replace_comment or args.append_comment
-                or args.replace_description or args.append_description):
+        if _issue_work_requested(args):
             parser.error("--configure and --reset-token only change stored settings, "
                          "so they must be run without an issue or content")
         settings = resolve_settings(args.site, args.email, reconfigure=args.configure)
@@ -1067,6 +1194,15 @@ def main() -> None:
         _print_attached(issue, attachments)
     print(outcome)
     print(f"  {settings.site}/browse/{issue}")
+
+
+def _issue_work_requested(args: argparse.Namespace) -> bool:
+    """True when the command line names an issue, content, or a build/append mode. Every
+    standalone mode must reject all of these, so the list lives here once and a new
+    content option or mode cannot slip past one mode's check."""
+    return bool(args.issue or args.files or args.parts
+                or args.comment or args.replace_comment or args.append_comment
+                or args.replace_description or args.append_description)
 
 
 def _require_files(parser: argparse.ArgumentParser, paths: list[Path]) -> None:
