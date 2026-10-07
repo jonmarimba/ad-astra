@@ -403,6 +403,20 @@ _no_redirect_opener = urllib.request.build_opener(_NoRedirect)
 _opener = urllib.request.build_opener(_StripAuthCrossOrigin)
 
 
+def _opener_for(method: str) -> urllib.request.OpenerDirector:
+    """Only reads follow redirects. urllib re-sends a redirected POST as a GET of the
+    new URL and hands back that body as if it were the write's response, and a
+    redirect on a write says nothing certain about whether it committed."""
+    return _opener if method == "GET" else _no_redirect_opener
+
+
+def _write_outcome_unknown(status: int) -> bool:
+    """Whether a write answered with this status may or may not have committed. A 5xx
+    can follow a commit, and a 3xx (303 See Other above all) can report one; only a
+    4xx is a definite rejection."""
+    return 300 <= status < 400 or status >= 500
+
+
 def get_cloud_id(settings: Settings) -> str:
     override = os.environ.get("JIRA_CLOUD_ID")
     if override:
@@ -422,16 +436,16 @@ def api(method: str, url: str, credentials: Credentials, *, json_body=None) -> d
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with _opener.open(request, timeout=HTTP_TIMEOUT) as response:
+        with _opener_for(method).open(request, timeout=HTTP_TIMEOUT) as response:
             raw = response.read()
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError as error:
-        # A 5xx on a write may have committed server-side despite the error response,
-        # so it is ambiguous (like a lost connection). 4xx means the write was rejected.
-        if method in ("POST", "PUT") and error.code >= 500:
+        # Ambiguous like a lost connection, so rollback must not delete anything.
+        if method in ("POST", "PUT") and _write_outcome_unknown(error.code):
             body = error.read().decode(errors="replace")
-            raise _Ambiguous(f"Jira returned {error.code} {error.reason} to a {method} ({url}); the "
-                             f"write may or may not have committed — verify the issue.\n{body}")
+            raise _Ambiguous(f"Jira returned {error.code} {error.reason}{_redirect_note(error)} to a "
+                             f"{method} ({url}); the write may or may not have committed — verify "
+                             f"the issue.\n{body}")
         _die_http(error, url)
     except urllib.error.URLError as error:
         # A GET that never reached the server is a safe, definitive failure. A POST/PUT
@@ -440,6 +454,11 @@ def api(method: str, url: str, credentials: Credentials, *, json_body=None) -> d
             raise _Ambiguous(f"Network error during a {method} to {url} ({error.reason}); "
                              "the write may or may not have committed — verify the issue.")
         sys.exit(f"Could not reach the Jira gateway: {error.reason}")
+
+
+def _redirect_note(error: urllib.error.HTTPError) -> str:
+    location = error.headers.get("Location") if error.headers else None
+    return f" (redirect to {location})" if location else ""
 
 
 def _die_http(error: urllib.error.HTTPError, url: str) -> None:
@@ -474,8 +493,9 @@ def _best_effort(method: str, url: str, credentials: Credentials, json_body=None
     if data is not None:
         headers["Content-Type"] = "application/json"
     try:
-        with _opener.open(urllib.request.Request(url, data=data, method=method, headers=headers),
-                          timeout=HTTP_TIMEOUT) as response:
+        with _opener_for(method).open(urllib.request.Request(url, data=data, method=method,
+                                                             headers=headers),
+                                      timeout=HTTP_TIMEOUT) as response:
             return 200 <= response.status < 300
     except Exception:
         return False
@@ -590,7 +610,7 @@ def fetch(url: str, credentials: Credentials, destination: Path | None) -> int |
                   else "any output written is incomplete")
     replaced_handlers = _raise_on_termination_signals()
     try:
-        with _opener.open(request, timeout=HTTP_TIMEOUT) as response:
+        with _opener_for("GET").open(request, timeout=HTTP_TIMEOUT) as response:
             if destination is not None:
                 return _save_to_new_file(response, destination)
             # Like curl: binary written to a terminal garbles it, so refuse before any
@@ -747,9 +767,16 @@ def attach_one(base3: str, credentials: Credentials, issue: str, path: Path) -> 
         },
     )
     try:
-        with _opener.open(request, timeout=HTTP_TIMEOUT) as response:
+        with _opener_for("POST").open(request, timeout=HTTP_TIMEOUT) as response:
             records = json.loads(response.read())
     except urllib.error.HTTPError as error:
+        # Still a definitive failure for rollback (no content references this run's
+        # uploads yet), but the message must not claim the file was not stored.
+        if _write_outcome_unknown(error.code):
+            body = error.read().decode(errors="replace")
+            sys.exit(f"Jira returned {error.code} {error.reason}{_redirect_note(error)} uploading "
+                     f"{path.name}; it may or may not have been attached — verify {issue}'s "
+                     f"attachments.\n{body}")
         _die_http(error, f"{base3}/issue/{issue}/attachments")
     except urllib.error.URLError as error:
         # An attachment is not referenced by any content yet, so cleanup of the other

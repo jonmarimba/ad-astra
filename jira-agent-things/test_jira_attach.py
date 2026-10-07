@@ -80,10 +80,28 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     time.sleep(SLOW_DELAY)
             elif self.path == "/hang":
                 time.sleep(5)
+            elif self.path == "/landing":
+                body = json.dumps([{"id": "1", "filename": "landing.png"}]).encode()
+                self._start(len(body))
+                self.wfile.write(body)
             else:
                 self.send_error(404)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def _write(self):
+        """Answer a write with the status named by the path's first segment
+        (/303/..., /500/...); a 3xx points at /landing, which a followed redirect
+        would GET."""
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        status = int(self.path.split("/")[1])
+        self.send_response(status)
+        if 300 <= status < 400:
+            self.send_header("Location", "/landing")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_POST = do_PUT = _write
 
 
 def setUpModule():
@@ -386,6 +404,48 @@ class Redirects(unittest.TestCase):
     def test_same_host_redirect_keeps_token_regardless_of_case(self):
         redirected = self.redirect("https://api.atlassian.com/x", "https://API.atlassian.com/y")
         self.assertTrue(redirected.has_header("Authorization"))
+
+
+class RedirectedWrites(TemporaryDirectoryTest):
+    """A redirect answering a write must not be followed (urllib would re-send a POST as
+    a GET of the new URL and hand back that body as the write's result), and must count
+    as uncertain: a 303 says the write was processed, so rolling back could delete
+    attachments that committed content references."""
+
+    def setUp(self):
+        super().setUp()
+        # The test server is plain http, which the real opener refuses to redirect to;
+        # a plain following opener isolates "writes are never followed" from that rule.
+        self.real_opener = ja._opener
+        ja._opener = urllib.request.build_opener()
+
+    def tearDown(self):
+        ja._opener = self.real_opener
+
+    def test_redirected_writes_are_uncertain(self):
+        for method in ("POST", "PUT"):
+            for status in (301, 302, 303, 307, 308):
+                with self.subTest(method=method, status=status):
+                    with self.assertRaises(ja._Ambiguous) as raised:
+                        ja.api(method, f"{BASE}/{status}/issue/X-1/comment", CREDENTIALS, json_body={})
+                    self.assertIn("may or may not have committed", str(raised.exception))
+
+    def test_server_error_on_write_stays_uncertain(self):
+        with self.assertRaises(ja._Ambiguous):
+            ja.api("POST", f"{BASE}/500/issue/X-1/comment", CREDENTIALS, json_body={})
+
+    def test_rejected_write_stays_definitive(self):
+        with self.assertRaises(SystemExit):
+            ja.api("POST", f"{BASE}/400/issue/X-1/comment", CREDENTIALS, json_body={})
+
+    def test_redirected_or_failed_upload_reported_as_uncertain(self):
+        upload = self.directory / "shot.png"
+        upload.write_bytes(b"png")
+        for status in (303, 307, 500):
+            with self.subTest(status=status):
+                with self.assertRaises(SystemExit) as raised:
+                    ja.attach_one(f"{BASE}/{status}", CREDENTIALS, "X-1", upload)
+                self.assertIn("may or may not have been attached", str(raised.exception.code))
 
 
 # --------------------------------------------------------------------------- #
