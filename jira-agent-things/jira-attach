@@ -25,6 +25,22 @@ APPEND TO A COMMENT / THE DESCRIPTION  (byte-safe; existing content is never rew
     silently flatten or drop it. For formatted additions, post a new comment (or
     replace the description) instead.
 
+FETCH A URL  (authenticated GET):
+    jira-attach --fetch-url https://your-team.atlassian.net/rest/api/3/attachment/content/10001 -o shot.png
+    jira-attach --fetch-url https://your-team.atlassian.net/rest/api/3/attachment/content/10001 > shot.png
+    jira-attach --fetch-url 'https://your-team.atlassian.net/rest/api/3/issue/MHMAPPS-1?fields=summary'
+
+    Without -o/--output the response body is the only thing written to stdout. With it,
+    the body goes to a NEW file: an existing file is never overwritten, and a failed
+    download removes the partial file.
+
+    Site URLs are rewritten onto the api.atlassian.com gateway (scoped tokens only work
+    there): /rest/... keeps its path and query, and an attachment page link
+    (/secure/attachment/ID/name) becomes /rest/api/3/attachment/content/ID. Gateway
+    URLs (https://api.atlassian.com/ex/jira/...) are used as-is. Any other host is
+    refused, so the token is never sent anywhere but Atlassian. Setup prompts and
+    errors go to stderr.
+
 CONTENT PARTS (ordered, repeatable; emitted in command-line order):
     --text  T     a text block  (wiki in rich modes; plain in append modes)
     --image F     an image file: attached, embedded inline
@@ -54,11 +70,14 @@ from __future__ import annotations  # `str | None` hints on Xcode's python3 3.9
 
 import argparse
 import base64
+import http.client
+import contextlib
 import getpass
 import json
 import mimetypes
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -67,9 +86,10 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
-GATEWAY = "https://api.atlassian.com/ex/jira"
+GATEWAY_HOST = "api.atlassian.com"
+GATEWAY = f"https://{GATEWAY_HOST}/ex/jira"
 DEFAULT_KEYCHAIN_SERVICE = "atlassian-api-token"
 CONFIG_PATH = Path(os.environ.get("JIRA_ATTACH_CONFIG")
                    or Path.home() / ".config" / "jira-attach" / "config.json")
@@ -81,6 +101,10 @@ KEYCHAIN_TIMEOUT = 15      # seconds, per `security` invocation
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
 COMMENT_ID_PATTERN = re.compile(r"^\d+$")
 UUID_IN_MEDIA_URL = re.compile(r"/file/([0-9a-fA-F-]{36})")
+ATTACHMENT_PAGE_PATH = re.compile(r"^/secure/attachment/(\d+)(/|$)")
+# Every character that is legal in a URL path or query; quote() escapes everything
+# else (spaces, control characters, non-ASCII) and leaves existing %XX escapes alone.
+URL_LEGAL_CHARACTERS = "%!$&'()*+,/:;=?@[]~"
 
 
 class _Ambiguous(Exception):
@@ -394,7 +418,10 @@ def api(method: str, url: str, credentials: Credentials, *, json_body=None) -> d
 
 def _die_http(error: urllib.error.HTTPError, url: str) -> None:
     detail = error.read().decode(errors="replace")
-    if error.code == 401:
+    if error.code == 401 and "scope does not match" in detail:
+        detail += ("\n\nThe stored token is valid but lacks a scope this endpoint needs. "
+                   f"Add the scope at {TOKEN_URL}, or use a classic (unscoped) token.")
+    elif error.code == 401:
         detail += "\n\nThe stored token may be revoked. Re-run with --reset-token."
     elif error.code == 404:
         detail += ("\n\nA 404 here usually means the token can't SEE the issue/comment — "
@@ -469,6 +496,97 @@ class Rollback:
                                "(content cleanup failed; remove manually if orphaned)")
         if actions:
             print("Rollback: " + "; ".join(actions) + ".", file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- #
+# Fetch a URL to stdout
+# --------------------------------------------------------------------------- #
+
+def gateway_url_for_fetch(url: str, settings: Settings) -> str:
+    """The api.atlassian.com URL to GET for a user-supplied site or gateway URL.
+
+    Hosts are matched exactly (no userinfo, no port) because the request carries the
+    API token: anything other than the configured site or the gateway is refused.
+    Site URLs are rewritten because scoped tokens are only accepted by the gateway."""
+    parts = urlsplit(url.strip())
+    # A hand-typed URL often holds raw spaces or non-ASCII (e.g. JQL), which http.client
+    # rejects outright. Escape them the way a browser would before building the target.
+    path = quote(parts.path, safe=URL_LEGAL_CHARACTERS)
+    query = quote(parts.query, safe=URL_LEGAL_CHARACTERS)
+    if parts.scheme != "https":
+        raise ValueError(f"'{url}' is not an https URL")
+    host = parts.netloc.lower()
+    site_host = urlsplit(settings.site).netloc.lower()
+    if host == GATEWAY_HOST:
+        if not path.startswith("/ex/jira/"):
+            raise ValueError(f"'{url}' is not a Jira gateway URL (expected "
+                             f"https://{GATEWAY_HOST}/ex/jira/<cloudId>/...)")
+        return f"https://{GATEWAY_HOST}{path}" + (f"?{query}" if query else "")
+    if host != site_host:
+        raise ValueError(f"refusing to send the Jira API token to '{parts.netloc}'; only "
+                         f"{site_host} and {GATEWAY_HOST} URLs can be fetched")
+    attachment = ATTACHMENT_PAGE_PATH.match(path)
+    if attachment:
+        path, query = f"/rest/api/3/attachment/content/{attachment.group(1)}", ""
+    elif not path.startswith("/rest/"):
+        raise ValueError(f"'{url}' is not a Jira REST or attachment URL (expected "
+                         f"{settings.site}/rest/... or {settings.site}/secure/attachment/<id>/...)")
+    return f"{GATEWAY}/{get_cloud_id(settings)}{path}" + (f"?{query}" if query else "")
+
+
+def fetch(url: str, credentials: Credentials, destination: Path | None) -> int | None:
+    """Stream the response body as raw bytes (so binary attachments survive) to a new
+    file at destination, or to stdout when there is none. Returns the byte count
+    written to the file. Redirects (e.g. attachment content -> media host) are
+    followed without carrying the token off-origin.
+
+    The file is only created once the server has answered with success, so an HTTP
+    error never leaves an empty file behind."""
+    request = urllib.request.Request(
+        url, headers={"Authorization": credentials.auth_header, "Accept": "*/*"})
+    incomplete = ("the partial file was removed" if destination
+                  else "any output written is incomplete")
+    try:
+        with _opener.open(request, timeout=HTTP_TIMEOUT) as response:
+            if destination is not None:
+                return _save_to_new_file(response, destination)
+            shutil.copyfileobj(response, sys.stdout.buffer)
+            sys.stdout.buffer.flush()
+            return None
+    except urllib.error.HTTPError as error:
+        _die_http(error, url)
+    except urllib.error.URLError as error:
+        sys.exit(f"Could not fetch {url}: {error.reason}")
+    except BrokenPipeError:
+        # The reader went away early (e.g. `| head`). Point stdout at /dev/null so the
+        # interpreter's final flush can't raise a second BrokenPipeError at exit.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)
+    except TimeoutError:
+        sys.exit(f"Timed out fetching {url}; {incomplete}.")
+    except (OSError, http.client.HTTPException) as error:
+        # A dropped connection or short read mid-body, or a failed write.
+        sys.exit(f"Fetching {url} failed: {error!r}; {incomplete}.")
+
+
+def _save_to_new_file(source, destination: Path) -> int:
+    """Copy source into destination, which must not exist yet. Exclusive creation
+    claims the name atomically, so a file that appears after the up-front check is
+    still never overwritten. A failed copy removes the partial file (which this call
+    created) so a retry starts clean."""
+    try:
+        file = open(destination, "xb")
+    except FileExistsError:
+        sys.exit(f"{destination} already exists; not overwriting it.")
+    except OSError as error:
+        sys.exit(f"Could not create {destination}: {error.strerror}")
+    try:
+        with file:
+            shutil.copyfileobj(source, file)
+            return file.tell()
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
 
 
 # --------------------------------------------------------------------------- #
@@ -727,6 +845,12 @@ def main() -> None:
                              "and store an API token if none is held")
     parser.add_argument("--reset-token", action="store_true",
                         help="Prompt for a new API token and replace the stored one")
+    parser.add_argument("--fetch-url", metavar="URL", dest="fetch_url",
+                        help="GET a Jira site or api.atlassian.com URL with the stored token "
+                             "and write the response body to stdout (or to --output)")
+    parser.add_argument("-o", "--output", metavar="FILE", type=Path,
+                        help="With --fetch-url: write the body to this new file instead of "
+                             "stdout (never overwrites an existing file)")
     # A bare run is someone asking what this is, not a usage error: show the full help
     # and where setup stands, rather than a one-line "issue key is required".
     if len(sys.argv) == 1:
@@ -735,6 +859,38 @@ def main() -> None:
         return
 
     args = parser.parse_args()
+
+    if args.output is not None and args.fetch_url is None:
+        parser.error("--output only applies to --fetch-url")
+    if args.fetch_url is not None:
+        if (args.issue or args.files or getattr(args, "parts", None)
+                or args.comment or args.replace_comment or args.append_comment
+                or args.replace_description or args.append_description
+                or args.configure or args.reset_token):
+            parser.error("--fetch-url only fetches, so it must be run without an issue, "
+                         "content, a build/append mode, --configure, or --reset-token")
+        # Caught here so a mistake costs no network round trip; the exclusive create in
+        # _save_to_new_file is what actually guarantees no overwrite.
+        if args.output is not None:
+            if args.output.is_dir():
+                parser.error(f"--output {args.output} is a directory; give a file path")
+            if args.output.exists():
+                parser.error(f"--output {args.output} already exists; not overwriting it")
+            if not args.output.parent.is_dir():
+                parser.error(f"--output directory {args.output.parent} does not exist")
+        # stdout carries only the fetched bytes; any first-run prompts or status lines
+        # from settings/token resolution go to stderr instead.
+        with contextlib.redirect_stdout(sys.stderr):
+            settings = resolve_settings(args.site, args.email, reconfigure=False)
+            try:
+                target = gateway_url_for_fetch(args.fetch_url, settings)
+            except ValueError as error:
+                parser.error(str(error))
+            credentials = obtain_credentials(settings)
+        size = fetch(target, credentials, args.output)
+        if args.output is not None:
+            print(f"Saved {args.output}  ({size / 1024:.0f} KB)")
+        return
 
     setup_only = args.configure or args.reset_token
     if setup_only:

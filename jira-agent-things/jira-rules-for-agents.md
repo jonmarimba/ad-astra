@@ -38,6 +38,7 @@ When using `atlassian` MCP server, ALWYAS use these directives and information t
 ## Images / media
 - ALWAYS include related screenshots, videos, JSON data files, etc. when available
 - The atlassian MCP doesn't know how to upload attachments. Use the `jira-attach` python script to get it done
+- The atlassian MCP can't download attachment content either. Use `jira-attach --fetch-url <URL> -o <file>`, where `<URL>` is the attachment's `content` URL from the issue's `attachment` field
 
 ## Terminology
 - "Backlog" means issues with status "Open"

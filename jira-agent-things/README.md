@@ -127,8 +127,14 @@ jira-attach --replace-description ABC-123 --text 'h2. Overview' --image arch.png
 # Append without rewriting what is already there (plain text + media only)
 jira-attach --append-comment 45210 ABC-123 --text 'A follow-up note.' --image b.png
 jira-attach --append-description ABC-123 --text 'Update:' --file log.txt
+
+# Fetch a Jira REST or attachment URL with the stored token (e.g. download an attachment)
+jira-attach --fetch-url https://your-site.atlassian.net/rest/api/3/attachment/content/10001 -o shot.png
+jira-attach --fetch-url 'https://your-site.atlassian.net/rest/api/3/issue/ABC-123?fields=summary'
 ```
 
 `--text`, `--image`, and `--file` are repeatable and are emitted in the order given. Append mode never reconverts existing content, so it cannot render formatting — it rejects wiki/markdown in `--text` rather than silently flattening it. Use `--comment` or `--replace-description` for formatted additions.
+
+`--fetch-url` takes your site's `/rest/...` and `/secure/attachment/<id>/...` URLs, or `https://api.atlassian.com/ex/jira/...` URLs, and refuses any other host so the token only goes to Atlassian. Without `-o` the response body is the only thing written to stdout; `-o FILE` writes a new file and never overwrites an existing one.
 
 Run `jira-attach --help` for the full option list; the script's module docstring has the long-form notes.
