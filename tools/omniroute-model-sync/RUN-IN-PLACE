@@ -1,0 +1,1 @@
+Adds OmniRoute's catalog models to the qwen and opencode configs on this machine. Run it from the checkout or a scheduler; it edits user-level tool config, never a repo.

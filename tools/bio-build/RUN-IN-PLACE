@@ -1,0 +1,1 @@
+Assembles one document from a directory of ordered markdown sections. Run it from the checkout against any directory; it has no per-repo state.

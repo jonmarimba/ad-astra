@@ -1,0 +1,1 @@
+Hands new commits in the repos it is pointed at to a second assistant. Run it from the checkout or a scheduler; the repos it covers are configuration, not something it installs into.

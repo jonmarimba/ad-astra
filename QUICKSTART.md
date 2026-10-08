@@ -1,6 +1,6 @@
 # Quickstart
 
-This repo is a toolbox that installs AI development tooling into other repos. It carries MCP servers, command-line tools, skills, and operating doctrine. You install a named template into your project, and the template installs everything a project of that kind needs. Nothing installs globally. Written 2026-09-01 by Claude (Fable), reviewed against the live system.
+This repo is a toolbox that installs AI development tooling into other repos. It carries MCP servers, command-line tools, skills, and operating doctrine. You install a named template into your project, and the template installs everything a project of that kind needs. A template only ever changes your repo. A few tools need software on the machine itself, and "Where each kind of tool lives" below explains which and why.
 
 ## Install a template into your project
 
@@ -30,6 +30,36 @@ Everything the installer writes stays inside your repo. `.mcp.json` gains MCP se
 
 Restart your agent session after an install. Agents read the config files at session start.
 
+## Where each kind of tool lives, and why
+
+Every directory under `tools/` is one of four kinds. The kind decides where the tool lands and how it stays current. Each tool's `install.sh` declares its kind on a `# astra-scope:` line near the top. `tools/tests/test-tool-kinds.sh` fails on any tool that declares nothing or cannot be uninstalled.
+
+### Files in your repo
+
+These tools declare `# astra-scope: repo`. Skills, doctrine, and small scripts are copied into the repo as ordinary committed files: `.claude/skills/`, `.doctrine/`, and `.astra/<tool>/`. Anyone who clones the repo gets them, with no astra on their machine.
+
+`.astra/manifest.json` records every file and its hash. The post-commit and post-merge hooks run `.astra/astra-update --pull` in the background. That command replaces a file only while it is still exactly what the installer wrote. A file you edited is reported and left alone.
+
+The copies live in the repo for three reasons. The repo must work on a machine that has never seen this toolbox. Two repos can sit at different versions. And a bug in the toolbox cannot reach into a repo that did not ask for an update.
+
+### Config in your repo
+
+These tools declare `# astra-scope: repo-config`. An MCP server is not a file to copy. Each agent reads its own list from `.mcp.json`, `.qwen/settings.json`, or `.codex/config.toml`, so the installer writes an entry there.
+
+The manifest does not track these entries, and the hooks do not refresh them. To change one, re-run the installer with `tools/astra add <tool>` or the template command. The program the entry names updates on its own schedule, not through astra. An `npx` server is resolved by `npx` each time the agent launches it. The Xcode aggregator is one daemon on the machine, and the entry only points at it.
+
+### Software on the machine
+
+These tools declare `# astra-scope: machine`. Some things exist once per machine and cannot live in a repo. Homebrew formulas such as `axe` and `periphery` are one example. Background daemons such as the Xcode aggregator are another. So are signed `.app` wrappers that hold macOS permission grants, and downloaded model files.
+
+A repo install never runs these. Adding a set to a repo must not install software on your machine as a side effect. When a set needs one, the install prints `MACHINE <tool>: install once per machine` with the command. Run that tool's `install.sh` yourself, once. To update it, run the same script again, because it pulls from the source each time. Its `uninstall.sh` keeps shared software unless you pass `--deps`.
+
+### Run in place
+
+These tools have a `RUN-IN-PLACE` file instead of an `install.sh`. Seven small scripts fall here, such as `peer-review`, `bio-build`, and `omniroute-health`. They run straight from this checkout and install nothing. The `RUN-IN-PLACE` file in each directory says why. They update when you `git pull` the toolbox.
+
+To see a tool's kind, read the first lines of its `install.sh`, or look for `RUN-IN-PLACE` in its directory. Every installable tool has an `uninstall.sh` that undoes its own install and nothing else.
+
 ## The Xcode aggregator
 
 The template does not install separate Xcode MCP servers into your repo. It writes one HTTP entry, `xcode-combined`, pointing at a single daemon on this machine (port 8767). That daemon fronts Apple's Xcode bridge, Drew's server, and a slice of XcodeBuildMCP behind one endpoint. A head-to-head on real projects resolved the overlaps: each capability appears once, under one name, from the vendor that won. The daemon runs under launchd, survives reboots, and waits for Xcode on its own. Xcode's approval prompt is answered once, for the daemon, and no per-session bridge ever spawns to ask again.
@@ -46,7 +76,7 @@ Nothing assumes a fixed location. Clone this repo anywhere, under any name. A re
 
 ## How updates happen
 
-`.astra/astra-update --pull`, run inside your repo, asks this repo whether anything moved on and updates in place. It only touches files that are still exactly what the installer wrote; anything you edited locally is reported, never overwritten. Every install wires a post-commit and a post-merge hook that run it in the background, so a repo you commit to or pull into stays current without anyone thinking about it.
+`.astra/astra-update --pull`, run inside your repo, asks this repo whether anything moved on and updates in place. It only touches files that are still exactly what the installer wrote; anything you edited locally is reported, never overwritten. Every install wires a post-commit hook and a post-merge hook that run it in the background. A repo you commit to or pull into stays current without anyone thinking about it.
 
 The whole interface is one command, run inside the repo:
 
@@ -57,7 +87,7 @@ The whole interface is one command, run inside the repo:
 <astra checkout>/tools/astra list
 ```
 
-Git does not clone hooks, so on a new machine or a fresh clone run `astra sync` once. It wires the hooks in every repo beside the astra checkout (or under the directories you name) that has astra tools. A repo never needs astra to work: installed tools are ordinary committed files, and the hook stays silent when no astra checkout is present. Tools marked `# astra-scope: machine` (brew formulas, global CLIs) are never installed by a repo install; a set that names one says so and gives the command.
+Git does not clone hooks, so on a new machine or a fresh clone run `astra sync` once. It wires the hooks in every repo beside the astra checkout (or under the directories you name) that has astra tools. A repo never needs astra to work: installed tools are ordinary committed files, and the hook stays silent when no astra checkout is present.
 
 ## How bots know their tooling is current
 

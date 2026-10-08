@@ -133,4 +133,15 @@ printf '%s\n' "# >>> drew-kit imports (managed by drew-kit/install-into-repo.sh)
 red "broken markers (no end marker) must abort, not mangle" 1 "markers broken in" "$INSTALL" "$REPO"
 red "missing repo argument must fail" 64 "usage: install-into-repo.sh" "$INSTALL"
 
+# ---- the uniform entry points every other tool has: install.sh / uninstall.sh --into <repo> ----
+W="$SB/wrapped"; mkdir -p "$W"; printf '# Wrapped\nKeep this.\n' > "$W/CLAUDE.md"
+assert_rc 0 "install.sh --into installs, passing options through" "$HERE/../drew-kit/install.sh" --into "$W" --set jira
+assert_contains "$W/CLAUDE.md" "AtlassianJira.md" "the --set option reached install-into-repo.sh"
+assert_not_contains "$W/CLAUDE.md" "SwiftCodeStyle.md" "and replaced the default set, as it does when called directly"
+assert_rc 0 "uninstall.sh --into removes it" "$HERE/../drew-kit/uninstall.sh" --into "$W"
+assert_not_contains "$W/CLAUDE.md" "drew-kit imports" "the managed block is gone"
+assert_contains "$W/CLAUDE.md" "Keep this." "the repo's own text survives"
+red "install.sh without --into is refused" 64 "usage: install.sh --into" "$HERE/../drew-kit/install.sh"
+red "uninstall.sh without --into is refused" 64 "usage: uninstall.sh --into" "$HERE/../drew-kit/uninstall.sh"
+
 finish
