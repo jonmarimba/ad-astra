@@ -85,7 +85,7 @@ sleep 2
 echo "== test-sluggish-stub.sh: 1 ok, 0 failed"
 EOF
 red "fast tier over TOTAL budget must fail loudly" 1 "FAST TIER OVER BUDGET" \
-  env ASTRA_FAST_BUDGET_S=1 ASTRA_FAST_PERFILE_S=10 bash "$FAKE/run-all.sh"
+  env ASTRA_FAST_NO_LOAD_SCALE=1 ASTRA_FAST_BUDGET_S=1 ASTRA_FAST_PERFILE_S=10 bash "$FAKE/run-all.sh"
 rm "$FAKE/test-sluggish-stub.sh"
 
 # --- a HUNG test file is killed and fails; the tier does not stall forever ---
@@ -99,7 +99,7 @@ sleep 300
 EOF
 # The whole run must itself finish well under the hang: an external timeout proves the
 # tier did NOT block on the 300s sleep.
-with_timeout 40 env ASTRA_FAST_PERFILE_S=3 ASTRA_FAST_BUDGET_S=60 bash "$FAKE/run-all.sh" >"$SB/hung.out" 2>&1
+with_timeout 40 env ASTRA_FAST_NO_LOAD_SCALE=1 ASTRA_FAST_PERFILE_S=3 ASTRA_FAST_BUDGET_S=60 bash "$FAKE/run-all.sh" >"$SB/hung.out" 2>&1
 rc=$?
 assert_eq "1" "$rc" "the tier finished (not killed by the external 40s watchdog) and reported failure"
 assert_contains "$SB/hung.out" "was KILLED after" "the hung file is named as killed, not left to stall"

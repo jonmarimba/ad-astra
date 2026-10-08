@@ -19,6 +19,22 @@ set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BUDGET="${ASTRA_FAST_BUDGET_S:-20}"
+# Wall time on a machine that is busy with other work measures the neighbours, not this suite: at a
+# load average of 30 on 14 cores the same tier took 24s instead of 14s and failed unrelated tests as
+# hung. The budget is scaled by how oversubscribed the machine is (load per core, never below 1), and
+# the scaling is stated in the output. ASTRA_FAST_NO_LOAD_SCALE=1 turns it off, for the RED control
+# in test-run-tiers.sh that needs a budget it can actually exceed.
+if [ -z "${ASTRA_FAST_NO_LOAD_SCALE:-}" ]; then
+  load1="$(sysctl -n vm.loadavg 2>/dev/null | awk '{gsub(/[{}]/,""); print int($1)}')"
+  cores="$(sysctl -n hw.ncpu 2>/dev/null)"
+  if [ -n "$load1" ] && [ -n "$cores" ] && [ "$cores" -gt 0 ]; then
+    scale=$(( (load1 + cores - 1) / cores ))
+    if [ "$scale" -gt 1 ]; then
+      echo "(machine is busy: load $load1 on $cores cores, so the ${BUDGET}s budget is scaled x$scale)"
+      BUDGET=$(( BUDGET * scale ))
+    fi
+  fi
+fi
 JOBS="${ASTRA_FAST_JOBS:-8}"
 start=$(date +%s)
 
