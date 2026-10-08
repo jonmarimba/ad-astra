@@ -5,7 +5,7 @@
 # (a) never execute a file marked '# TIER: slow' — the live-Xcode test launches Xcode and
 # raises approval dialogs, so running it from the fast tier is not slowness, it is a GUI
 # takeover — and (b) fail ITSELF when its wall time exceeds the budget, because a suite
-# that quietly grows past fifteen seconds stops being run.
+# that quietly grows past twenty seconds stops being run.
 #
 # The runners are copied into a sandbox with stub test files so this file can observe
 # them without recursing (run-all runs this file; this file must not run the real

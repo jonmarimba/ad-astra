@@ -29,14 +29,24 @@ run_home() { env -u ASTRA_SOURCE -u ASTRA_WORKSPACE -u CONVOQ_BRIDGE HOME="$FAKE
 echo "== install base from the renamed toolbox into a fresh repo"
 assert_rc 0 "template.py install base" run_home python3 "$TOOLBOX/tools/lib/template.py" install base --into "$REPO"
 
+echo "== the committed manifest records the source relative to the repo, not an absolute path"
+assert_eq "../odd-name-toolbox" "$(jq -r '.tools["check-prose"].source' "$REPO/.astra/manifest.json")" "a sibling toolbox is recorded as ../<name>"
+FAR="$SB/elsewhere-entirely/far-repo"; mkdir -p "$FAR"; git -C "$FAR" init -q && git -C "$FAR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+run_home python3 "$TOOLBOX/tools/lib/template.py" install writing --into "$FAR" >/dev/null 2>&1
+case "$(jq -r '.tools["check-prose"].source' "$FAR/.astra/manifest.json")" in
+  /*) pass "a toolbox that is not beside the repo has no portable form, so it stays absolute (ASTRA_SOURCE covers it)" ;;
+  *) fail "a non-sibling toolbox was recorded as a relative path that cannot resolve" ;;
+esac
+assert_rc 0 "astra-update resolves the relative source" run_home "$REPO/.astra/astra-update"
+
 echo "== nothing installed names this machine's layout"
-# manifest.json records the source path by design (astra-update resolves it); everything else must not.
-leaks="$(cd "$REPO" && grep -rIn 'svnCheckouts\|/Users/' . --exclude-dir=.git --exclude=manifest.json 2>/dev/null)"
+# Every installed file, the manifest included, must be free of a machine's paths.
+leaks="$(cd "$REPO" && grep -rIn 'svnCheckouts\|/Users/' . --exclude-dir=.git 2>/dev/null)"
 assert_empty "$leaks" "no svnCheckouts or /Users/ path in any installed file"
 [ -z "$leaks" ] || echo "$leaks" | cut -c1-170 | sed 's/^/        /'
 # RED control: the scan itself must be able to see a leak.
 printf 'run ~/svnCheckouts/x\n' > "$REPO/planted-leak.md"
-planted="$(cd "$REPO" && grep -rIn 'svnCheckouts\|/Users/' . --exclude-dir=.git --exclude=manifest.json 2>/dev/null)"
+planted="$(cd "$REPO" && grep -rIn 'svnCheckouts\|/Users/' . --exclude-dir=.git 2>/dev/null)"
 assert_nonempty "$planted" "RED control: the leak scan fails when a path is planted"
 rm -f "$REPO/planted-leak.md"
 
@@ -74,7 +84,7 @@ assert_contains "$LEGAL/.git/hooks/pre-commit" "repo-owned guard" "the repo's ow
 assert_contains "$LEGAL/.git/hooks/pre-commit" ".astra/pdf-sidecars/hook_pre_commit.sh" "the sidecar block was spliced in beside it"
 assert_not_contains "$LEGAL/.git/hooks/pre-commit" "js-db-ad-astra" "the hook's reinstall hint does not assume the checkout's name"
 bash -n "$LEGAL/.git/hooks/pre-commit" && pass "the spliced hook parses" || fail "the spliced hook has a syntax error"
-leaks="$(cd "$LEGAL" && grep -rIn 'svnCheckouts\|/Users/' .astra .doctrine .claude .git/hooks --exclude=manifest.json --exclude='*.bak*' --exclude='*.sample' 2>/dev/null)"
+leaks="$(cd "$LEGAL" && grep -rIn 'svnCheckouts\|/Users/' .astra .doctrine .claude .git/hooks --exclude='*.bak*' --exclude='*.sample' 2>/dev/null)"
 assert_empty "$leaks" "no foreign path anywhere legal-pdf installed"
 
 echo "== the workspace is the toolbox's parent, not ~/svnCheckouts"

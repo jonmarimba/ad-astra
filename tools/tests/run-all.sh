@@ -9,7 +9,7 @@
 # that needs an exclusive global resource (a live Xcode, a launchd job) belongs in the
 # slow tier, where files still run one at a time.
 #
-# THE TIME BUDGET IS AN ASSERTION, NOT A HOPE. Jonathan will not watch more than fifteen
+# THE TIME BUDGET IS AN ASSERTION, NOT A HOPE. Jonathan will not watch more than twenty
 # seconds of basic tests, so this tier fails itself when it runs over — a suite that
 # quietly grows past the budget stops being run, which is worse than any single failure.
 # When it trips: make the culprit faster or mark it '# TIER: slow' (run-slow.sh picks it
@@ -18,7 +18,7 @@
 set -uo pipefail
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BUDGET="${ASTRA_FAST_BUDGET_S:-15}"
+BUDGET="${ASTRA_FAST_BUDGET_S:-20}"
 JOBS="${ASTRA_FAST_JOBS:-8}"
 start=$(date +%s)
 

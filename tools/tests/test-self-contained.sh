@@ -15,10 +15,10 @@ KNOWN="$KNOWN|^tools/tests/TESTING\.md:.*js-llmKicker/docs/TAUTOLOGY"          #
 ok(){ echo "  ok:   $1"; PASS=$((PASS+1)); }; bad(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
 # The whole tracked tree. Exempt only prose records (notes/, docs/, READMEs, top-level
-# .md history, past panel output), the vendored submodule, and astra's own manifest,
-# whose recorded source path is by design (astra-update falls back to a verified sibling).
+# .md history, past panel output) and the vendored submodule. The committed manifest is NOT
+# exempt: it records its source relative to the repo, never a home directory.
 hits="$(git ls-files \
-  | grep -vE '^(notes|docs|vendor)/|^tools/tool-templates/(colloquium|facts)/|(^|/)README[^/]*$|^[A-Za-z0-9_-]+\.md$|^\.astra/manifest\.json$|^tools/tests/test-self-contained\.sh$' \
+  | grep -vE '^(notes|docs|vendor)/|^tools/tool-templates/(colloquium|facts)/|(^|/)README[^/]*$|^[A-Za-z0-9_-]+\.md$|^tools/tests/test-self-contained\.sh$' \
   | xargs grep -nIE '\+1[0-9]{10}|[a-z0-9-]+\.tail[0-9a-f]{6}\.ts\.net|/Users/[a-z][a-z0-9_-]*/|js-project-GhOST/|js-llmKicker/' 2>/dev/null \
   | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
   | grep -vE '\+1555[0-9]{7}|\+10000000000' \

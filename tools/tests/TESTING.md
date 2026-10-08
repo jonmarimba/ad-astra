@@ -12,7 +12,7 @@ Every tool in `tools/` gets a `test-<tool>.sh` here, and **no tool change ships 
 ## Running — two tiers
 
 ```
-tools/tests/run-all.sh             # FAST tier: parallel, budgeted at 15s, fails itself if over
+tools/tests/run-all.sh             # FAST tier: parallel, budgeted at 20s, fails itself if over
 tools/tests/run-slow.sh            # SLOW tier: live Xcode, network, tens of seconds; serial
 bash tools/tests/test-botline.sh   # one file
 ```

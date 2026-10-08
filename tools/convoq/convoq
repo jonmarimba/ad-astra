@@ -41,7 +41,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 if [ -n "${CONVOQ_BRIDGE:-}" ]; then BRIDGE="$CONVOQ_BRIDGE"
 elif [ -d "$HERE/../../vendor/authsec-bridge/src" ]; then BRIDGE="$HERE/../../vendor/authsec-bridge"
 else
-  ASTRA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tools"]["convoq"]["source"])' "$HERE/../manifest.json" 2>/dev/null)"
+  # a recorded source may be relative to the repo ('../name'); resolve it from the repo root
+  ASTRA="$(python3 -c 'import json,os,sys; s=json.load(open(sys.argv[1]))["tools"]["convoq"]["source"]; print(os.path.normpath(os.path.join(sys.argv[2], s)))' "$HERE/../manifest.json" "$HERE/../.." 2>/dev/null)"
   [ -d "${ASTRA:-/nonexistent}/vendor/authsec-bridge/src" ] || ASTRA="${ASTRA_SOURCE:-}"
   BRIDGE="${ASTRA:-/nonexistent}/vendor/authsec-bridge"
 fi

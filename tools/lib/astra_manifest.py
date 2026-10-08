@@ -112,6 +112,22 @@ def source_remote():
         return ""
 
 
+def recorded_source(repo):
+    """Where to write 'source' in the manifest. The manifest is committed, so an absolute
+    path puts one machine's home directory into every repo and breaks on every other
+    machine. When astra is this repo itself or sits beside it (the normal workspace layout)
+    the path is recorded RELATIVE to the repo ('.' or '../<name>'), which is the same on
+    every machine that keeps the two together. Anywhere else there is no portable form, so
+    it stays absolute; ASTRA_SOURCE covers that case at update time."""
+    repo_real = Path(repo).resolve()
+    astra_real = ASTRA.resolve()
+    if astra_real == repo_real:
+        return "."
+    if astra_real.parent == repo_real.parent:
+        return "../" + astra_real.name
+    return str(ASTRA)
+
+
 def copy_atomic(src, dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".astra-tmp")
@@ -150,7 +166,7 @@ def place(repo, tool, pairs):
         paths[key] = {"src": src_rel, "dest": dest_rel}
     for stale in set(old_dests(tool, old)) - {p["dest"] for p in paths.values()}:
         remove_file(repo, stale)
-    entry = {"source": str(ASTRA), "files": files, "paths": paths}
+    entry = {"source": recorded_source(repo), "files": files, "paths": paths}
     if hook_specs:
         entry["hooks"] = hook_specs
     add_hooks(repo, tool, hook_specs, old.get("hooks"))

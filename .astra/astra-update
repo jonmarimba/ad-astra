@@ -94,6 +94,8 @@ def resolve_source(recorded, source_remote=None):
     Returns (path or None, note). The note says when a fallback was used, because a
     silently substituted source is how the wrong checkout feeds an update."""
     recorded = Path(recorded) if recorded else None
+    if recorded and not recorded.is_absolute():
+        recorded = (REPO / recorded).resolve()     # '.' or '../name': relative to this repo
     if recorded and (recorded / "tools").is_dir():
         return recorded, ""            # the recorded path exists — same machine, trusted
     env = os.environ.get("ASTRA_SOURCE")

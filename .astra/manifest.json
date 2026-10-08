@@ -18,7 +18,7 @@
           "src": "tools/lib/astra-update"
         }
       },
-      "source": "/Users/jonathan/svnCheckouts/js-db-ad-astra",
+      "source": ".",
       "source_remote": "git@github.com:jonmarimba/ad-astra.git"
     },
     "ponytail": {
@@ -41,7 +41,7 @@
           "src": "agents-and-prompts/skills/ponytail/ponytail/SKILL.md"
         }
       },
-      "source": "/Users/jonathan/svnCheckouts/js-db-ad-astra",
+      "source": ".",
       "source_remote": "git@github.com:jonmarimba/ad-astra.git"
     }
   }
