@@ -20,7 +20,9 @@ FAKEHOME="$SB/home"                # no svnCheckouts, no .claude, nothing
 mkdir -p "$TOOLBOX" "$REPO" "$FAKEHOME"
 
 # Copy the working tree (modified files included), submodule contents and all.
-( cd "$ASTRA_ROOT" && git ls-files -z --recurse-submodules | tar --null -T - -cf - ) | tar -xf - -C "$TOOLBOX"
+# Tracked files (submodule contents included) AND files not yet added: an edited templates.json that
+# names a brand-new tool must find that tool in the copy, or the test fails for a reason that is not a defect.
+( cd "$ASTRA_ROOT" && { git ls-files -z --recurse-submodules; git ls-files -z --others --exclude-standard; } | tar --null -T - -cf - ) | tar -xf - -C "$TOOLBOX"
 git -C "$REPO" init -q && git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 assert_dir "$TOOLBOX/vendor/authsec-bridge/src/session_bridge" "toolbox copy carries the convoq engine"
 

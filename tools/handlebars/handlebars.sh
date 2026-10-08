@@ -198,6 +198,35 @@ end tell' ;;
       exit 64
     fi
     exec bash "$GHOST_REPO/tools/notes_html_append.sh" "$2" "$3" "${4:-}" ;;
+  notes-db-count)
+    # Read NoteStore.sqlite directly (needs FDA) and report how many notes
+    # actually exist in the database vs what AppleScript can see.
+    python3 -c "
+import sqlite3, tempfile, os, shutil
+store = os.path.expanduser('~/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite')
+td = tempfile.mkdtemp()
+dest = os.path.join(td, 'NoteStore.sqlite')
+src = sqlite3.connect(f'file:{store}?mode=ro', uri=True)
+dst = sqlite3.connect(dest)
+src.backup(dst)
+src.close(); dst.close()
+con = sqlite3.connect(dest)
+total = con.execute('SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT WHERE ZTITLE1 IS NOT NULL').fetchone()[0]
+not_del = con.execute('SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT WHERE ZTITLE1 IS NOT NULL AND (ZMARKEDFORDELETION IS NULL OR ZMARKEDFORDELETION != 1)').fetchone()[0]
+print(f'NoteStore rows with titles: {total} (not-deleted: {not_del})')
+for row in con.execute('''
+    SELECT a.ZNAME,
+           (SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT n
+            WHERE n.ZACCOUNT4 = a.Z_PK AND n.ZTITLE1 IS NOT NULL
+            AND (n.ZMARKEDFORDELETION IS NULL OR n.ZMARKEDFORDELETION != 1)) as cnt
+    FROM ZICCLOUDSYNCINGOBJECT a
+    WHERE a.ZNAME IS NOT NULL AND a.ZTYPEUTI IS NULL
+    AND EXISTS (SELECT 1 FROM ZICCLOUDSYNCINGOBJECT n WHERE n.ZACCOUNT4 = a.Z_PK)
+    ORDER BY cnt DESC
+'''):
+    print(f'  {row[0]}: {row[1]}')
+con.close(); shutil.rmtree(td, ignore_errors=True)
+" ;;
   *) echo "handlebars: unknown domain '$DOMAIN'" >&2; exit 64 ;;
 esac
 
