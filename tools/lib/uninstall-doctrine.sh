@@ -2,7 +2,7 @@
 # uninstall-doctrine.sh — remove a doctrine block (installed by install-doctrine.sh) from a repo's
 # CLAUDE.md/AGENTS.md/QWEN.md and delete the copied .doctrine/<slug>.md. Touches nothing else.
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 REPO=""; SLUG=""
 while [ $# -gt 0 ]; do case "$1" in
   --slug) SLUG="$2"; shift 2;;

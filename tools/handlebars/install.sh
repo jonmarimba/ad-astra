@@ -4,7 +4,7 @@
 # On Andrew's machine (or any new checkout): run this once, then grant TCC
 # domains one at a time via `handlebars.sh` with no arguments to see current state.
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # 1. brew deps (ffmpeg for mic + camera probes; the other 6 checks use pure macOS tools)

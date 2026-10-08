@@ -12,7 +12,7 @@
 # The actual click logic lives in daemon.py's _click_allow_if_present() — this
 # script is read-only on purpose, safe to run anytime without side effects.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 TARGET_PID="${1:-}"
 

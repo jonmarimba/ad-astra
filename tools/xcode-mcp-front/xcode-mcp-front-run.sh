@@ -10,7 +10,7 @@
 # unblock it. Now the same loop that decides "try to reconnect" also decides
 # "try to click Allow first" — one clock, not two racing ones.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PORT="${XCODE_MCP_FRONT_PORT:-8765}"
 

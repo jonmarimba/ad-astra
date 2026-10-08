@@ -3,7 +3,7 @@
 # install.sh — full setup: deps, the TCC-grantable app wrapper, and the launchd
 # job that keeps xcode-mcp-front running across logins (RunAtLoad, KeepAlive).
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 command -v uv >/dev/null || { echo "uv not found — install via 'brew install uv'" >&2; exit 1; }

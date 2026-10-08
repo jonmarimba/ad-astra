@@ -3,7 +3,7 @@
 # the install method dropped in: .drew-kit/ (copy) or .drew-kit-src/ (submodule/subtree). Touches
 # nothing else.
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 REPO="${1:?usage: uninstall-from-repo.sh <repo-path>}"
 BEGIN="# >>> drew-kit imports (managed by drew-kit/install-into-repo.sh) >>>"
 END="# <<< drew-kit imports <<<"

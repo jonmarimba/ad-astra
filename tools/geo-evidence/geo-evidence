@@ -18,7 +18,7 @@
 # in the code. Photos library is TCC-protected: run interactively (session holds access) or
 # behind an FDA app wrapper for automation.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 HOME_DIR="${GEO_EVIDENCE_HOME:-$HOME/.geo-evidence}"; mkdir -p "$HOME_DIR"
 CONF="$HOME_DIR/config"
 OSXPHOTOS="${OSXPHOTOS_BIN:-osxphotos}"

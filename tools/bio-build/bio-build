@@ -14,7 +14,7 @@
 # is a loud FAILURE, not a silently-dropped section — because a bio missing a chunk with no
 # error looks complete when it isn't.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 SUBL="${SUBL_BIN:-subl}"
 
 DIR=""; OUT=""; TITLE=""; SUBTITLE=""; OPEN=0; DATE_STR="${BIO_BUILD_DATE:-}"

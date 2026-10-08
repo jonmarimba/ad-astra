@@ -17,7 +17,7 @@ with_timeout() { local s="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "e
 #   3. No silent skips. A missing dependency is a loud FAIL with the reason, never a quiet pass.
 #   4. Names don't overclaim: a test named for a fragment tests that fragment.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 TESTS_PASS=0; TESTS_FAIL=0
 SB="$(mktemp -d -t astra-test)"          # per-test sandbox, wiped on exit

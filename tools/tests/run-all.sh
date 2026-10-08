@@ -16,7 +16,7 @@
 # up). ASTRA_FAST_BUDGET_S overrides the budget; its only legitimate uses are the RED
 # control in test-run-tiers.sh and a deliberately slower CI box.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BUDGET="${ASTRA_FAST_BUDGET_S:-15}"
 JOBS="${ASTRA_FAST_JOBS:-8}"

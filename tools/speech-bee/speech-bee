@@ -13,7 +13,7 @@
 #   speech-bee bootstrap [model]          # fetch a whisper model (default base.en)
 #   SPEECH_BEE_MODEL=/path/ggml-x.bin  SPEECH_BEE_STT=whisper  SPEECH_BEE_TTS=say
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 MODEL="${SPEECH_BEE_MODEL:-$HOME/.cache/whisper/ggml-base.en.bin}"
 STT_ENGINE="${SPEECH_BEE_STT:-whisper}"

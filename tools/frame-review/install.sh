@@ -2,7 +2,7 @@
 # astra-scope: machine
 # install.sh — frame-review needs only ffmpeg. Which-first: never a second copy.
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if p="$(command -v ffmpeg 2>/dev/null)"; then
   echo "already installed: ffmpeg -> $p"

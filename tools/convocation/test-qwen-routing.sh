@@ -9,7 +9,7 @@
 # The suite carries its own RED control (test 0). If a route that MUST fail comes back
 # passing, the harness is lying and the whole run aborts rather than reporting success.
 set -uo pipefail
-export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 OMNIROUTE="${OMNIROUTE_BASE:-http://localhost:20128}"
 # MARKER is what we ask the model to say. EXPECT is what we assert came back. They are the

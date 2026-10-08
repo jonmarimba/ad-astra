@@ -30,7 +30,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE="$HERE/../mcp-bundle"
 
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 if ! command -v idb_companion >/dev/null; then
   echo "ios-simulator: installing idb-companion (interaction tools need it)"
   brew install facebook/fb/idb-companion || { echo "ios-simulator: FAIL — brew install facebook/fb/idb-companion" >&2; exit 69; }

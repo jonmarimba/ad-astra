@@ -40,7 +40,7 @@
 # active `model` selection, never touches ambrosio, never touches anything outside the
 # modelProviders.openai list (qwen) / omniroute.models map (OpenCode).
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 QW="${QWEN_SETTINGS:-$HOME/.qwen/settings.json}"
 OC="${OPENCODE_SETTINGS:-$HOME/.config/opencode/opencode.jsonc}"

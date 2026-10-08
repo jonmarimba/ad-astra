@@ -16,7 +16,7 @@
 # nearest-property rule, the test-truthfulness rules). Pure-mechanism tools do not — forcing a
 # doctrine block on a plain utility is just noise.
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 REPO=""; DOC=""; SLUG=""
 while [ $# -gt 0 ]; do case "$1" in

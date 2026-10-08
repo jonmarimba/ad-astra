@@ -13,7 +13,7 @@
 # LAST bot that messaged him (reply-to-last). Config (chat id / number) lives in $BOTLINE_HOME/config,
 # NOT hardcoded here — point it at any recipient/thread.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 BOTLINE_HOME="${BOTLINE_HOME:-$HOME/.botline}"
 mkdir -p "$BOTLINE_HOME/inbox"

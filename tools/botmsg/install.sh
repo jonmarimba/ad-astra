@@ -14,7 +14,7 @@
 # number or bot needs configuration, not an edit.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 install_deps() {
   if command -v brew >/dev/null; then

@@ -37,7 +37,11 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOM
 HERE="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")" && pwd)"
 ASTRA_ROOT="$(cd "$HERE/../.." && pwd)"
 . "$ASTRA_ROOT/tools/lib/astra-config.sh"
-RSYNC="$(command -v /opt/homebrew/bin/rsync || command -v rsync)"
+# A Homebrew rsync (3.x) if this Mac has one; macOS's bundled openrsync otherwise.
+RSYNC="$(for d in /opt/homebrew/bin /usr/local/bin; do [ -x "$d/rsync" ] && echo "$d/rsync" && break; done)"
+[ -n "$RSYNC" ] || RSYNC="$(command -v rsync)"
+# The PEER's rsync is found by a non-interactive ssh shell, whose PATH has no Homebrew in it.
+REMOTE_RSYNC='PATH=/opt/homebrew/bin:/usr/local/bin:$PATH rsync'
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/agent-sync"
 # A peer that sleeps mid-transfer must not hang the run: give up on a dead link
 # within a minute or so and let the next run resume by delta.
@@ -107,7 +111,7 @@ config_sync() {  # $1 peer, $2 apply(0/1)
   local srcs=() p
   for p in $config_paths; do srcs+=("$peer:$p"); done
   "$RSYNC" -aR --ignore-missing-args --compress --compress-choice=zstd --compress-level=9 \
-    --rsync-path=/opt/homebrew/bin/rsync -e "ssh $SSH_OPTS" \
+    --rsync-path="$REMOTE_RSYNC" -e "ssh $SSH_OPTS" \
     "${srcs[@]}" "$mirror/"
   local new=0 same=0 differ=0 rel
   rm -rf "$mirror/.claude/skills/synced"
@@ -215,7 +219,7 @@ staged="$("${SSH[@]}" "'$PEER_ASTRA/tools/agent-sync/agent-sync' snapshot '$BRAN
 mirror="$CACHE/mirror/$PEER"; mkdir -p "$mirror"
 echo "  pulling $PEER's snapshot (zstd, delta) into $mirror"
 "$RSYNC" -a --delete --compress --compress-choice=zstd --compress-level=9 --stats \
-  --rsync-path=/opt/homebrew/bin/rsync -e "ssh $SSH_OPTS" \
+  --rsync-path="$REMOTE_RSYNC" -e "ssh $SSH_OPTS" \
   "$PEER:$staged/" "$mirror/" | grep -E 'Total transferred file size|Total bytes received|Number of regular files transferred' | sed 's/^/    /'
 "${SSH[@]}" "rm -rf '$staged'"
 

@@ -22,7 +22,7 @@
 # is NOT an approval — a review that finds nothing says nothing, exactly like a passing test.
 set -uo pipefail
 
-REVIEWER_BIN="${REVIEWER_BIN:-$(command -v openclaw || echo /opt/homebrew/bin/openclaw)}"
+REVIEWER_BIN="${REVIEWER_BIN:-$(command -v openclaw || echo openclaw)}"
 REVIEWER_NAME="${REVIEWER_NAME:-ghost-openclaw}"
 # --agent is REQUIRED. Without it the CLI prints "No target session selected" and EXITS 0
 # while doing it, so a run would look successful and review nothing.

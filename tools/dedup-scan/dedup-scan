@@ -7,8 +7,8 @@
 # no per-call noise, no fopen warnings. Top-K pairs go to the LLM, never everything.
 #   dedup-scan <repo> [--top 8] [--min-shared 3] [--no-llm]
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
-CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo /opt/homebrew/bin/claude)}"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo claude)}"
 REPO="${1:?usage: dedup-scan <repo> [--top 8] [--min-shared 3] [--no-llm]}"; shift || true
 TOP=8; MINSHARED=3; LLM=1
 while [ $# -gt 0 ]; do case "$1" in

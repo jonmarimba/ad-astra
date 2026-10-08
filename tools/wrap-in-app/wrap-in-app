@@ -19,7 +19,7 @@
 #      waits for the app (-W), then prints only the NEW non-marker lines — a silent script
 #      run stays silent, so a timer job only pokes when something actually happened.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 SCRIPT=""; LOG=""; NAME=""; OUTDIR="."

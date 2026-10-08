@@ -8,7 +8,7 @@
 #  - schd reminder texts begin "[Mon 09:11] ...", which parsed as a bot named
 #    "Mon 09:11", so the gate reported a stranger had spoken last.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 BOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/botmsg"
 [ -x "$BOT" ] || BOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/botmsg"
 [ -x "$BOT" ] || { echo "FATAL: botmsg not found"; exit 1; }

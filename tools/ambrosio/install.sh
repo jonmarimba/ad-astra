@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # astra-scope: machine
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 "$HERE/ambrosio" status >/dev/null 2>&1 || true   # materialize config
 echo "ambrosio ready. Config: ~/.ambrosio/config (HOST/watchlist/size cap)."

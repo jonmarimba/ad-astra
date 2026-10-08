@@ -17,7 +17,7 @@
 # knowing the cadence is how a tool becomes the thing everyone disables.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 install_deps() {
   command -v brew >/dev/null && brew bundle --file="$HERE/Brewfile" || echo "no brew; ensure uv present"

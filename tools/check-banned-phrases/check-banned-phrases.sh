@@ -14,7 +14,7 @@
 # Exit 0 clean, 1 when something matched, 3 when the list itself is missing —
 # a checker that cannot find its list must not report "clean".
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # An installed copy (astra add check-banned-phrases) carries its own list beside
 # it; run from the astra checkout, it reads the canonical one.

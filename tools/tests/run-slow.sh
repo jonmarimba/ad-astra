@@ -8,7 +8,7 @@
 # tens of seconds — not "optional". A ship gate runs BOTH tiers. Nonzero exit on ANY
 # failure, same as the fast tier.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 overall=0; ran=0
 for t in "$HERE"/test-*.sh; do
