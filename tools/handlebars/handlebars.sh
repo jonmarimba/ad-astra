@@ -198,6 +198,30 @@ end tell' ;;
       exit 64
     fi
     exec bash "$GHOST_REPO/tools/notes_html_append.sh" "$2" "$3" "${4:-}" ;;
+  read-file)
+    # Copy a TCC-protected file using Handlebars' FDA grant.
+    # Reads source and dest paths from ~/.handlebars_read_file (one path per line)
+    # to avoid CMDFILE word-splitting on paths with spaces (e.g. "All Mail.mbox").
+    # Read-only — just copies the file. Useful for .emlx and other Mail-store files
+    # that a non-FDA session cannot open. Dest must be outside the protected tree.
+    READ_SPEC="${HOME}/.handlebars_read_file"
+    if [ ! -f "$READ_SPEC" ]; then
+      echo "handlebars read-file: write source and dest paths (one per line) to $READ_SPEC" >&2
+      exit 64
+    fi
+    SRC="$(sed -n '1p' "$READ_SPEC")"
+    DST="$(sed -n '2p' "$READ_SPEC")"
+    rm -f "$READ_SPEC"
+    if [ -z "$SRC" ] || [ -z "$DST" ]; then
+      echo "handlebars read-file: spec file must have source on line 1, dest on line 2" >&2
+      exit 64
+    fi
+    if [ ! -f "$SRC" ]; then
+      echo "handlebars read-file: file not found: $SRC" >&2
+      exit 1
+    fi
+    cp "$SRC" "$DST"
+    echo "handlebars read-file: copied $(basename "$SRC") -> $DST" ;;
   notes-db-count)
     # Read NoteStore.sqlite directly (needs FDA) and report how many notes
     # actually exist in the database vs what AppleScript can see.
