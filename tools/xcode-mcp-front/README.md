@@ -23,7 +23,7 @@ Everything below is confirmed live, not assumed — see `tools/tests/test-xcode-
 - Xcode's approval dialogs do NOT stack — only one shows at a time. An unanswered one blocks the next (including this daemon's own) from appearing. The click logic reads each dialog's own PID and clicks Allow for its own live PID. It clicks Don't Allow for a dead PID (nobody's waiting on it), and it leaves any other live PID's dialog strictly alone.
 - Quitting Xcode doesn't crash the daemon — every call after that fails clean. It reconnects on its own once Xcode is back, with no manual restart needed.
 - The combined daemon's `tools/list` returns correctly prefixed names for both upstreams (`xcode__` × 21, `drews__` × 29). A prefixed call routes to the right one: `xcode__XcodeListWindows` returns a real workspace path from mcpbridge, and `drews__version` returns Drew's real version string, verified independently. The unprefixed single-upstream daemon's own `XcodeListWindows` call is verified the same way. Full suite: `tools/tests/test-xcode-mcp-front.sh` — 10/10. The `xcode__`/mcpbridge side needs the screen unlocked AND Xcode's workspace window frontmost — see the third gotcha below; `drews__` has no such dependency.
-- Both run as real launchd daemons (`com.jonathansaggau.xcode-mcp-front`, `com.jonathansaggau.xcode-combined-front` — label convention matching kickerd's on this machine). They set `RunAtLoad`, survive logins, and `KeepAlive` (bare `true`, see the gotcha below) recovers from an actual crash.
+- Both run as real launchd daemons (`<prefix>.xcode-mcp-front`, `<prefix>.xcode-combined-front`). The prefix is `com.astra` unless `ASTRA_LAUNCHD_PREFIX` in the per-machine astra config says otherwise; set it to the prefix your existing jobs already use, or a second daemon installs beside the first. They set `RunAtLoad`, survive logins, and `KeepAlive` (bare `true`, see the gotcha below) recovers from an actual crash.
 
 ## Usage
 
@@ -50,7 +50,7 @@ Same daemon.py, different env config. Set up like this:
 #   XCODE_MCP_FRONT_PORT=8767
 #   XCODE_MCP_FRONT_HOME=~/.xcode-combined-front
 ../wrap-in-app/wrap-in-app xcode-combined-front-run.sh --log ~/.xcode-combined-front/daemon.log --name XcodeCombinedFront --outdir .
-# then a launchd plist for com.jonathansaggau.xcode-combined-front pointing at
+# then a launchd plist for <prefix>.xcode-combined-front pointing at
 # XcodeCombinedFront.app/Contents/MacOS/Automator Application Stub, same shape
 # as xcode-mcp-front's own (see xcode-mcp-front's cmd_launchd_install for the
 # template) — KeepAlive MUST be bare true, see the gotcha below.

@@ -2,7 +2,7 @@
 # astra-scope: repo-config
 # mcp-xcode-combined — point a repo at the ONE Xcode aggregator, over HTTP.
 #
-# The aggregator (tools/xcode-mcp-front, launchd job com.jonathansaggau.xcode-combined-front,
+# The aggregator (tools/xcode-mcp-front, launchd job <prefix>.xcode-combined-front,
 # port 8767) fronts Apple's mcpbridge AND Drew's server behind a single endpoint with a
 # MEASURED sieve/map applied (tools/tool-templates/facts/), one canonical `build` tool, and
 # ONE approved process identity. A repo that direct-spawns `xcrun mcpbridge` instead mints a

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# TIER: slow — needs a live Xcode with a workspace and its approval dialogs; minutes, and GUI by definition
+# TIER: live — needs the two launchd daemons running (8765 and 8767), a live Xcode with a workspace open, and its approval dialogs; neither tier runs it
 # test-xcode-mcp-front.sh — asserts BY EFFECT against the real, running daemons
 # (both the single-upstream and combined instances) over their actual HTTP
 # endpoints — no mocks, no fakes. Requires both launchd jobs already running:
@@ -261,7 +261,8 @@ assert_contains "$SB/red.out" "doesn't match any known upstream prefix" "RED: an
 # --- both launchd plists: KeepAlive must be bare true, not {SuccessfulExit:false} ---
 # (found live 2026-08-14: {SuccessfulExit:false} reads a clean-exit-on-EADDRINUSE as
 # "finished on purpose" and never respawns — the daemon silently stayed dead)
-for label in com.jonathansaggau.xcode-mcp-front com.jonathansaggau.xcode-combined-front; do
+PREFIX="$(. "$HERE/../lib/astra-config.sh"; astra_launchd_prefix)"   # the machine's own label prefix
+for label in "$PREFIX.xcode-mcp-front" "$PREFIX.xcode-combined-front"; do
   plist="$HOME/Library/LaunchAgents/$label.plist"
   assert_file "$plist" "$label: plist exists"
   ka="$(/usr/libexec/PlistBuddy -c "Print :KeepAlive" "$plist" 2>/dev/null)"

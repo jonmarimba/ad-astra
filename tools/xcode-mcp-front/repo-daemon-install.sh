@@ -65,7 +65,8 @@ if [ ! -f "$DEST/_mcp_info.json" ]; then
   printf '{"mcpServers": {}}\n' > "$DEST/_mcp_info.json"
 fi
 
-LABEL="com.jonathansaggau.astra-mcp-front.$(printf '%s' "$REPO" | cksum | cut -d' ' -f1)"
+. "$HERE/../lib/astra-config.sh"
+LABEL="$(astra_launchd_prefix).astra-mcp-front.$(printf '%s' "$REPO" | cksum | cut -d' ' -f1)"
 # KeepAlive is BARE true on purpose: {SuccessfulExit:false} reads a clean
 # exit-on-EADDRINUSE as "finished on purpose" and the daemon silently stays dead
 # (found live 2026-08-14, asserted ever since in test-xcode-mcp-front.sh).

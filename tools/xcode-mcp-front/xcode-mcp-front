@@ -126,7 +126,8 @@ cmd_status() {
 # silently stayed dead after an EADDRINUSE). Plain `true` respawns regardless
 # of exit code, which is what a persistent service that should never
 # intentionally "finish" actually needs.
-LAUNCHD_LABEL="com.jonathansaggau.xcode-mcp-front"
+. "$HERE/../lib/astra-config.sh"
+LAUNCHD_LABEL="$(astra_launchd_prefix).xcode-mcp-front"
 LAUNCHD_OLD_LABEL="local.xcode-mcp-front"  # pre-2026-08-14 label, cleaned up below if present
 LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
 LAUNCHD_TARGET="gui/$(id -u)/$LAUNCHD_LABEL"
