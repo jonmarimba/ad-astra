@@ -38,14 +38,25 @@ BASE="http://127.0.0.1:$(cat "$SB/port")"
 mkdir -p "$SB/bin"
 cat > "$SB/bin/omniroute" <<'EOF'
 #!/usr/bin/env bash
-# the stub CLI: omniroute --output json api models get-api-models
+# the stub CLI: omniroute --output json api models get-api-models (management) and get-api-v1-models (serving)
 echo 'Loaded env from /nowhere'
-cat <<'JSON'
+case "$*" in
+  *get-api-v1-models*) cat <<'JSON'
+{"data":[
+ {"id":"ollamacloud/alpha-model","name":"Alpha Model","context_length":1000000},
+ {"id":"ollamacloud/beta-model","name":"Beta Model","context_length":1000000},
+ {"id":"other/ignored","name":"Not Ollama"}]}
+JSON
+  ;;
+  *get-api-models*) cat <<'JSON'
 {"models":[
  {"provider":"ollamacloud","fullModel":"ollamacloud/alpha-model","name":"Alpha Model","available":true},
  {"provider":"ollamacloud","fullModel":"ollamacloud/beta-model","name":"Beta Model","available":true},
  {"provider":"other","fullModel":"other/ignored","name":"Not Ollama","available":true}]}
 JSON
+  ;;
+  *) exit 2 ;;
+esac
 EOF
 chmod +x "$SB/bin/omniroute"
 
