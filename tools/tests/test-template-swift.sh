@@ -54,7 +54,7 @@ for d in writing convocation act-first; do assert_file "$IOS/.doctrine/$d.md" "d
 assert_file "$IOS/.astra/convocation/panel" "the convocation dispatcher is in the repo"
 assert_file "$IOS/.astra/dedup-scan/dedup-scan" "the Swift quality tools are in the repo"
 assert_contains "$SB/ios.out" "MACHINE axe" "axe is named as a once-per-machine install, not run"
-assert_contains "$SB/ios.out" "MACHINE periphery" "periphery likewise"
+assert_not_contains "$SB/ios.out" "periphery" "periphery is not part of the template (it is an opt-in tool)"
 assert_eq "swift-ios" "$(jq -r '.template_tools | keys | join(",")' "$IOS/.astra/manifest.json")" "the manifest records the template"
 # Every agent gets every server. Qwen and Codex read a project config INSTEAD of the user-level one, so a
 # server missing from either is missing in that agent for the whole repo.

@@ -8,10 +8,9 @@
    ]
   },
   "swift": {
-   "description": "Swift code quality: the ponytail decision ladder, periphery for dead code, dedup-scan for duplicate code. (Drew's prompt-and-skill material lives in agents-and-prompts and has no installer yet.)",
+   "description": "Swift code quality: the ponytail decision ladder and dedup-scan for duplicate code. (Drew's prompt-and-skill material lives in agents-and-prompts and has no installer yet.) Periphery, the dead-code scanner, is a separate opt-in tool, not part of this template: no repo has ever set it up, kicker measured it as an occasional audit with real false positives, and its tap formula breaks on current Homebrew.",
    "tools": [
     "ponytail",
-    "periphery",
     "dedup-scan"
    ]
   },

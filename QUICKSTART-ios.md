@@ -32,7 +32,7 @@ The rest is a cost ladder ruled by time-to-goal. Probe with `axe` (`describe-ui`
 - The `ios-simulator` MCP server offers simulator UI as tools: taps, typing, and the AX tree. It drives Facebook's idb underneath; the installer owns both halves, the idb-companion daemon via Homebrew and the fb-idb CLI via pipx.
 - `axe` is a CLI, not an MCP server; agents shell out to it for `describe-ui`, `tap`, `type`, and `swipe`. It covers the same niche as the ios-simulator tools — use whichever is wired in the session.
 - MacControlMCP.app drives the Mac itself: windows, clicks, keys, screen capture, and the accessibility tree. It is Developer-ID signed, so its TCC grants survive updates; the installer pulls and verifies the latest release.
-- The Swift quality tools are ponytail (the do-less decision ladder), periphery (dead code), and dedup-scan (duplicate code).
+- The Swift quality tools are ponytail (the do-less decision ladder) and dedup-scan (duplicate code). Periphery, a dead-code scanner, is an opt-in tool under `tools/periphery`, not part of the template. Nobody has set it up in a repo, and kicker measured real false positives and a six-minute multi-graph run. Use it as an occasional audit if you want it.
 - The writing stack and convocation arrive through `base` (QUICKSTART-writing.md).
 
 ## Update

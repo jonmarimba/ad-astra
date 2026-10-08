@@ -22,9 +22,11 @@ iout="$(python3 "$A/tools/lib/template.py" install swift-ios --into "$T" 2>&1)"
 # not a system to build" — plus the member installers that edit required).
 [ -f "$T/.claude/skills/ponytail/SKILL.md" ] || fail+=("swift-ios did not install the ponytail skill")
 [ -f "$T/.astra/dedup-scan/dedup-scan" ] || fail+=("swift-ios did not install dedup-scan")
-# periphery is a machine-level tool (a brew formula). A repo install names it
+# axe is a machine-level tool (a brew formula). A repo install names it
 # and says how to get it, and never runs brew itself (2026-10-04).
-echo "$iout" | grep -q "MACHINE periphery" || fail+=("swift-ios did not report periphery as a machine dependency")
+echo "$iout" | grep -q "MACHINE axe" || fail+=("swift-ios did not report axe as a machine dependency")
+# periphery is NOT part of the template: it is an opt-in tool (see templates.json)
+echo "$iout" | grep -q "periphery" && fail+=("swift-ios still mentions periphery")
 
 python3 "$A/tools/lib/template.py" install kicker-dev --into "$T" >/dev/null 2>&1
 out="$(python3 "$A/tools/lib/template.py" uninstall kicker-dev --into "$T" 2>&1)"
