@@ -44,20 +44,18 @@ fi
 # becomes a loud FAILURE instead of an infinite stall. PERFILE is the tier budget by
 # default, so a file that alone would blow the budget is the one that gets killed.
 PERFILE="${ASTRA_FAST_PERFILE_S:-$BUDGET}"
-TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
-if [ -z "$TIMEOUT_BIN" ]; then
-  echo "run-all: no timeout(1) on PATH (brew install coreutils) — a hung fast test would" >&2
-  echo "  stall the tier forever with no verdict, so refusing to run without the watchdog." >&2
-  exit 1
-fi
+# The watchdog is perl's alarm+exec, not timeout(1): macOS ships perl and does not ship
+# timeout, so requiring coreutils meant the suite could not run on a stock Mac at all. The
+# alarm ends the bash that runs the file with SIGALRM (exit 142).
+command -v perl >/dev/null || { echo "run-all: perl missing; a hung fast test would stall the tier with no verdict" >&2; exit 1; }
 # -n1 (filename as $1), NOT -I{}: the latter has a small command-assembly size limit
 # that the timeout-wrapped body overran ("command line cannot be assembled, too long").
-export TMPOUT TIMEOUT_BIN PERFILE
+export TMPOUT PERFILE
 printf '%s\n' "${fast[@]}" | xargs -P "$JOBS" -n1 bash -c '
   f="$1"; b="$(basename "$f")"
-  "$TIMEOUT_BIN" -k 2 "$PERFILE" bash "$f" >"$TMPOUT/$b.out" 2>&1
+  perl -e "alarm shift; exec @ARGV" "$PERFILE" bash "$f" >"$TMPOUT/$b.out" 2>&1
   rc=$?
-  [ "$rc" = 124 ] && echo "  FAIL: $b was KILLED after ${PERFILE}s — it hung (a fast test must not block)" >>"$TMPOUT/$b.out"
+  { [ "$rc" = 124 ] || [ "$rc" = 142 ]; } && echo "  FAIL: $b was KILLED after ${PERFILE}s — it hung (a fast test must not block)" >>"$TMPOUT/$b.out"
   echo "$rc" >"$TMPOUT/$b.rc"
 ' _ || true   # per-file verdicts come from the rc files, not xargs own exit
 

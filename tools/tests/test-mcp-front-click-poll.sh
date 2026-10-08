@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 DAEMON_DIR="$HERE/../xcode-mcp-front"
 
 XCODE_MCP_FRONT_OSASCRIPT_TIMEOUT_S=0.02 DAEMON_DIR="$DAEMON_DIR" \
-  uv run --with 'mcp>=2.0.0' --with uvicorn python3 - <<'PY'
+  uv run --python '>=3.10' --with 'mcp>=2.0.0' --with uvicorn python3 - <<'PY'
 import asyncio
 import os
 import sys

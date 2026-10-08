@@ -13,7 +13,10 @@ HS_BIN="$HERE/../harness-settings/harness-settings.sh"
 HS() { "$HS_BIN" --scope global "$@"; }
 HS="$HS_BIN"
 need jq "brew install jq"
-python3 -c "import tomlkit" 2>/dev/null || { fail "python tomlkit missing (tools/harness-settings/install.sh)"; finish; exit 1; }
+# Missing dependencies are the tool's to fetch, not a reason to fail a clean machine's first
+# run: ensure-deps installs tomlkit (and jq) when absent, and is a no-op when they are there.
+assert_rc 0 "harness-settings fetches its own dependencies" "$HS_BIN" ensure-deps
+python3 -c "import tomlkit" 2>/dev/null && pass "tomlkit is importable afterwards" || { fail "tomlkit still missing after ensure-deps"; finish; exit 1; }
 
 # tomlkit lives in pip's --user site under the REAL home; sandboxing $HOME below would hide it,
 # so pin the user-site onto PYTHONPATH first (first run failed exactly here)

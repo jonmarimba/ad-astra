@@ -129,9 +129,25 @@ check_drift() {
   fi
 }
 
+# The tool finds its own dependencies rather than sending a person to run install.sh first.
+# jq comes from Homebrew; tomlkit from pip, user site first and the interpreter's own site as
+# a fallback (a Homebrew Python refuses --user installs without --break-system-packages).
+ensure_deps() {
+  if ! command -v jq >/dev/null; then
+    command -v brew >/dev/null && { echo "harness-settings: installing jq" >&2; brew install jq >&2; }
+    command -v jq >/dev/null || { echo "need jq (brew install jq)"; exit 1; }
+  fi
+  if ! python3 -c "import tomlkit" 2>/dev/null; then
+    echo "harness-settings: installing python tomlkit" >&2
+    python3 -m pip install --user --quiet tomlkit >&2 \
+      || python3 -m pip install --quiet tomlkit >&2 \
+      || python3 -m pip install --quiet --break-system-packages tomlkit >&2
+    python3 -c "import tomlkit" 2>/dev/null || { echo "need python tomlkit (python3 -m pip install --user tomlkit failed)"; exit 1; }
+  fi
+}
+
 apply() {
-  command -v jq >/dev/null || { echo "need jq (run install.sh)"; exit 1; }
-  python3 -c "import tomlkit" 2>/dev/null || { echo "need python tomlkit (run install.sh)"; exit 1; }
+  ensure_deps
   warn_scope
   if [ "$SCOPE" = "project" ]; then
     # Project files usually don't exist yet — that's the point of scoping here. Global
@@ -250,6 +266,7 @@ status() {
 
 case "${1:-}" in
   apply) apply ;;
+  ensure-deps) ensure_deps ;;
   undo)  undo ;;
   status) status ;;
   *) echo "usage: $0 apply|undo|status [--scope global|project] [--path DIR]  (--scope default: project; --path default: cwd's git root, else cwd)"; exit 1 ;;

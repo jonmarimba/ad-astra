@@ -18,7 +18,9 @@ GNUARGS="stat -c|date -d|readlink -f|xargs -r|sed -r|grep -P|sed -i[[:space:]]+[
 BASH4='mapfile|readarray|declare -A|local -A'
 
 scan() {  # scan <file>: print findings, one per line
-  grep -nE "${CMDPOS}(${GNU})[[:space:]]|${CMDPOS}(${GNUARGS})|${CMDPOS}(${BASH4})[[:space:]]" "$1" 2>/dev/null \
+  # also `command -v timeout`: probing for a GNU tool, then refusing to run without it, is how
+  # run-all.sh required coreutils and could not run on a stock Mac
+  grep -nE "${CMDPOS}(${GNU})[[:space:]]|${CMDPOS}(${GNUARGS})|${CMDPOS}(${BASH4})[[:space:]]|command -v[[:space:]]+(${GNU}|gtimeout)([[:space:]]|\))" "$1" 2>/dev/null \
     | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v 'portability-ok:' \
     | sed "s#^#$1:#"
 }

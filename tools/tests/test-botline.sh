@@ -23,6 +23,10 @@ chmod +x "$SB/bin/imsg"
 export IMSG_BIN="$SB/bin/imsg"
 export IMSG_SEND_LOG="$SB/sends.log"; : > "$IMSG_SEND_LOG"
 export BOTLINE_HOME="$SB/botline-home"
+# The recipient comes from the machine's personal astra config. This test used to pass only
+# where that file happened to exist (it failed 24 assertions from an empty HOME), and would
+# have texted the real number had the shim not been in the way. Supply a reserved test number.
+export ASTRA_NOTIFY_PHONE="+15550000000" ASTRA_NOTIFY_CHAT_ID="1"
 
 # ---- register / send (send asserted at the transport boundary, not by echo text) ----
 assert_rc 0 "register creates a bot" "$BOTLINE" register --name testbot
