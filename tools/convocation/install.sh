@@ -5,7 +5,7 @@
 # copy through a different package manager.
 #   claude = npm -g @anthropic-ai/claude-code   codex = npm -g @openai/codex   qwen = brew qwen-code
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH}"
 
 # --into <repo> installs the per-repo piece ONLY: convocation's doctrine. It
 # never installs machine software, so `astra add base` in a repo cannot run

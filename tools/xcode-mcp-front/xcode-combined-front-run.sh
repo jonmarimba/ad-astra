@@ -17,7 +17,7 @@
 # MACHINE-OWNED, mogenerator-style: rewritten on every launch, never edited
 # by hand — a per-repo change belongs in the template layer, not here.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export XCODE_MCP_FRONT_PORT="${XCODE_MCP_FRONT_PORT:-8767}"
 export XCODE_MCP_FRONT_HOME="${XCODE_MCP_FRONT_HOME:-$HOME/.xcode-combined-front}"

@@ -8,7 +8,7 @@
 #   ollama-watch list             # show the current library set it's tracking
 # Config: $OLLAMA_WATCH_HOME/config  (WATCHLIST = space-separated name substrings that count as "frontier")
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HOME_DIR="${OLLAMA_WATCH_HOME:-$HOME/.ollama-watch}"
 mkdir -p "$HOME_DIR"
 CONF="$HOME_DIR/config"

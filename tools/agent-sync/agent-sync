@@ -33,7 +33,7 @@
 #      error. launchd runs a missed interval once on wake. A lock keeps two runs
 #      from overlapping; an interrupted transfer just resumes by delta next time.
 set -euo pipefail
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:$PATH}"
 HERE="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")" && pwd)"
 ASTRA_ROOT="$(cd "$HERE/../.." && pwd)"
 . "$ASTRA_ROOT/tools/lib/astra-config.sh"

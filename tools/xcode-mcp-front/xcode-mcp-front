@@ -23,7 +23,7 @@
 # For anything meant to be left running unattended, use launchd-install below
 # instead of plain start — manual mode here does NOT recover if daemon.py dies.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 STATE="${XCODE_MCP_FRONT_HOME:-$HOME/.xcode-mcp-front}"
 PIDFILE="$STATE/daemon.pid"

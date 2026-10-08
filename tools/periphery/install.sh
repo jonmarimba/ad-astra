@@ -2,7 +2,7 @@
 # astra-scope: machine
 # install.sh — periphery (Swift dead-code scanner). Which-first: never a second copy.
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # periphery is machine-wide (a brew formula), so --into <repo> is ACCEPTED and ignored
 # rather than rejected: template.py invokes every member as `install.sh --into <repo>`,

@@ -16,7 +16,7 @@
 #
 # Usage: repo-daemon-install.sh --into <repo>
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 REPO=""

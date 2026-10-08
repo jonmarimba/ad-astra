@@ -2,7 +2,7 @@
 # astra-scope: machine
 # install.sh — geo-evidence deps: osxphotos (Photos-library query/export) + exiftool. Which-first.
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 if p="$(command -v exiftool 2>/dev/null)"; then echo "already installed: exiftool -> $p"; else brew bundle --file="$HERE/Brewfile"; fi
 if p="$(command -v osxphotos 2>/dev/null)"; then

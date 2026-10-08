@@ -52,7 +52,7 @@
 # body below with a real task. Treat every edit here as a genuine capability change: log it,
 # and remember the .app can now do WHATEVER this script says, with EVERY grant it holds.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 
 echo "handlebars: tower run @ $(date '+%Y-%m-%d %H:%M:%S')"
 

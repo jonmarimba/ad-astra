@@ -14,7 +14,7 @@
 # Shared-dep removal runs through $BREW_BIN / $UV_BIN seams so a test can point them at a stub and
 # assert what WOULD be removed without touching the real toolchain — same seam pattern as install.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH}"
 BREW_BIN="${BREW_BIN:-brew}"
 UV_BIN="${UV_BIN:-uv}"
 UNINSTALL_DEPS=0

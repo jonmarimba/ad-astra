@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# fakeworld/brew — a stand-in Homebrew for tests. It keeps state in $FAKE_WORLD/brew (a prefix, a cellar of
+# version files, and a log of every call), so an installer can really install, upgrade and uninstall
+# against a machine that is empty and thrown away. Only the verbs astra's installers use are
+# implemented; any other verb fails LOUDLY (rc 99), so a new use of brew cannot slip past the tests.
+set -uo pipefail
+: "${FAKE_WORLD:?fakeworld/brew needs FAKE_WORLD}"
+P="$FAKE_WORLD/brew/prefix"; S="$FAKE_WORLD/brew/state"; mkdir -p "$P/bin" "$S"
+echo "brew $*" >> "$FAKE_WORLD/brew/log"
+binname() { case "$1" in idb-companion) echo idb_companion ;; whisper-cpp) echo whisper-cli ;; qwen-code) echo qwen ;; poppler) echo pdftotext ;; *) echo "$1" ;; esac; }
+install_one() {  # install_one <name-or-tap/name>
+  local f="${1##*/}"
+  if [ -f "$S/$f" ]; then echo "Warning: $f is already installed"; return 0; fi
+  echo 1 > "$S/$f"
+  local b; b="$(binname "$f")"
+  printf '#!/bin/sh\necho "%s fake"\n' "$f" > "$P/bin/$b"; chmod +x "$P/bin/$b"
+  if [ "$f" = node ]; then
+    # real Node ships npm and npx beside it; `npm view <pkg> version` is how installers check a package exists
+    printf '#!/bin/sh\necho "npm $*" >> "%s/npm.log"\n[ "$1" = view ] && echo 1.0.0\nexit 0\n' "$FAKE_WORLD" > "$P/bin/npm"
+    printf '#!/bin/sh\necho "npx $*" >> "%s/npm.log"\nexit 0\n' "$FAKE_WORLD" > "$P/bin/npx"
+    chmod +x "$P/bin/npm" "$P/bin/npx"
+  fi
+  echo "==> Installing $f (fake)"
+}
+formulae_of() { sed -n 's/^[[:space:]]*brew[[:space:]]*"\([^"]*\)".*/\1/p' "$1"; }
+case "${1:-}" in
+  --prefix) echo "$P" ;;
+  --version) echo "Homebrew 0.0-fake" ;;
+  install) shift; for a in "$@"; do case "$a" in -*) ;; *) install_one "$a" || exit $? ;; esac; done ;;
+  upgrade) shift
+    for a in "$@"; do case "$a" in -*) continue ;; esac
+      f="${a##*/}"; [ -f "$S/$f" ] || { echo "Error: $f not installed" >&2; exit 1; }
+      echo $(( $(cat "$S/$f") + 1 )) > "$S/$f"; echo "==> Upgrading $f (fake)"
+    done ;;
+  uninstall) shift
+    for a in "$@"; do case "$a" in -*) continue ;; esac
+      f="${a##*/}"; [ -f "$S/$f" ] || { echo "Error: No such keg: $f" >&2; exit 1; }
+      rm -f "$S/$f" "$P/bin/$(binname "$f")"; echo "Uninstalling $f (fake)"
+    done ;;
+  list) for f in $(ls "$S"); do echo "$f"; done ;;
+  tap) : ;;
+  bundle)
+    shift; sub=""; file=""
+    while [ $# -gt 0 ]; do case "$1" in list) sub=list; shift ;; --file=*) file="${1#--file=}"; shift ;; --file) file="$2"; shift 2 ;; *) shift ;; esac; done
+    [ -f "$file" ] || { echo "Error: Brewfile not found: $file" >&2; exit 1; }
+    if [ "$sub" = list ]; then formulae_of "$file"
+    else for f in $(formulae_of "$file"); do install_one "$f" || exit $?; done; fi ;;
+  *) echo "fakeworld/brew: unsupported verb: $*" >&2; exit 99 ;;
+esac

@@ -2,7 +2,7 @@
 # astra-scope: machine
 # no-deps: it only seeds a config file; the lms CLI lives on the model host
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 "$HERE/ambrosio" status >/dev/null 2>&1 || true   # materialize config
 echo "ambrosio ready. Config: ~/.ambrosio/config (HOST/watchlist/size cap)."

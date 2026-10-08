@@ -5,7 +5,7 @@
 # chokepoint vault. Portable: repo path is the argument; vault dir via GRAPHIFY_VAULT.
 #   graphify-repo <repo-path> [--label-backend ollama --label-model <m>]  # labeling optional+explicit
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH}"
 REPO="${1:?usage: graphify-repo <repo-path> [--label-backend B --label-model M]}"; shift || true
 VAULT="${GRAPHIFY_VAULT:-$HOME/.notesq/vault/graphify}"
 command -v graphify >/dev/null || { echo "graphify not installed (see safishamsi/graphify)"; exit 1; }

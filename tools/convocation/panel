@@ -6,7 +6,7 @@
 #
 #   panel TASK.md --out outdir [--agents claude,codex,qwen] [--tag round1]
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH}"
 TASK="${1:?usage: panel TASK.md --out DIR [--agents claude,codex,qwen] [--tag round1]}"; shift
 OUT="convocation-out"; AGENTS="claude,codex,qwen"; TAG="round1"
 while [ $# -gt 0 ]; do case "$1" in

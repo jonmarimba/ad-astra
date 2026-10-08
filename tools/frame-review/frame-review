@@ -9,7 +9,7 @@
 # (--fps 0.5) — dense enough to catch water-flow changes, sparse enough to scan by eye.
 # Portable: no hardcoded paths/identity; ffmpeg is the only dependency (Brewfile).
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 FFMPEG="${FFMPEG_BIN:-ffmpeg}"
 
 FPS="0.5"; OUTDIR="frame-review-out"; VIDEOS=()

@@ -31,7 +31,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE="$HERE/../mcp-bundle"
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/opt/homebrew/bin:/usr/local/bin:$PATH}"
 
 APP="${MAC_CONTROL_APP:-/Applications/MacControlMCP.app}"   # the same variable fetch-app.sh and the bundle read
 "$HERE/fetch-app.sh"

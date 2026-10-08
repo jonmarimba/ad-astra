@@ -17,7 +17,7 @@
 # The RED control comes first: a model id that cannot resolve must NOT come back carrying the marker,
 # or the harness is matching something other than a real completion and every OK below is worthless.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 
 OMNIROUTE="${OMNIROUTE_BASE:-http://localhost:20128}"
 MODEL="${OMNIROUTE_HEALTH_MODEL:-ollamacloud/glm-5.2}"

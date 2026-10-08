@@ -16,7 +16,7 @@
 #
 # The app is Developer ID-signed (team A3W973JZ49), so its TCC grants survive same-team updates.
 set -euo pipefail
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/opt/homebrew/bin:/usr/local/bin:$PATH}"
 
 APP="${MAC_CONTROL_APP:-/Applications/MacControlMCP.app}"
 REPO_GH="${MAC_CONTROL_REPO:-AdelElo13/mac-control-mcp}"

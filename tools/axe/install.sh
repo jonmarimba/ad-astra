@@ -17,7 +17,7 @@
 #
 # Usage: ./install.sh [--into <repo>]
 set -uo pipefail
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/opt/homebrew/bin:/usr/local/bin:$PATH}"
 
 TARGET=""
 while [ $# -gt 0 ]; do

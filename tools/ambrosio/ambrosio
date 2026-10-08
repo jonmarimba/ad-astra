@@ -37,7 +37,7 @@
 # removes it — this is what makes it "durable across down periods": it isn't a queue that drains,
 # it's a standing list that keeps getting retried every 4h run until it lands or is removed.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 # Where this script and its helpers live, resolved from the script itself so a symlink on PATH,
 # a cron invocation and an interactive run all find version_gate.py.
 AMBROSIO_DIR="$(cd "$(dirname "$(readlink "$0" || echo "$0")")" && pwd)"

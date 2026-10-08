@@ -15,7 +15,7 @@
 # resolved port is written to ./port and into the repo's .mcp.json, which is how
 # clients find the daemon.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"                 # <repo>/.astra/mcp-front
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 CONFIG="$HERE/_mcp_info.json"

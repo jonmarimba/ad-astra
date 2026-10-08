@@ -13,7 +13,7 @@
 #   install.sh --interval N    schedule every N minutes instead
 #   install.sh --no-schedule   dependencies only (and removes a schedule if present)
 set -euo pipefail
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LABEL=astra.agent-sync
 APP="$HERE/AgentSync.app"

@@ -6,7 +6,7 @@
 # do those things (xcode-mcp-front reloads launchd jobs, agent-sync rewrites its schedule, handlebars
 # builds an app whose permission grants a rebuild would destroy), which is why `astra upgrade` runs
 # deps.sh and never install.sh.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH}"
 
 # brewfile_upgrade <Brewfile>: install what the Brewfile lists, then upgrade those formulae.
 brewfile_upgrade() {

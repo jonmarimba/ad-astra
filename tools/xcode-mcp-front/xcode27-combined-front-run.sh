@@ -15,7 +15,7 @@
 # Until the beta bridge serves, the daemon's 1.4 behaviour serves Drew's tools and marks
 # xcode27 unavailable; it picks the Xcode half up the moment the beta is ready.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 BETA_DEVDIR="/Applications/Xcode-beta.app/Contents/Developer"

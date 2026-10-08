@@ -31,7 +31,7 @@
 #                               [--split-prefix <dir-in-src>]
 #   uninstall-from-repo.sh <repo>   removes the block + whatever the method installed
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 KIT="$(cd "$(dirname "$0")/../../agents-and-prompts" && pwd)"
 
 REPO=""; SET="swift"; METHOD="copy"; SRC=""; BRANCH="main"; SUBPATH="agents-and-prompts/components"; SPLIT_PREFIX=""

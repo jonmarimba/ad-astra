@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# fakeworld/pipx — a stand-in pipx: tools install into $HOME/.local/bin, state under $FAKE_WORLD/pipx.
+set -uo pipefail
+: "${FAKE_WORLD:?fakeworld/pipx needs FAKE_WORLD}"
+S="$FAKE_WORLD/pipx"; mkdir -p "$S" "$HOME/.local/bin"
+echo "pipx $*" >> "$FAKE_WORLD/pipx.log"
+binname() { case "$1" in fb-idb) echo idb ;; *) echo "$1" ;; esac; }
+case "${1:-}" in
+  install) shift
+    for a in "$@"; do case "$a" in -*) continue ;; esac
+      [ -f "$S/$a" ] && { echo "'$a' already seems to be installed"; continue; }
+      echo 1 > "$S/$a"
+      printf '#!/bin/sh\necho "%s fake"\n' "$a" > "$HOME/.local/bin/$(binname "$a")"
+      chmod +x "$HOME/.local/bin/$(binname "$a")"
+    done ;;
+  upgrade) shift
+    for a in "$@"; do case "$a" in -*) continue ;; esac
+      [ -f "$S/$a" ] || { echo "Package is not installed: $a" >&2; exit 1; }
+      echo $(( $(cat "$S/$a") + 1 )) > "$S/$a"
+    done ;;
+  uninstall) shift
+    for a in "$@"; do case "$a" in -*) continue ;; esac
+      rm -f "$S/$a" "$HOME/.local/bin/$(binname "$a")"
+    done ;;
+  *) echo "fakeworld/pipx: unsupported verb: $*" >&2; exit 99 ;;
+esac

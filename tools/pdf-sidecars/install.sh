@@ -17,7 +17,7 @@
 #   ./install.sh --into <repo>    deps + wire that repo
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH}"
 
 # The kit's own files, in the order a reader should meet them.
 # md2pdf is the headless PDF path and it was MISSING from this list until
