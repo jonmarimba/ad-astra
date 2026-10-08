@@ -25,7 +25,8 @@ scan() {  # scan <file>: print findings, one per line
 
 shell_scripts() {
   git ls-files -z | while IFS= read -r -d '' f; do
-    case "$f" in vendor/*|tools/tool-templates/colloquium/*|notes/*) continue ;; esac
+    # this file's own pattern list names the commands it hunts for
+    case "$f" in vendor/*|tools/tool-templates/colloquium/*|notes/*|tools/tests/test-no-gnu-only-commands.sh) continue ;; esac
     [ -f "$f" ] || continue
     case "$f" in *.sh) echo "$f"; continue ;; esac
     head -c 64 "$f" 2>/dev/null | head -1 | grep -qE '^#!.*(bash|/sh)( |$)' && echo "$f"
