@@ -41,6 +41,15 @@ cat > "$SB/lib/test-astra-update.sh" <<EOF
 #!/usr/bin/env bash
 touch "$SB/lib-update-ran"
 EOF
+cat > "$SB/lib/test-install-contract.sh" <<EOF
+#!/usr/bin/env bash
+touch "$SB/lib-contract-ran"
+EOF
+# Tests that sit beside their tool (tools/<tool>/test-*.sh) used to be in NEITHER tier.
+mkdir -p "$SB/sometool"
+printf '#!/usr/bin/env bash\ntouch "%s/tool-fast-ran"\necho "== t: 1 ok, 0 failed"\n' "$SB" > "$SB/sometool/test-tool-fast.sh"
+printf '#!/usr/bin/env bash\n# TIER: slow\ntouch "%s/tool-slow-ran"\n' "$SB" > "$SB/sometool/test-tool-slow.sh"
+printf '#!/usr/bin/env bash\n# TIER: live\ntouch "%s/tool-live-ran"\n' "$SB" > "$SB/sometool/test-tool-live.sh"
 
 # --- fast tier: runs the fast stub, does NOT run the slow-marked one ---
 out="$SB/fast.out"
@@ -48,7 +57,10 @@ bash "$FAKE/run-all.sh" >"$out" 2>&1
 assert_eq "0" "$?" "fast tier exits 0 when its files pass"
 assert_file "$SB/fast-ran" "fast tier executed the unmarked file"
 assert_no_file "$SB/slow-ran" "fast tier did NOT execute the '# TIER: slow' file"
-assert_contains "$out" "skipped 1 slow-tier file" "fast tier says out loud what it skipped"
+assert_file "$SB/tool-fast-ran" "fast tier executed a test that sits beside its tool"
+assert_no_file "$SB/tool-slow-ran" "fast tier did NOT execute that tool's slow-marked test"
+assert_no_file "$SB/tool-live-ran" "fast tier did NOT execute a '# TIER: live' test"
+assert_contains "$out" "skipped 2 slow-tier file" "fast tier says out loud what it skipped"
 
 # --- a file that merely MENTIONS the marker (heredoc, assertion) is NOT slow ---
 # This file itself was misclassified on 2026-08-31: its stub heredocs contain the marker
@@ -97,13 +109,13 @@ assert_contains "$SB/hung.out" "was KILLED after" "the hung file is named as kil
 rm "$FAKE/test-hung-stub.sh"
 
 # --- fast tier refuses to report green having run nothing ---
-mkdir -p "$SB/empty-tests"; cp "$HERE/run-all.sh" "$SB/empty-tests/"
-cat > "$SB/empty-tests/test-only-slow.sh" <<'EOF'
+mkdir -p "$SB/iso/empty-tests"; cp "$HERE/run-all.sh" "$SB/iso/empty-tests/"
+cat > "$SB/iso/empty-tests/test-only-slow.sh" <<'EOF'
 #!/usr/bin/env bash
 # TIER: slow — everything is slow here
 EOF
 red "fast tier with zero runnable files must fail" 1 "ran ZERO test files" \
-  bash "$SB/empty-tests/run-all.sh"
+  bash "$SB/iso/empty-tests/run-all.sh"
 
 # --- slow tier: runs ONLY the marked file, plus the lib-side template tests ---
 rm -f "$SB/fast-ran"
@@ -114,9 +126,15 @@ assert_file "$SB/slow-ran" "slow tier executed the '# TIER: slow' file"
 assert_no_file "$SB/fast-ran" "slow tier did NOT execute the unmarked file"
 assert_file "$SB/lib-templates-ran" "slow tier picked up lib/test-templates.sh (outside the glob)"
 assert_file "$SB/lib-update-ran" "slow tier picked up lib/test-astra-update.sh (outside the glob)"
+assert_file "$SB/lib-contract-ran" "slow tier picked up lib/test-install-contract.sh (outside the glob)"
+assert_file "$SB/tool-slow-ran" "slow tier executed a slow-marked test that sits beside its tool"
+assert_no_file "$SB/tool-live-ran" "slow tier did NOT execute a '# TIER: live' test either"
 
-# --- the file whose fast-tier execution would take over the GUI stays marked ---
-assert_contains "$HERE/test-xcode-mcp-front.sh" "# TIER: slow" \
-  "the live-Xcode test carries the slow marker (fast tier must never launch Xcode)"
+# --- the tests that need this machine's services stay out of both tiers ---
+for f in test-xcode-mcp-front.sh test-model-list-parity.sh; do
+  assert_contains "$HERE/$f" "# TIER: live" \
+    "$f carries the live marker (neither tier may launch Xcode or read live config)"
+done
+assert_contains "$HERE/../convocation/test-qwen-routing.sh" "# TIER: live" "test-qwen-routing.sh carries the live marker"
 
 finish

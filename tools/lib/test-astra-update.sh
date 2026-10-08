@@ -56,7 +56,10 @@ if [ -f "$R/.astra/check-prose/check-prose.js" ] && [ -f "$R/.astra/manifest.jso
 else
   bad "install did not produce .astra/<tool> plus a manifest"
 fi
-if grep -q "js-db-ad-astra" "$R/.astra/manifest.json"; then
+# The checkout's directory name is whatever the person cloned it as, so assert that a source
+# is recorded and non-empty, not that it spells this repo's usual name (that assertion failed
+# from a clone named anything else).
+if [ -n "$(jq -r '[.tools[].source] | map(select(. != null and . != "")) | first // empty' "$R/.astra/manifest.json")" ]; then
   ok "manifest records the source it was installed from"
 else
   bad "manifest does not record a source — the repo cannot pull updates"

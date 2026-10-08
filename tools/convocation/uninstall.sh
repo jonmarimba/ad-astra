@@ -26,5 +26,6 @@ if [ -n "$INTO" ]; then
   "$HERE/../lib/uninstall-doctrine.sh" "$INTO" --slug convocation
   . "$HERE/../lib/astra-install.sh"; astra_target --into "$INTO"
   astra_remove convocation-skill
+  astra_remove convocation        # the panel dispatcher install.sh places in .astra/convocation/
 fi
 echo "done."

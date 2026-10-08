@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: slow
 # test-install-contract.sh — every repo-level astra tool installs, updates and
 # uninstalls the SAME way (Jonathan, 2026-10-04: "Why not be consistent?").
 #

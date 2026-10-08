@@ -87,6 +87,14 @@ bash -n "$LEGAL/.git/hooks/pre-commit" && pass "the spliced hook parses" || fail
 leaks="$(cd "$LEGAL" && grep -rIn 'svnCheckouts\|/Users/' .astra .doctrine .claude .git/hooks --exclude='*.bak*' --exclude='*.sample' 2>/dev/null)"
 assert_empty "$leaks" "no foreign path anywhere legal-pdf installed"
 
+echo "== launchd labels name no person: the prefix is configuration with a neutral default"
+printf 'ASTRA_LAUNCHD_PREFIX="org.example.andrew"\n' > "$SB/prefix-config"
+assert_eq "com.astra" "$(run_home bash -c ". '$TOOLBOX/tools/lib/astra-config.sh'; astra_launchd_prefix")" "no config: the neutral default"
+assert_eq "org.example.andrew" "$(run_home env ASTRA_CONFIG_FILE="$SB/prefix-config" bash -c ". '$TOOLBOX/tools/lib/astra-config.sh'; astra_launchd_prefix")" "the machine's config sets it"
+assert_eq "org.example.env" "$(run_home env ASTRA_LAUNCHD_PREFIX=org.example.env bash -c ". '$TOOLBOX/tools/lib/astra-config.sh'; astra_launchd_prefix")" "the environment overrides the file"
+hits="$(cd "$TOOLBOX" && git ls-files tools 2>/dev/null | grep -v 'tool-templates/\|findings/\|\.md$' | while IFS= read -r f; do grep -nH 'com\.jonathansaggau' "$f" 2>/dev/null; done | grep -v ':[0-9]*:[[:space:]]*#')"
+assert_empty "$hits" "no code names the owner's reverse-DNS label"
+
 echo "== the workspace is the toolbox's parent, not ~/svnCheckouts"
 got="$(run_home python3 -c "
 import importlib.util, sys

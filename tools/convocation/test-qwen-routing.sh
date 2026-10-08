@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# TIER: live  (needs OmniRoute on localhost:20128 and a qwen key in ~/.qwen/settings.json; neither tier runs it)
 # test-qwen-routing.sh — prove the qwen CLI reaches real models through OmniRoute.
 #
 # Every assertion here is by effect: the model must say the marker word back. An earlier

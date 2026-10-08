@@ -18,7 +18,16 @@ for t in "$HERE"/test-*.sh; do
   if bash "$t"; then :; else overall=1; fi
   ran=$((ran+1))
 done
-for t in "$HERE/../lib/test-templates.sh" "$HERE/../lib/test-astra-update.sh"; do
+# Slow-marked tests that sit beside their tool (tools/<tool>/test-*.sh).
+for t in "$HERE"/../*/test-*.sh; do
+  [ -f "$t" ] || continue
+  case "$(basename "$(dirname "$t")")" in lib|tests) continue ;; esac
+  head -3 "$t" | grep -q '^# TIER: slow' || continue
+  echo "── $(basename "$(dirname "$t")")/$(basename "$t")"
+  if bash "$t"; then :; else overall=1; fi
+  ran=$((ran+1))
+done
+for t in "$HERE/../lib/test-templates.sh" "$HERE/../lib/test-astra-update.sh" "$HERE/../lib/test-install-contract.sh"; do
   [ -f "$t" ] || { echo "MISSING: $t — the template tests moved without this runner following"; overall=1; continue; }
   echo "── lib/$(basename "$t")"
   if bash "$t"; then :; else overall=1; fi

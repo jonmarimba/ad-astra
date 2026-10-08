@@ -25,6 +25,10 @@ curl -s --max-time 15 "https://huggingface.co/api/models/mlx-community/Qwen3-30B
 HOME_REAL="$HOME"
 export AMBROSIO_HOME="$SB/ambrosio-home"; mkdir -p "$AMBROSIO_HOME"
 export HOME="$SB/home"; mkdir -p "$HOME/.config/opencode" "$HOME/.qwen"
+# Sandboxing HOME is not enough: opencode (and anything XDG-aware) prefers these over $HOME/.config,
+# so a machine with them set read its own real config instead of the fixture and the test failed
+# (found 2026-10-08 running the suite from an APFS clone with an empty HOME and XDG vars set).
+unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME
 CLEAN_CWD="$SB/cwd"; mkdir -p "$CLEAN_CWD"   # no .mcp.json here — a real one in cwd throws an
 # "Untrusted MCP server" approval dialog that swallows every keystroke sent after it, including
 # /model (found live, 2026-08-14, launching qwen from this repo's own root by accident)

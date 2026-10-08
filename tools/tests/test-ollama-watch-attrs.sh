@@ -13,8 +13,10 @@
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 . ./lib.sh
-TOOL="$(cd ../../js-db-ad-astra/tools/ollama-watch 2>/dev/null && pwd)/ollama-watch"
-[ -x "$TOOL" ] || TOOL="$ASTRA_ROOT/tools/ollama-watch/ollama-watch"
+# This used to prefer ../../js-db-ad-astra/..., a sibling named for this repo's usual directory
+# name, and fell back to the checkout only when that was absent: a different, stale astra could
+# be tested instead of this one. The tool under test is always the one beside this test.
+TOOL="$ASTRA_ROOT/tools/ollama-watch/ollama-watch"
 [ -x "$TOOL" ] || { fail "ollama-watch not executable at $TOOL"; finish; exit 1; }
 PARSER="$(dirname "$TOOL")/parse_model_attrs.py"
 need python3 "install python3"

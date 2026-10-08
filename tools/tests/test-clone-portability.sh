@@ -34,6 +34,16 @@ if [ "$rc" -ne 0 ]; then
   grep -E '^== .*failed|FAIL' "$SB/clone-run.out" | grep -v ' 0 failed' | cut -c1-220 | sed 's/^/        /'
   echo "        --- tail of the clone's run:"; tail -n 12 "$SB/clone-run.out" | cut -c1-220 | sed 's/^/        /'
 fi
+# The slow tier too (it carries the lib/ and per-tool tests). '# TIER: live' tests are the only
+# ones that may need this machine's services, and neither runner touches them.
+env -u ASTRA_SOURCE -u ASTRA_WORKSPACE -u ASTRA_CONFIG_FILE -u CONVOQ_BRIDGE -u WORKLOG_BIN \
+    HOME="$HOME2" XDG_CONFIG_HOME="$HOME2/.config" XDG_CACHE_HOME="$HOME2/.cache" \
+    bash "$CLONE/tools/tests/run-slow.sh" >"$SB/clone-slow.out" 2>&1
+rc=$?
+assert_eq 0 "$rc" "run-slow.sh passes from the clone with an empty HOME"
+if [ "$rc" -ne 0 ]; then
+  grep -E '^== .*failed|FAIL' "$SB/clone-slow.out" | grep -v ' 0 failed' | cut -c1-220 | sed 's/^/        /'
+fi
 after="$(cd "$ASTRA_ROOT" && git status --porcelain | shasum)"
 assert_eq "$before" "$after" "the run left the original checkout untouched"
 

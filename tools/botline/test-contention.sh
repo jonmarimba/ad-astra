@@ -1,4 +1,5 @@
 #!/bin/bash
+# TIER: slow
 # TRUE two-process contention for botline.
 #
 # GhOST-OpenClaw, reviewing the suite 2026-08-18: "current tests manually rewrite
