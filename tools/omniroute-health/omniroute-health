@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# omniroute-health — is THIS machine's OmniRoute serving what the convocation doctrine relies on?
+#
+# These are health probes of one deployment, not tests of this repo, so they live here and not in
+# tools/tests: they pass or fail with the state of a live service and a real account. (They were
+# once test-qwen-routing.sh, which therefore could only pass on one machine. That test now runs the
+# real qwen CLI against a stub endpoint; the questions about the live service moved here.)
+#
+#   omniroute-health            # exit 0 when every probe passes, 1 on any failure, 2 when it cannot run
+#
+# Configuration, all optional:
+#   OMNIROUTE_BASE           endpoint root                  (default http://localhost:20128)
+#   OMNIROUTE_API_KEY        bearer key                     (default: .security.auth.apiKey in qwen's settings)
+#   OMNIROUTE_HEALTH_MODEL   a model the doctrine names     (default ollamacloud/glm-5.2)
+#   OMNIROUTE_HEALTH_UNLISTED  a model that serves but is not listed in /v1/models (default ollamacloud/deepseek-v4-pro)
+#
+# The RED control comes first: a model id that cannot resolve must NOT come back carrying the marker,
+# or the harness is matching something other than a real completion and every OK below is worthless.
+set -uo pipefail
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+OMNIROUTE="${OMNIROUTE_BASE:-http://localhost:20128}"
+MODEL="${OMNIROUTE_HEALTH_MODEL:-ollamacloud/glm-5.2}"
+UNLISTED_MODEL="${OMNIROUTE_HEALTH_UNLISTED:-ollamacloud/deepseek-v4-pro}"
+MARKER="ROUTE_OK_7431"
+EXPECT="${ROUTE_EXPECT:-$MARKER}"
+# 300, not 16. GLM and DeepSeek emit `reasoning` tokens before any `content`, so a small cap returns
+# an empty choice and OmniRoute reports "no usable choices", which reads exactly like a dead model.
+# Verified 2026-08-19: seven ollamacloud models looked dead at 16 and all served at 300.
+MAXTOK=300
+PASS=0; FAIL=0
+ok()   { PASS=$((PASS+1)); echo "  OK   $1"; }
+fail() { FAIL=$((FAIL+1)); echo "  FAIL $1"; }
+die()  { echo "omniroute-health: $1" >&2; exit 2; }
+
+command -v curl >/dev/null || die "curl not installed"
+command -v jq   >/dev/null || die "jq not installed (brew install jq)"
+KEY="${OMNIROUTE_API_KEY:-}"
+[ -n "$KEY" ] || KEY="$(jq -r '.security.auth.apiKey // empty' "$HOME/.qwen/settings.json" 2>/dev/null)"
+[ -n "$KEY" ] || die "no OmniRoute key: set OMNIROUTE_API_KEY or .security.auth.apiKey in ~/.qwen/settings.json"
+curl -sf -m 10 "$OMNIROUTE/v1/models" -H "Authorization: Bearer $KEY" >/dev/null \
+  || die "OmniRoute is not answering at $OMNIROUTE (start it with 'omniroute serve')"
+
+route_says() {  # one request through OmniRoute; echoes the raw body
+  curl -s -m 150 "$OMNIROUTE/v1/chat/completions" \
+    -H "Content-Type: application/json" -H "Authorization: Bearer $KEY" \
+    -d "{\"model\":\"$1\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: $MARKER\"}],\"max_tokens\":${2:-$MAXTOK},\"stream\":false}"
+}
+
+echo "== RED control =="
+RED="$(route_says "ollamacloud/definitely-not-a-real-model-$$" 2>&1)"
+echo "$RED" | grep -q "$EXPECT" && die "RED control PASSED: a nonexistent model returned the marker. The harness is broken; ignore this run."
+ok "RED control fails as it must (nonexistent model rejected)"
+
+echo; echo "== OmniRoute serves the doctrine's model =="
+R="$(route_says "$MODEL")"
+if echo "$R" | grep -q "$EXPECT"; then ok "OmniRoute serves $MODEL"
+else fail "OmniRoute did not return the marker for $MODEL :: $(echo "$R" | jq -r '.error.message // .' 2>/dev/null | head -c 160)"; fi
+
+echo; echo "== hf/ prefix is genuinely dead =="
+# The doctrine tells convocation runners never to use hf/ ids. This goes RED the day a HuggingFace
+# credential is added, which is exactly when the doctrine needs updating.
+HF="$(route_says "hf/zai-org/GLM-5.2")"
+if echo "$HF" | grep -qi 'No active credentials for provider: huggingface'; then ok "hf/ ids still fail for want of a HuggingFace credential (the doctrine's warning holds)"
+elif echo "$HF" | grep -q "$EXPECT"; then fail "hf/ NOW WORKS: a HuggingFace credential was added. Update the convocation doctrine, which says hf/ will fail."
+else fail "hf/ failed in an unexpected way :: $(echo "$HF" | jq -r '.error.message // .' 2>/dev/null | head -c 160)"; fi
+
+echo; echo "== the small-max_tokens trap =="
+# Same model, tiny cap: it must come back WITHOUT the marker (reasoning tokens eat the budget). Anyone
+# probing model health with a small cap will mislabel healthy models as dead.
+TINY="$(route_says "$MODEL" 16)"
+if echo "$TINY" | grep -q "$EXPECT"; then fail "max_tokens=16 returned the marker: the reasoning-token explanation for MAXTOK=300 no longer holds"
+else ok "max_tokens=16 yields no usable answer, as documented (do not probe health with a small cap)"; fi
+
+echo; echo "== catalog sanity =="
+# Serving and being listed are DIFFERENT: some models answer real completions while absent from
+# /v1/models, so "not in the catalog" is not evidence that a route is dead.
+CATALOG="$(curl -s -m 10 "$OMNIROUTE/v1/models" -H "Authorization: Bearer $KEY" | jq -r '.data[].id')"
+echo "$CATALOG" | grep -qx "$MODEL" && ok "$MODEL is in the catalog (the id the doctrine names)" \
+  || fail "$MODEL is missing from the catalog: the doctrine names an id OmniRoute no longer lists"
+UNLISTED="$(route_says "$UNLISTED_MODEL")"
+if echo "$UNLISTED" | grep -q "$EXPECT"; then ok "unlisted id $UNLISTED_MODEL still serves (catalog absence proves nothing)"
+else fail "$UNLISTED_MODEL no longer serves :: $(echo "$UNLISTED" | jq -r '.error.message // .' 2>/dev/null | head -c 160)"; fi
+
+echo; echo "$PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ] || exit 1

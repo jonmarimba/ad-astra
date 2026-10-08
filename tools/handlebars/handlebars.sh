@@ -111,6 +111,14 @@ check(){
   fi
 }
 
+# Support a command file for when args can't be passed through 'open' (Automator eats argv).
+# Write the command + args to this file before launching the .app; the script reads it,
+# runs the command, and deletes the file so the next bare launch does the default status check.
+CMDFILE="${HANDLEBARS_CMDFILE:-$HOME/.handlebars_cmd}"
+if [ -z "${1:-}" ] && [ -f "$CMDFILE" ]; then
+  set -- $(cat "$CMDFILE")
+  rm -f "$CMDFILE"
+fi
 DOMAIN="${1:-}"
 case "$DOMAIN" in
   fda)
@@ -165,6 +173,31 @@ case "$DOMAIN" in
     check "Camera"              "Camera" \
       ffmpeg -f avfoundation -framerate 1 -i "0" -frames:v 1 -y "$TMPDIR_HB/cam.jpg" -loglevel quiet
     ;;
+  notes-icloud-test)
+    # Diagnostic: check whether iCloud notes are visible from Handlebars' Aqua context.
+    # AppleScript sees 0 iCloud notes from a terminal/tmux process; this tests whether the
+    # .app bundle's proper pedigree makes a difference.
+    osascript -e '
+tell application "Notes"
+  set out to ""
+  repeat with a in accounts
+    set out to out & (name of a) & ": " & (count of notes in a) & "\n"
+  end repeat
+  set defName to name of default account
+  set defCount to count of notes in default account
+  set out to out & "DEFAULT (" & defName & "): " & defCount
+  return out
+end tell' ;;
+  notes-append)
+    # Append HTML to an iCloud note by title. Delegates the actual AppleScript to
+    # notes_html_append.sh but runs it FROM this .app's identity, so the Automation
+    # (Notes) grant and Aqua pedigree apply.
+    GHOST_REPO="${GHOST_REPO:-$HOME/svnCheckouts/js-project-GhOST}"
+    if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+      echo "handlebars notes-append: usage: handlebars.sh notes-append \"Note Title\" /path/to/content.html [match-index]" >&2
+      exit 64
+    fi
+    exec bash "$GHOST_REPO/tools/notes_html_append.sh" "$2" "$3" "${4:-}" ;;
   *) echo "handlebars: unknown domain '$DOMAIN'" >&2; exit 64 ;;
 esac
 

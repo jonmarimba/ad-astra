@@ -28,14 +28,14 @@ trap 'rm -rf "$TMPOUT"' EXIT
 fast=(); slow=0
 # Tests live in tools/tests/ AND beside their tool (tools/<tool>/test-*.sh). The second kind
 # were never in any tier, so nothing ran them: eleven files sat outside both runners. tools/lib
-# is excluded because run-slow.sh names those explicitly. '# TIER: live' marks a test that
-# needs services only some machines have (OmniRoute, a running Xcode); neither tier runs it.
+# is excluded because run-slow.sh names those explicitly. Every test runs on any machine: one that
+# needs a service (OmniRoute, Xcode) starts its own stub, so there is no tier for tests that need
+# this machine's state.
 ls "$HERE"/test-*.sh >/dev/null 2>&1 || { echo "no tests found in $HERE"; exit 1; }
 for t in "$HERE"/test-*.sh "$HERE"/../*/test-*.sh; do
   [ -f "$t" ] || continue
   case "$(basename "$(dirname "$t")")" in lib) continue ;; esac
   case "$t" in "$HERE"/../tests/*) continue ;; esac
-  if head -3 "$t" | grep -q '^# TIER: live'; then continue; fi
   if head -3 "$t" | grep -q '^# TIER: slow'; then slow=$((slow+1)); continue; fi
   fast+=("$t")
 done

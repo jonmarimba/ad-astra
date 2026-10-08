@@ -2,9 +2,8 @@
 # test-run-tiers.sh — the two-tier test runner, tested by effect in a sandbox.
 #
 # Increment 0.2 (tools/tool-templates/ROADMAP.md): run-all.sh is the fast tier and must
-# (a) never execute a file marked '# TIER: slow' — the live-Xcode test launches Xcode and
-# raises approval dialogs, so running it from the fast tier is not slowness, it is a GUI
-# takeover — and (b) fail ITSELF when its wall time exceeds the budget, because a suite
+# (a) never execute a file marked '# TIER: slow' (slow because it takes tens of seconds, never because it needs this machine; a test that launched Xcode
+# and raised approval dialogs was deleted rather than tiered; the daemon tests use stubs) and (b) fail ITSELF when its wall time exceeds the budget, because a suite
 # that quietly grows past twenty seconds stops being run.
 #
 # The runners are copied into a sandbox with stub test files so this file can observe
@@ -49,7 +48,6 @@ EOF
 mkdir -p "$SB/sometool"
 printf '#!/usr/bin/env bash\ntouch "%s/tool-fast-ran"\necho "== t: 1 ok, 0 failed"\n' "$SB" > "$SB/sometool/test-tool-fast.sh"
 printf '#!/usr/bin/env bash\n# TIER: slow\ntouch "%s/tool-slow-ran"\n' "$SB" > "$SB/sometool/test-tool-slow.sh"
-printf '#!/usr/bin/env bash\n# TIER: live\ntouch "%s/tool-live-ran"\n' "$SB" > "$SB/sometool/test-tool-live.sh"
 
 # --- fast tier: runs the fast stub, does NOT run the slow-marked one ---
 out="$SB/fast.out"
@@ -59,7 +57,6 @@ assert_file "$SB/fast-ran" "fast tier executed the unmarked file"
 assert_no_file "$SB/slow-ran" "fast tier did NOT execute the '# TIER: slow' file"
 assert_file "$SB/tool-fast-ran" "fast tier executed a test that sits beside its tool"
 assert_no_file "$SB/tool-slow-ran" "fast tier did NOT execute that tool's slow-marked test"
-assert_no_file "$SB/tool-live-ran" "fast tier did NOT execute a '# TIER: live' test"
 assert_contains "$out" "skipped 2 slow-tier file" "fast tier says out loud what it skipped"
 
 # --- a file that merely MENTIONS the marker (heredoc, assertion) is NOT slow ---
@@ -128,13 +125,12 @@ assert_file "$SB/lib-templates-ran" "slow tier picked up lib/test-templates.sh (
 assert_file "$SB/lib-update-ran" "slow tier picked up lib/test-astra-update.sh (outside the glob)"
 assert_file "$SB/lib-contract-ran" "slow tier picked up lib/test-install-contract.sh (outside the glob)"
 assert_file "$SB/tool-slow-ran" "slow tier executed a slow-marked test that sits beside its tool"
-assert_no_file "$SB/tool-live-ran" "slow tier did NOT execute a '# TIER: live' test either"
 
-# --- the tests that need this machine's services stay out of both tiers ---
-for f in test-xcode-mcp-front.sh test-model-list-parity.sh; do
-  assert_contains "$HERE/$f" "# TIER: live" \
-    "$f carries the live marker (neither tier may launch Xcode or read live config)"
-done
-assert_contains "$HERE/../convocation/test-qwen-routing.sh" "# TIER: live" "test-qwen-routing.sh carries the live marker"
+# --- no test is exempt from a tier because it needs THIS machine ---
+# There used to be a '# TIER: live' escape hatch for tests that needed Jonathan's daemons, a running
+# Xcode, or his OmniRoute. Those tests now start their own stubs, and a marker that excuses a test from
+# both tiers would let the next machine-specific test hide instead of being fixed.
+live="$(cd "$HERE/../.." && git ls-files 'tools/*test-*.sh' | while IFS= read -r f; do head -3 "$f" | grep -l '^# TIER: live' >/dev/null && echo "$f"; done)"
+assert_empty "$live" "no test file carries a '# TIER: live' exemption"
 
 finish

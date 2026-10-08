@@ -69,7 +69,7 @@ fi
 LABEL="$(astra_launchd_prefix).astra-mcp-front.$(printf '%s' "$REPO" | cksum | cut -d' ' -f1)"
 # KeepAlive is BARE true on purpose: {SuccessfulExit:false} reads a clean
 # exit-on-EADDRINUSE as "finished on purpose" and the daemon silently stays dead
-# (found live 2026-08-14, asserted ever since in test-xcode-mcp-front.sh).
+# (found live 2026-08-14, asserted ever since in test-mcp-front-launchd.sh).
 cat > "$DEST/launchd.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

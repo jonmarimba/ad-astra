@@ -2,7 +2,7 @@
 # test-mcp-front-daemon.sh — the aggregator daemon itself, by effect over its real HTTP
 # endpoint, with STUB upstreams (stub_mcp_server.py) instead of live Xcode.
 #
-# This is the fast-tier counterpart of the slow test-xcode-mcp-front.sh: same daemon.py,
+# A test of daemon.py over real HTTP:
 # same transport, but the upstreams are dependency-free stubs, so it asserts the
 # aggregation contract (config file honoured, prefixes served, calls routed, unknown
 # names rejected) without launching Xcode or waiting on an approval dialog. Increment 1.2:
@@ -10,7 +10,7 @@
 #
 # XCODE_MCP_FRONT_AUTO_ALLOW=0 always: the clicker path runs osascript against System
 # Events, and a test must never send Apple Events from an unstable shell identity
-# (test-xcode-mcp-front.sh documents the tmux-grant disease).
+# (the tmux-grant disease: an unstable shell identity makes macOS refuse or misattribute the events).
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091

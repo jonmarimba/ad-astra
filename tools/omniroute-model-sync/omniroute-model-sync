@@ -46,10 +46,13 @@ QW="${QWEN_SETTINGS:-$HOME/.qwen/settings.json}"
 OC="${OPENCODE_SETTINGS:-$HOME/.config/opencode/opencode.jsonc}"
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+# The endpoint and the CLI are configuration (a stub endpoint in tests, another port elsewhere).
+# ollama is only the fallback for a context length OmniRoute did not report, so it is not required.
+OMNIROUTE_BASE="${OMNIROUTE_BASE:-http://localhost:20128}"
+OMNIROUTE_BIN="${OMNIROUTE_BIN:-omniroute}"
 
 need(){ command -v "$1" >/dev/null || { echo "omniroute-model-sync: missing dependency '$1'" >&2; exit 1; }; }
-need omniroute
-need ollama
+command -v "$OMNIROUTE_BIN" >/dev/null || { echo "omniroute-model-sync: missing dependency '$OMNIROUTE_BIN'" >&2; exit 1; }
 need python3
 need jq
 
@@ -63,7 +66,7 @@ echo "omniroute-model-sync: fetching live ollamacloud models from OmniRoute's ow
 # omniroute prints its own "Loaded env from ..." banner lines to STDOUT ahead of the real JSON
 # (confirmed live — they're not on stderr, `2>/dev/null` alone doesn't strip them), so trim
 # everything before the actual '{' that starts the JSON object.
-omniroute --output json api models get-api-models 2>/dev/null | sed -n '/^{/,$p' \
+"$OMNIROUTE_BIN" --output json api models get-api-models 2>/dev/null | sed -n '/^{/,$p' \
   | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
@@ -112,7 +115,7 @@ while IFS=$'\t' read -r route_id display_name available; do
   # Context window: try omniroute's /v1/models endpoint first (it carries context_length for
   # ollamacloud models now — verified 2026-08-15), fall back to `ollama show` only if absent.
   # NEVER guess or copy from another model — that's how 8 of 10 entries ended up wrong.
-  ctx="$(curl -sf "http://localhost:20128/v1/models" | jq -r ".data[] | select(.id == \"$route_id\") | .context_length // empty" 2>/dev/null)"
+  ctx="$(curl -sf "$OMNIROUTE_BASE/v1/models" | jq -r ".data[] | select(.id == \"$route_id\") | .context_length // empty" 2>/dev/null)"
   if [ -z "$ctx" ]; then
     tag="${route_id#ollamacloud/}"
     ctx="$(ollama show "${tag}:cloud" 2>/dev/null | awk '/context length/{print $3}')"
@@ -145,7 +148,7 @@ while IFS=$'\t' read -r route_id display_name available; do
   # dropped qwen3.5:397b on 2026-08-19 while that model answered fine when given room.
   # One retry, because a first-request timeout usually means the upstream is warming.
   probe_once() {
-    curl -s --max-time 120 "http://localhost:20128/v1/chat/completions" \
+    curl -s --max-time 120 "$OMNIROUTE_BASE/v1/chat/completions" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $OMNIROUTE_KEY" \
       -d "{\"model\":\"${route_id}\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with one word: PING\"}],\"stream\":false}"
@@ -202,13 +205,13 @@ while IFS=$'\t' read -r route_id display_name available; do
     echo "    -> $([ "$DRY_RUN" -eq 1 ] && echo 'would add' || echo 'ADDING') to qwen ($QW) as id '$route_id'"
     ADDED_QW=$((ADDED_QW+1))
     if [ "$DRY_RUN" -eq 0 ]; then
-      python3 - "$QW" "$route_id" "$display_name" "${ctx:-0}" <<'PYEOF'
+      python3 - "$QW" "$route_id" "$display_name" "${ctx:-0}" "$OMNIROUTE_BASE" <<'PYEOF'
 import json, sys
-qw, route_id, display_name, ctx = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+qw, route_id, display_name, ctx, base = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
 d = json.load(open(qw))
 d.setdefault('modelProviders', {}).setdefault('openai', [])
 entry = {
-    "baseUrl": "http://localhost:20128/v1",
+    "baseUrl": base + "/v1",
     "envKey": "OMNIROUTE_API_KEY",
     "id": route_id,
     "name": f"{display_name} (OmniRoute)",
