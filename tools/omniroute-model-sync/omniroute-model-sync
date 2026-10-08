@@ -36,16 +36,25 @@
 # `ollama show`, which missed some models. NEVER copy-paste a context size from another model —
 # that's how 8 of 10 entries ended up wrong on 2026-08-15 (the copy-paste bug Jonathan flagged).
 #
-# Additive only: never edits or removes an existing entry in either file, never touches the
-# active `model` selection, never touches ambrosio, never touches anything outside the
-# modelProviders.openai list (qwen) / omniroute.models map (OpenCode).
+# Never touches the active `model` selection, never touches ambrosio, never touches anything
+# outside the modelProviders.openai list (qwen) / omniroute.models map (OpenCode).
+# With --prune: after the additive pass, probes each ollamacloud/ entry in both configs that
+# is NOT in the getter's live catalog and removes those that fail the probe (the getter can be
+# stale, so the probe is the authority). This closes the gap where retired models sat in configs
+# indefinitely. The probe uses the same verified-live check as the additive pass.
 set -uo pipefail
 export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 
 QW="${QWEN_SETTINGS:-$HOME/.qwen/settings.json}"
 OC="${OPENCODE_SETTINGS:-$HOME/.config/opencode/opencode.jsonc}"
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+PRUNE=0
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    --prune)   PRUNE=1 ;;
+  esac
+done
 # The endpoint and the CLI are configuration (a stub endpoint in tests, another port elsewhere).
 # ollama is only the fallback for a context length OmniRoute did not report, so it is not required.
 OMNIROUTE_BASE="${OMNIROUTE_BASE:-http://localhost:20128}"
@@ -254,4 +263,127 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "omniroute-model-sync: [dry-run] would add $ADDED_QW to qwen, $ADDED_OC to opencode — nothing written"
 else
   echo "omniroute-model-sync: added $ADDED_QW to qwen, $ADDED_OC to opencode"
+fi
+
+# --- Pruning pass (--prune) ---
+# For each ollamacloud/ entry in qwen and opencode that is NOT in the getter's live catalog,
+# probe it. If the probe fails, remove it from the config. The getter can list a model as
+# "available" while routing actually rejects it (seen with glm-5.1 and qwen3.5:397b on
+# 2026-10-08), so the PROBE is the authority, not the getter alone.
+if [ "$PRUNE" -eq 1 ]; then
+  echo ""
+  echo "omniroute-model-sync: pruning pass — checking for dead ollamacloud entries in configs..."
+
+  # Build the set of ids the getter reported
+  GETTER_IDS="$TMP/getter_ids.txt"
+  cut -f1 "$TMP/models.tsv" > "$GETTER_IDS"
+
+  # Collect ollamacloud ids from both configs
+  jq -r '.modelProviders.openai[]? | .id' "$QW" 2>/dev/null | grep '^ollamacloud/' | sort -u > "$TMP/qw_ids.txt"
+  grep -o '"ollamacloud/[^"]*"' "$OC" 2>/dev/null | tr -d '"' | sort -u > "$TMP/oc_ids.txt"
+  sort -u "$TMP/qw_ids.txt" "$TMP/oc_ids.txt" > "$TMP/all_config_ids.txt"
+
+  PRUNED_QW=0
+  PRUNED_OC=0
+  PRUNE_IDS=""
+
+  # First pass: probe everything and collect results. Then check for a provider-level
+  # outage before removing anything — if every ollamacloud model in the configs is dead,
+  # the provider connection is down and pruning would wipe the entire list on a transient
+  # failure. The safety threshold: at least one model must be alive, otherwise refuse.
+  TOTAL_PROBED=0
+  ALIVE_COUNT=0
+  DEAD_LIST=""
+
+  while IFS= read -r cid; do
+    [ -z "$cid" ] && continue
+    TOTAL_PROBED=$((TOTAL_PROBED+1))
+
+    probe="$(curl -s --max-time 30 "$OMNIROUTE_BASE/v1/chat/completions" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer $OMNIROUTE_KEY" \
+      -d "{\"model\":\"$cid\",\"messages\":[{\"role\":\"user\",\"content\":\"reply PING\"}],\"stream\":false,\"max_tokens\":300}" 2>&1)"
+
+    if printf '%s' "$probe" | grep -q '"choices"'; then
+      ALIVE_COUNT=$((ALIVE_COUNT+1))
+      continue
+    fi
+
+    if grep -qxF "$cid" "$GETTER_IDS"; then
+      echo "  DEAD (getter says available, but routing rejects): $cid"
+    else
+      echo "  DEAD (not in getter, routing fails): $cid"
+    fi
+    DEAD_LIST="$DEAD_LIST $cid"
+  done < "$TMP/all_config_ids.txt"
+
+  if [ "$ALIVE_COUNT" -eq 0 ] && [ "$TOTAL_PROBED" -gt 0 ]; then
+    echo "omniroute-model-sync: ALL $TOTAL_PROBED ollamacloud models failed the probe — this looks like a provider-level outage, not individual retirements. Refusing to prune. Check whether OmniRoute's Ollama Cloud connection is healthy."
+    PRUNE=0
+  fi
+
+  if [ "$PRUNE" -eq 1 ]; then
+  for cid in $DEAD_LIST; do
+    [ -z "$cid" ] && continue
+    PRUNE_IDS="$PRUNE_IDS $cid"
+
+    # Remove from qwen
+    if grep -qF "\"$cid\"" "$QW"; then
+      echo "    -> $([ "$DRY_RUN" -eq 1 ] && echo 'would remove' || echo 'REMOVING') from qwen"
+      PRUNED_QW=$((PRUNED_QW+1))
+      if [ "$DRY_RUN" -eq 0 ]; then
+        python3 - "$QW" "$cid" <<'PYEOF'
+import json, sys
+qw, target = sys.argv[1], sys.argv[2]
+d = json.load(open(qw))
+providers = d.get('modelProviders', {}).get('openai', [])
+d['modelProviders']['openai'] = [p for p in providers if p.get('id') != target]
+json.dump(d, open(qw, 'w'), indent=2)
+PYEOF
+      fi
+    fi
+
+    # Remove from opencode
+    if grep -qF "\"$cid\"" "$OC"; then
+      echo "    -> $([ "$DRY_RUN" -eq 1 ] && echo 'would remove' || echo 'REMOVING') from opencode"
+      PRUNED_OC=$((PRUNED_OC+1))
+      if [ "$DRY_RUN" -eq 0 ]; then
+        python3 - "$OC" "$cid" <<'PYEOF'
+import sys
+oc, target = sys.argv[1], sys.argv[2]
+lines = open(oc).readlines()
+out = []
+skip = False
+brace_depth = 0
+for line in lines:
+    if skip:
+        for ch in line:
+            if ch == '{': brace_depth += 1
+            elif ch == '}': brace_depth -= 1
+        if brace_depth <= 0:
+            skip = False
+            continue
+        continue
+    if f'"{target}"' in line:
+        skip = True
+        brace_depth = 0
+        for ch in line:
+            if ch == '{': brace_depth += 1
+            elif ch == '}': brace_depth -= 1
+        if brace_depth <= 0:
+            skip = False
+        continue
+    out.append(line)
+open(oc, 'w').writelines(out)
+PYEOF
+      fi
+    fi
+  done
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "omniroute-model-sync: [dry-run] would prune $PRUNED_QW from qwen, $PRUNED_OC from opencode"
+  else
+    echo "omniroute-model-sync: pruned $PRUNED_QW from qwen, $PRUNED_OC from opencode"
+  fi
+  fi  # end of safety-check gate
 fi
