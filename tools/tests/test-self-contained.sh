@@ -11,7 +11,6 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1
 PASS=0; FAIL=0
 # Named exceptions, each with its reason. Anything else that matches fails.
 KNOWN='^agents-and-prompts/AGENTS\.md:'          # Drew's kit: his /Users/andrew imports; Jonathan's call (2026-10-04)
-KNOWN="$KNOWN|^tools/peer-review/peer-review:.*js-project-GhOST/tools/worklog"  # the tool exists to hand commits to GhOST
 KNOWN="$KNOWN|^tools/tests/TESTING\.md:.*js-llmKicker/docs/TAUTOLOGY"          # provenance of the testing rules
 ok(){ echo "  ok:   $1"; PASS=$((PASS+1)); }; bad(){ echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 

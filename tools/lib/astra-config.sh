@@ -6,6 +6,8 @@
 #   ASTRA_NOTIFY_CHAT_ID  Messages chat id botline reads replies from
 #   ASTRA_LMS_HOST        host running LM Studio (ambrosio, lms-prune)
 #   ASTRA_PEER_HOST       the other Mac (ai-setup-diff)
+#   ASTRA_WORKLOG         path to a worklog tool peer-review records into (optional)
+#   ASTRA_PEER_REVIEW_REPOS  colon-separated repos peer-review also covers (optional)
 # Usage: . astra-config.sh; astra_config KEY   (prints the value, or nothing)
 ASTRA_CONFIG_FILE="${ASTRA_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/astra/config}"
 astra_config() {

@@ -46,8 +46,7 @@ from pathlib import Path
 
 ASTRA = Path(__file__).resolve().parent.parent.parent      # js-db-ad-astra
 # The workspace is the directory the astra checkout sits in, so repos cloned beside it are
-# in scope on any machine. It used to default to ~/svnCheckouts, which refused every install
-# on a machine that keeps its checkouts anywhere else. ASTRA_WORKSPACE still overrides.
+# in scope on any machine. ASTRA_WORKSPACE overrides.
 WORKSPACE = Path(os.environ.get("ASTRA_WORKSPACE", ASTRA.parent)).resolve()
 REGISTRY = ASTRA / "tools" / "lib" / "installed.json"
 
@@ -74,10 +73,9 @@ def is_safe_target(p):
       forbidden-global  -> the RESOLVED path, so a symlink pointing at
                            ~/.claude cannot smuggle a global install past us.
       workspace member  -> the path AS GIVEN, because several repos are
-                           themselves symlinks out of the workspace. js-speedway
-                           and js-hoa both live in Dropbox and are linked into
-                           ~/svnCheckouts. Resolving before that test declared
-                           fourteen perfectly legitimate installs "outside the
+                           themselves symlinks out of the workspace. Two legal repos
+                           both live in Dropbox and are linked into the workspace.
+                           Resolving before that test declared fourteen perfectly legitimate installs "outside the
                            workspace" — the symlink lesson biting for the third
                            time today, in a third place.
     """

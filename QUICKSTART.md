@@ -51,13 +51,13 @@ Nothing assumes a fixed location. Clone this repo anywhere, under any name. A re
 The whole interface is one command, run inside the repo:
 
 ```
-~/svnCheckouts/js-db-ad-astra/tools/astra add writing        # a set from templates.json, or a single tool
-~/svnCheckouts/js-db-ad-astra/tools/astra remove humanizer   # gone for good; no update brings it back
-~/svnCheckouts/js-db-ad-astra/tools/astra status
-~/svnCheckouts/js-db-ad-astra/tools/astra list
+<astra checkout>/tools/astra add writing        # a set from templates.json, or a single tool
+<astra checkout>/tools/astra remove humanizer   # gone for good; no update brings it back
+<astra checkout>/tools/astra status
+<astra checkout>/tools/astra list
 ```
 
-Git does not clone hooks, so on a new machine or a fresh clone run `astra sync` once. It wires the hooks in every repo under `~/svnCheckouts` that has astra tools. A repo never needs astra to work: installed tools are ordinary committed files, and the hook stays silent when no astra checkout is present. Tools marked `# astra-scope: machine` (brew formulas, global CLIs) are never installed by a repo install; a set that names one says so and gives the command.
+Git does not clone hooks, so on a new machine or a fresh clone run `astra sync` once. It wires the hooks in every repo beside the astra checkout (or under the directories you name) that has astra tools. A repo never needs astra to work: installed tools are ordinary committed files, and the hook stays silent when no astra checkout is present. Tools marked `# astra-scope: machine` (brew formulas, global CLIs) are never installed by a repo install; a set that names one says so and gives the command.
 
 ## How bots know their tooling is current
 

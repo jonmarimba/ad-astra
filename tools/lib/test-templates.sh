@@ -9,8 +9,8 @@
 set -u
 A="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 command -v jq >/dev/null || { echo "MISSING DEPENDENCY: jq"; exit 1; }
-# A throwaway git repo to install into. This used to clone ~/svnCheckouts/js-llmKicker,
-# which made the test depend on another project being checked out at that path.
+# A throwaway git repo to install into. This used to clone another project,
+# which made the test depend on that project being checked out somewhere.
 fixture_repo() { mkdir -p "$1" && git -C "$1" init -q && printf '# fixture\n' > "$1/CLAUDE.md" \
   && git -C "$1" add -A && git -C "$1" -c user.name=t -c user.email=t@t commit -qm fixture; }
 T="$(mktemp -d)/repo"; fixture_repo "$T" || { echo "fixture repo failed"; exit 1; }

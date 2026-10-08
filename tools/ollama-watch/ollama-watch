@@ -13,7 +13,7 @@ HOME_DIR="${OLLAMA_WATCH_HOME:-$HOME/.ollama-watch}"
 mkdir -p "$HOME_DIR"
 CONF="$HOME_DIR/config"
 # astra's root, from this script's real location (symlinks followed), so the
-# sibling tools resolve in any checkout, not only ~/svnCheckouts/js-db-ad-astra.
+# sibling tools resolve in any checkout, wherever it lives.
 ASTRA_ROOT="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/../.." && pwd)"
 BOTLINE="${BOTLINE_BIN:-$ASTRA_ROOT/tools/botline/botline}"
 if [ ! -f "$CONF" ]; then

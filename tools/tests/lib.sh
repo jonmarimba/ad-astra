@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# The astra checkout this test file belongs to, wherever it lives. Tests used to
-# assume ~/svnCheckouts/js-db-ad-astra and failed in any other checkout.
+# The astra checkout this test file belongs to, wherever it lives. Nothing here may assume a
+# location; test-clone-portability.sh runs the whole tier from a copy to prove it.
 ASTRA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # macOS has no `timeout` (GNU coreutils); perl's alarm+exec is the portable
 # equivalent and exits 142 when the limit is hit.

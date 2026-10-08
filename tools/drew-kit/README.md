@@ -41,17 +41,17 @@ uninstall-from-repo.sh <repo>
 
 ```
 # default: copy the Swift set into a repo
-install-into-repo.sh ~/svnCheckouts/js-someproject
+install-into-repo.sh <repo>
 
 # jira conventions, copied in
-install-into-repo.sh ~/svnCheckouts/js-someproject --set jira
+install-into-repo.sh <repo> --set jira
 
 # subtree from a dedicated components repo (once one exists)
-install-into-repo.sh ~/svnCheckouts/js-someproject --method subtree \
+install-into-repo.sh <repo> --method subtree \
   --src git@github.com:someone/drew-components.git --branch main --subpath components
 
 # remove everything drew-kit added
-uninstall-from-repo.sh ~/svnCheckouts/js-someproject
+uninstall-from-repo.sh <repo>
 ```
 
 ## Test

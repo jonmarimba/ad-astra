@@ -34,7 +34,10 @@ REVIEWER_AGENT="${REVIEWER_AGENT:-main}"
 # turns out of the reviewer's own context.
 REVIEWER_SESSION="${REVIEWER_SESSION:-agent:main:peer-review}"
 SELF_NAME="${SELF_NAME:-ghost-claude}"
-WORKLOG="${WORKLOG_BIN:-$HOME/svnCheckouts/js-project-GhOST/tools/worklog}"
+# Where to record reviews, if anywhere: WORKLOG_BIN, then ASTRA_WORKLOG in the per-machine config
+# (tools/lib/astra-config.sh), then a `worklog` on PATH. No location is assumed; with none, the
+# review still prints and nothing is recorded.
+WORKLOG="${WORKLOG_BIN:-}"
 # The ref is per-repo and lives in the repo. Nothing here remembers anything between runs.
 REF="${PEER_REVIEW_REF:-refs/peer-review/last}"
 LIMIT="${PEER_REVIEW_LIMIT:-3}"
@@ -51,10 +54,21 @@ while [ $# -gt 0 ]; do
   esac
 done
 # astra's root, from this script's real location (symlinks followed), so the
-# sibling tools resolve in any checkout, not only ~/svnCheckouts/js-db-ad-astra.
+# sibling tools resolve in any checkout, wherever it lives.
 ASTRA_ROOT="$(cd "$(dirname "$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/../.." && pwd)"
 with_timeout() { local s="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$s" "$@"; }
-[ ${#REPOS[@]} -gt 0 ] || REPOS=("$ASTRA_ROOT" "$HOME/svnCheckouts/js-project-GhOST")
+. "$ASTRA_ROOT/tools/lib/astra-config.sh"
+[ -n "$WORKLOG" ] || WORKLOG="$(astra_config ASTRA_WORKLOG)"
+[ -n "$WORKLOG" ] || WORKLOG="$(command -v worklog || true)"
+# Repos to review when none are named: this checkout, plus any listed (colon-separated) in
+# ASTRA_PEER_REVIEW_REPOS in the per-machine config. No other repo is assumed to exist.
+if [ ${#REPOS[@]} -eq 0 ]; then
+  REPOS=("$ASTRA_ROOT")
+  extra="$(astra_config ASTRA_PEER_REVIEW_REPOS)"
+  if [ -n "$extra" ]; then
+    oldifs="$IFS"; IFS=':'; for r in $extra; do [ -n "$r" ] && REPOS+=("$r"); done; IFS="$oldifs"
+  fi
+fi
 
 [ -x "$REVIEWER_BIN" ] || { echo "peer-review: reviewer binary $REVIEWER_BIN is not executable — no review ran" >&2; exit 2; }
 
