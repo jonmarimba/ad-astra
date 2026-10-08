@@ -581,11 +581,39 @@ run_cloud() {
     # The pruner has its own provider-outage safety guard (refuses when ALL models fail),
     # so passing it unconditionally is safe.
     out="$("$OMNIROUTE_SYNC_BIN" --prune 2>&1)"; rc=$?
-    # The sync narrates every run. Only surface the lines that mean something changed or
-    # something could not be verified; a clean "added 0" run is silence, per the schd
-    # convention that output means attention is needed.
-    printf '%s\n' "$out" | grep -Ei 'added [1-9]|pruned [1-9]|timed out|skip |could NOT|unverified|FAIL|DEAD|NEEDS ENABLING' || true
+    # The sync narrates every run. Surface lines that mean something CHANGED — a clean
+    # "added 0" run is silence, per the schd convention that output means attention.
+    # NEEDS ENABLING lines are filtered through the cloud_announced watermark below so
+    # the same 8 models don't poke the session every 4 hours forever.
+    printf '%s\n' "$out" | grep -Ei 'added [1-9]|pruned [1-9]|timed out|could NOT|unverified|FAIL|DEAD' || true
     [ "$rc" -ne 0 ] && log "omniroute-model-sync exited $rc"
+
+    # Announce genuinely NEW cloud models that need enabling — once per model, not every
+    # run. Same pattern as ollama-watch's announced.txt: a watermark of what he has been
+    # told. A model he enables and the sync subsequently adds is a non-event. A model he
+    # never enables stays quiet after the first announcement.
+    CLOUD_ANNOUNCED="$AMBROSIO_HOME/cloud_announced.txt"
+    touch "$CLOUD_ANNOUNCED"
+    new_cloud=""
+    while IFS= read -r line; do
+      # Extract the route id from "NEEDS ENABLING: 'Display Name' (ollamacloud/foo)"
+      cid="$(printf '%s' "$line" | sed -n 's/.*(\(ollamacloud\/[^)]*\)).*/\1/p')"
+      [ -z "$cid" ] && continue
+      grep -qxF "$cid" "$CLOUD_ANNOUNCED" && continue
+      echo "$cid" >> "$CLOUD_ANNOUNCED"
+      new_cloud="$new_cloud $cid"
+    done < <(printf '%s\n' "$out" | grep -i 'NEEDS ENABLING')
+    new_cloud="$(echo "$new_cloud" | xargs 2>/dev/null || true)"
+    if [ -n "$new_cloud" ]; then
+      msg="New Ollama Cloud models available on your subscription that need enabling in OmniRoute: $new_cloud — open the OmniRoute Providers/Endpoints page and flip them on."
+      if [ "${dry:-0}" -eq 1 ]; then log "[dry-run] would notify: $msg"
+      elif [ -x "$BOTLINE" ]; then
+        "$BOTLINE" send --from ambrosio "$msg" >/dev/null 2>>"$AMBROSIO_HOME/pull.log" \
+          && log "told JS about new cloud models: $new_cloud" \
+          || log "notify FAILED — new cloud models NOT reported: $new_cloud"
+      fi
+      echo "ambrosio: new cloud model(s) need enabling in OmniRoute: $new_cloud"
+    fi
   else
     echo "ambrosio: omniroute-model-sync NOT FOUND at $OMNIROUTE_SYNC_BIN — the cloud catalog did NOT sync"
   fi
