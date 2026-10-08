@@ -8,7 +8,23 @@ need ffmpeg "brew install ffmpeg"
 need whisper-cli "brew install whisper-cpp"
 need say "macOS"
 MODEL="${SPEECH_BEE_MODEL:-$HOME/.cache/whisper/ggml-base.en.bin}"
-[ -f "$MODEL" ] || { fail "whisper model missing at $MODEL (speech-bee bootstrap) — loud fail, not a skip"; finish; exit 1; }
+# A missing model is NOT a precondition failure: the tool fetches its own on first use (that
+# is what astra is for), so the first real `stt` below heals this machine if it needs to.
+# This used to fail the whole file with "model missing — loud fail, not a skip", which made a
+# clean machine's first test run red for a dependency the tool could fetch itself.
+
+# ---- self-healing, hermetic: a fake model hub served from a local directory ----
+mkdir -p "$SB/hub" "$SB/heal"; printf 'not a real model' > "$SB/hub/ggml-tiny.bin"
+printf 'x' > "$SB/in.aiff"
+env SPEECH_BEE_MODEL="$SB/heal/ggml-tiny.bin" SPEECH_BEE_MODEL_URL_BASE="file://$SB/hub" "$BEE" stt "$SB/in.aiff" >/dev/null 2>"$SB/heal.err"
+assert_file "$SB/heal/ggml-tiny.bin" "stt fetched the missing model on first use"
+assert_contains "$SB/heal.err" "fetching ggml-tiny.bin" "and said it was fetching"
+red "a failed model download stops with the URL" 1 "model download failed" \
+  env SPEECH_BEE_MODEL="$SB/heal2/ggml-tiny.bin" SPEECH_BEE_MODEL_URL_BASE="file://$SB/nowhere" "$BEE" stt "$SB/in.aiff"
+assert_no_file "$SB/heal2/ggml-tiny.bin.part" "a failed download leaves no partial file"
+red "SPEECH_BEE_NO_FETCH keeps the old refusal" 1 "no model at" \
+  env SPEECH_BEE_MODEL="$SB/heal3/ggml-tiny.bin" SPEECH_BEE_MODEL_URL_BASE="file://$SB/hub" SPEECH_BEE_NO_FETCH=1 "$BEE" stt "$SB/in.aiff"
+assert_no_file "$SB/heal3/ggml-tiny.bin" "and fetched nothing"
 
 # ---- tts: by effect, a real audio file ----
 assert_rc 0 "tts writes an audio file" "$BEE" tts "the quick brown fox jumps over the lazy dog" --out "$SB/fox.aiff"
