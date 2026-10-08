@@ -15,7 +15,7 @@
 # Dependencies: brew. Installs system-level (a CLI has no per-repo home); the --into arg is
 # accepted for template-installer uniformity and used only to validate the target exists.
 #
-# Usage: ./install.sh --into <repo>
+# Usage: ./install.sh [--into <repo>]
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
@@ -26,8 +26,9 @@ while [ $# -gt 0 ]; do
     *) echo "axe: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
-[ -n "$TARGET" ] || { echo "usage: install.sh --into <repo>" >&2; exit 64; }
-[ -d "$TARGET" ] || { echo "axe: no such directory: $TARGET" >&2; exit 66; }
+# --into is optional: axe is machine software, so `astra upgrade` runs this with no arguments. When a
+# repo is named it must exist, which keeps the template installer's call shape working.
+[ -z "$TARGET" ] || [ -d "$TARGET" ] || { echo "axe: no such directory: $TARGET" >&2; exit 66; }
 command -v brew >/dev/null || { echo "axe: FAIL — brew missing" >&2; exit 69; }
 
 if ! command -v axe >/dev/null; then

@@ -15,7 +15,7 @@ Re-running the same command is the update path. Installers pull their external d
 
 ## Which template
 
-The `base` template installs what every repo gets: the writing discipline and convocation (cross-brand review panels). The writing discipline is a set of skills that check and de-AI prose, plus a doctrine file that orders bots to use them. The kind templates compose `base` in, so you normally install one of these and never think about `base`:
+The `base` template installs what every repo gets: the writing discipline, convocation (cross-brand review panels), and the act-first doctrine. That doctrine tells agents to do obvious, reversible, local work without asking, and to ask only before something they cannot take back. The writing discipline is a set of skills that check and de-AI prose, plus a doctrine file that orders bots to use them. The kind templates compose `base` in, so you normally install one of these and never think about `base`:
 
 - `swift-ios` is for iOS app work. It adds the Xcode aggregator, Swift code-quality tools, Mac and simulator control, the axe CLI, and the ios-ui-driving skill.
 - `mac-swift` is for Mac app work. It is the same minus the iOS simulator pieces. QUICKSTART-ios.md covers both.
@@ -32,7 +32,7 @@ Restart your agent session after an install. Agents read the config files at ses
 
 ## Where each kind of tool lives, and why
 
-Every directory under `tools/` is one of four kinds. The kind decides where the tool lands and how it stays current. Each tool's `install.sh` declares its kind on a `# astra-scope:` line near the top. `tools/tests/test-tool-kinds.sh` fails on any tool that declares nothing or cannot be uninstalled.
+Every directory under `tools/` is one of four kinds, and `tools/astra upgrade` refreshes the software of any of them. The kind decides where the tool lands and how it stays current. Each tool's `install.sh` declares its kind on a `# astra-scope:` line near the top. `tools/tests/test-tool-kinds.sh` fails on any tool that declares nothing or cannot be uninstalled.
 
 ### Files in your repo
 
@@ -52,7 +52,17 @@ The manifest does not track these entries, and the hooks do not refresh them. To
 
 These tools declare `# astra-scope: machine`. Some things exist once per machine and cannot live in a repo. Homebrew formulas such as `axe` and `periphery` are one example. Background daemons such as the Xcode aggregator are another. So are signed `.app` wrappers that hold macOS permission grants, and downloaded model files.
 
-A repo install never runs these. Adding a set to a repo must not install software on your machine as a side effect. When a set needs one, the install prints `MACHINE <tool>: install once per machine` with the command. Run that tool's `install.sh` yourself, once. To update it, run the same script again, because it pulls from the source each time. Its `uninstall.sh` keeps shared software unless you pass `--deps`.
+A repo install never runs these. Adding a set to a repo must not install software on your machine as a side effect. When a set needs one, the install prints `MACHINE <tool>: install once per machine` with the command. Run that tool's `install.sh` yourself, once. Its `uninstall.sh` keeps shared software unless you pass `--deps`.
+
+### Updating the software on the machine
+
+Re-running a repo install already upgrades the software its tools need, but it also rewrites the repo. `tools/astra upgrade` does only the machine half. It runs each tool's `deps.sh` and nothing else, so it touches no repo.
+
+Run `tools/astra upgrade --list` to see the plan, `tools/astra upgrade` to refresh everything, or `tools/astra upgrade axe speech-bee` to refresh named tools. A failing tool does not stop the others. The command prints which ones failed and exits 1.
+
+A `deps.sh` refreshes software only: Homebrew formulas, pipx and uv tools, the MacControlMCP app, a model file. It never reloads a daemon, rewrites a schedule, or rebuilds a signed app wrapper. That is why the command never runs an `install.sh`. The Xcode daemon's installer reloads its launchd jobs, which restarts the daemon and raises Xcode's approval dialogs again. The wrapper apps hold macOS permission grants that a rebuild would destroy. A machine tool that owns no software says so with a `# no-deps:` line in its `install.sh`.
+
+Some repo-config installers also install the program their entry points at. The `ios-simulator` installer installs idb, and the `mac-control-mcp` installer downloads the app. Their `deps.sh` holds exactly that step, so `upgrade` can refresh it without a repo.
 
 ### Run in place
 

@@ -30,19 +30,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE="$HERE/../mcp-bundle"
 
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-if ! command -v idb_companion >/dev/null; then
-  echo "ios-simulator: installing idb-companion (interaction tools need it)"
-  brew install facebook/fb/idb-companion || { echo "ios-simulator: FAIL — brew install facebook/fb/idb-companion" >&2; exit 69; }
-fi
-if ! command -v idb >/dev/null; then
-  command -v pipx >/dev/null || { echo "ios-simulator: FAIL — pipx missing. brew install pipx" >&2; exit 69; }
-  echo "ios-simulator: installing fb-idb (the idb CLI the server spawns)"
-  pipx install fb-idb || { echo "ios-simulator: FAIL — pipx install fb-idb" >&2; exit 69; }
-fi
-# GUI-spawned servers get a minimal PATH; make idb reachable from Homebrew's bin,
-# wherever this Mac's Homebrew lives (/opt/homebrew on Apple Silicon, /usr/local on Intel).
-BREW_BIN_DIR="$(brew --prefix)/bin"
-[ -x "$BREW_BIN_DIR/idb" ] || ln -sf "$(command -v idb)" "$BREW_BIN_DIR/idb"
+# The idb software lives in deps.sh so `astra upgrade` can refresh it without touching a repo.
+# ASTRA_SKIP_MACHINE_DEPS=1 wires the repo only (tests, or a machine whose software is managed another way).
+[ -n "${ASTRA_SKIP_MACHINE_DEPS:-}" ] || "$HERE/deps.sh"
 
 exec "$BUNDLE/install.sh" "$@" ios-simulator

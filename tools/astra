@@ -5,6 +5,8 @@
 #   astra remove <tool-or-set>...   uninstall; nothing brings it back automatically
 #   astra status                    what this repo asked for, what it has, hooks wired?
 #   astra list                      the named sets (templates.json) and every tool
+#   astra upgrade [--list] [tool...]  refresh machine software without touching any repo: runs each
+#                                   tool's deps.sh (software only; never an install.sh)
 #   astra sync [dir...]             once per machine or fresh clone: wire the hooks
 #                                   and pull updates in every repo beside this astra
 #                                   checkout (or under the dirs given) that has astra
@@ -22,15 +24,16 @@ set -euo pipefail
 A="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$A/tools/lib/template.py"
 cmd="${1:-}"; [ $# -gt 0 ] && shift
-repo=""; names=()
+repo=""; names=(); plan_only=0
 while [ $# -gt 0 ]; do case "$1" in
   --into) repo="${2:-}"; shift 2 ;;
+  --list) plan_only=1; shift ;;
   -*) echo "astra: unknown flag $1" >&2; exit 64 ;;
   *) names+=("$1"); shift ;;
 esac; done
 # sync and list work from anywhere; every other command acts on one repo.
 case "$cmd" in
-  sync|list) ;;
+  sync|list|upgrade) ;;
   *) [ -n "$repo" ] || repo="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "astra: not in a git repo; pass --into <repo>" >&2; exit 64; } ;;
 esac
 case "$cmd" in
@@ -55,6 +58,37 @@ case "$cmd" in
         echo "synced $r"
       done < <(find -L "$root" -maxdepth 4 -path '*/.astra/manifest.json' -not -path '*/node_modules/*' -not -path '*/tmp/*' 2>/dev/null)
     done ;;
+  upgrade)
+    # The machine half of an update. Re-running a repo install already upgrades a tool's dependencies,
+    # but it also rewrites the repo, and software on the machine belongs to no repo. So this runs each
+    # tool's deps.sh and NOTHING else. It never runs an install.sh: several of those also reload launchd
+    # jobs, rewrite schedules, or rebuild a signed app wrapper, none of which an upgrade may do.
+    plan=()
+    for d in "$A"/tools/*/; do
+      n="$(basename "$d")"
+      [ -x "$d/deps.sh" ] && plan+=("$n:deps.sh")
+    done
+    if [ ${#names[@]} -gt 0 ]; then
+      picked=()
+      for n in "${names[@]}"; do
+        [ -d "$A/tools/$n" ] || { echo "astra upgrade: no such tool: $n" >&2; exit 64; }
+        found=0; for e in "${plan[@]+"${plan[@]}"}"; do [ "${e%%:*}" = "$n" ] && { picked+=("$e"); found=1; }; done
+        [ "$found" = 1 ] || { echo "astra upgrade: $n has nothing to upgrade (no deps.sh)" >&2; exit 64; }
+      done
+      plan=("${picked[@]}")
+    fi
+    if [ "$plan_only" = 1 ]; then
+      for e in "${plan[@]+"${plan[@]}"}"; do echo "  ${e%%:*}  (runs ${e#*:})"; done
+      exit 0
+    fi
+    ok=0; failed=0; failures=()
+    for e in "${plan[@]+"${plan[@]}"}"; do
+      n="${e%%:*}"; script="${e#*:}"
+      echo "── $n"
+      if "$A/tools/$n/$script"; then ok=$((ok+1)); else failed=$((failed+1)); failures+=("$n"); echo "  FAILED: $n" >&2; fi
+    done
+    echo; echo "astra upgrade: $ok ok, $failed failed${failures[*]:+ (${failures[*]})}"
+    [ "$failed" -eq 0 ] ;;
   list)
     python3 "$T" list
     echo; echo "── single tools (repo-level):"

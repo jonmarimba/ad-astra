@@ -31,6 +31,18 @@ check() {
       *) echo "$t: install.sh declares scope '${scope:-nothing}'; want repo, repo-config or machine"; return ;;
     esac
     [ -f "$t/uninstall.sh" ] || echo "$t: install.sh but no uninstall.sh"
+    # A machine tool owns software, so it has a deps.sh for `astra upgrade` to refresh, or it says why
+    # not with a `# no-deps:` line.
+    if [ "$scope" = machine ] && [ ! -f "$t/deps.sh" ] && ! head -n 6 "$t/install.sh" | grep -q '^# no-deps:'; then
+      echo "$t: machine scope but no deps.sh and no '# no-deps: <why>' line"
+    fi
+    if [ -f "$t/deps.sh" ]; then
+      [ -x "$t/deps.sh" ] || echo "$t: deps.sh is not executable"
+      # deps.sh refreshes software and nothing else; these are the things an upgrade must never do
+      if grep -nE 'launchd-install|launchctl|wrap-in-app|astra_place|--into' "$t/deps.sh" | grep -v '^[0-9]*:[[:space:]]*#' | grep -q .; then
+        echo "$t: deps.sh touches a daemon, a wrapper app or a repo; an upgrade may only refresh software"
+      fi
+    fi
   elif [ -f "$t/RUN-IN-PLACE" ]; then
     [ -s "$t/RUN-IN-PLACE" ] || echo "$t: RUN-IN-PLACE is empty; say why nothing needs installing"
     [ ! -f "$t/uninstall.sh" ] || echo "$t: RUN-IN-PLACE but also an uninstall.sh"
@@ -46,13 +58,19 @@ mkdir undeclared; mkdir noundo; printf '#!/bin/sh\n# astra-scope: repo\n' > noun
 mkdir badscope; printf '#!/bin/sh\n# astra-scope: sometimes\n' > badscope/install.sh; : > badscope/uninstall.sh
 mkdir both; printf '#!/bin/sh\n# astra-scope: repo\n' > both/install.sh; : > both/uninstall.sh; echo why > both/RUN-IN-PLACE
 mkdir emptyreason; : > emptyreason/RUN-IN-PLACE
-mkdir good; printf '#!/bin/sh\n# astra-scope: machine\n' > good/install.sh; : > good/uninstall.sh
+mkdir good; printf '#!/bin/sh\n# astra-scope: machine\n' > good/install.sh; : > good/uninstall.sh; printf '#!/bin/sh\n' > good/deps.sh; chmod +x good/deps.sh
 mkdir script; echo "runs from the checkout" > script/RUN-IN-PLACE
-for t in undeclared noundo badscope both emptyreason; do
+mkdir nodeps; printf '#!/bin/sh\n# astra-scope: machine\n' > nodeps/install.sh; : > nodeps/uninstall.sh
+mkdir whynot; printf '#!/bin/sh\n# astra-scope: machine\n# no-deps: it owns no software\n' > whynot/install.sh; : > whynot/uninstall.sh
+mkdir daemondeps; printf '#!/bin/sh\n# astra-scope: machine\n' > daemondeps/install.sh; : > daemondeps/uninstall.sh
+printf '#!/bin/sh\n"$(dirname "$0")/xcode-mcp-front" launchd-install\n' > daemondeps/deps.sh; chmod +x daemondeps/deps.sh
+mkdir notexec; printf '#!/bin/sh\n# astra-scope: machine\n' > notexec/install.sh; : > notexec/uninstall.sh; : > notexec/deps.sh
+for t in undeclared noundo badscope both emptyreason nodeps daemondeps notexec; do
   assert_nonempty "$(check "$t")" "RED: '$t' is reported"
 done
 assert_empty "$(check good)" "a declared machine tool with an uninstaller passes"
 assert_empty "$(check script)" "a run-in-place tool with a reason passes"
+assert_empty "$(check whynot)" "a machine tool that says why it has no deps.sh passes"
 
 echo "== every tool in the tree"
 cd "$ASTRA_ROOT/tools" || exit 1
