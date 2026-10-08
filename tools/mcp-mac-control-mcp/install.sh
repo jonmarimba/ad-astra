@@ -16,7 +16,7 @@
 # (<repo>/.codex/config.toml). Copying that per-server would be seven chances to
 # drift, which is the exact disease the tool registry exists to cure.
 #
-# Dependencies: mac_control_mcp (installed/updated below), claude, gh, shasum
+# Dependencies: mac_control_mcp (installed/updated by fetch-app.sh, which needs curl or a signed-in gh), claude, shasum
 #
 # THE APP INSTALL/UPDATE PATH LIVES HERE. Nothing else has one: kicker's setup-mcp.sh (and
 # the bundle's verbatim copy) only CHECK for /Applications/MacControlMCP.app and die pointing
@@ -31,33 +31,10 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE="$HERE/../mcp-bundle"
-export PATH="/opt/homebrew/bin:$PATH"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 APP="/Applications/MacControlMCP.app"
-REPO_GH="AdelElo13/mac-control-mcp"
-command -v gh >/dev/null || { echo "mac-control-mcp: FAIL — gh missing. brew install gh" >&2; exit 69; }
-
-LATEST="$(gh api "repos/$REPO_GH/releases/latest" --jq .tag_name)"
-[ -n "$LATEST" ] || { echo "mac-control-mcp: FAIL — could not read latest release of $REPO_GH" >&2; exit 69; }
-HAVE="$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo none)"
-
-if [ "v$HAVE" != "$LATEST" ]; then
-  echo "mac-control-mcp: installing MacControlMCP.app $LATEST (have: $HAVE)"
-  WORK="$(mktemp -d -t mac-control-mcp)"
-  trap 'rm -rf "$WORK"' EXIT
-  gh release download "$LATEST" --repo "$REPO_GH" --dir "$WORK" \
-    --pattern "MacControlMCP-*-macos-universal.tar.gz" --pattern "*.sha256" \
-    || { echo "mac-control-mcp: FAIL — release download" >&2; exit 69; }
-  ( cd "$WORK" && shasum -a 256 -c ./*.sha256 ) \
-    || { echo "mac-control-mcp: FAIL — sha256 mismatch on downloaded app; NOT installing" >&2; exit 65; }
-  tar xzf "$WORK"/MacControlMCP-*-macos-universal.tar.gz -C "$WORK"
-  [ -d "$WORK/MacControlMCP.app" ] || { echo "mac-control-mcp: FAIL — archive did not contain MacControlMCP.app" >&2; exit 65; }
-  rm -rf "$APP"
-  mv "$WORK/MacControlMCP.app" "$APP"
-  echo "mac-control-mcp: installed $LATEST -> $APP (running sessions keep the old binary until their server respawns)"
-else
-  echo "mac-control-mcp: MacControlMCP.app already at latest ($LATEST)"
-fi
+"$HERE/fetch-app.sh"
 
 "$BUNDLE/install.sh" "$@" mac-control-mcp
 

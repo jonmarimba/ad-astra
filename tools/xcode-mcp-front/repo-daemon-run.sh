@@ -15,7 +15,7 @@
 # resolved port is written to ./port and into the repo's .mcp.json, which is how
 # clients find the daemon.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"                 # <repo>/.astra/mcp-front
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 CONFIG="$HERE/_mcp_info.json"
@@ -64,15 +64,20 @@ fi
 # Port selection serialized with flock so two concurrent launchers cannot both
 # see the same port as free and race to bind it.  (GhOST-OpenClaw peer review
 # of efa84ec.)
+#
+# The `flock` command is util-linux; macOS does not ship it, so the first version of this
+# block failed on every stock Mac ("flock: command not found", no port file written, the
+# daemon never launched — found 2026-10-07 by test-mcp-front-repo-daemon.sh). perl does ship
+# with macOS and exposes the same flock(2): take the lock, then exec the selection with the
+# descriptor kept open ($^F = 255 stops perl closing it across the exec), so the lock is held
+# until the selection finishes. A second launcher WAITS its turn instead of exiting.
 LOCKFILE="$HERE/.port-lock"
-(
-  flock -n 9 || { echo "repo-daemon: another launcher holds the port lock — exiting" >&2; exit 75; }
-  PORT=$BASE_PORT
-  while lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; do
-    PORT=$((PORT + 1))
-  done
-  echo "$PORT" > "$HERE/port"
-) 9>"$LOCKFILE"
+perl -MFcntl=:flock -e '$^F = 255; open(my $fh, ">>", shift) or die "port lock: $!\n"; flock($fh, LOCK_EX) or die "port lock: $!\n"; exec @ARGV or die "exec: $!\n"' \
+  "$LOCKFILE" bash -c '
+    PORT=$1
+    while lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; do PORT=$((PORT + 1)); done
+    echo "$PORT" > "$2"' _ "$BASE_PORT" "$HERE/port" \
+  || { echo "repo-daemon: could not select a port under the lock" >&2; exit 75; }
 PORT=$(cat "$HERE/port")
 
 # Record the resolved endpoint where clients look. A jq failure here (a hand-edited

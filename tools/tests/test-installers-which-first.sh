@@ -26,16 +26,22 @@ out="$("$HERE/../periphery/install.sh" 2>&1)"; rc=$?
 assert_eq "0" "$rc" "periphery install exits 0"
 printf '%s\n' "$out" | grep -q "already installed: periphery" && pass "periphery detected, brew bundle skipped" || fail "periphery: no 'already installed' line"
 
-# ---- ponytail: real fetch into a temp repo, idempotent second run ----
-REPO="$SB/repo"; mkdir -p "$REPO"
-assert_rc 0 "ponytail installs into a repo" "$HERE/../ponytail/install-into-repo.sh" "$REPO"
+# ---- ponytail: installs the vendored skills into a temp repo, idempotent second run ----
+# This block called ponytail/install-into-repo.sh, which the 2026-10-04 move to the shared
+# astra_place pattern removed, so it failed with rc=127 ("not found") ever since. The skills
+# are vendored now and nothing is fetched, so idempotent means the second run succeeds and
+# leaves every installed byte as it was.
+REPO="$SB/repo"; mkdir -p "$REPO"; git -C "$REPO" init -q
+assert_rc 0 "ponytail installs into a repo" "$HERE/../ponytail/install.sh" --into "$REPO"
 assert_file "$REPO/.claude/skills/ponytail/SKILL.md" "ponytail skill landed"
 assert_file "$REPO/.claude/skills/ponytail-audit/SKILL.md" "ponytail-audit skill landed"
 assert_contains "$REPO/.claude/skills/ponytail/SKILL.md" "name:" "skill has frontmatter (not an error page)"
-out="$("$HERE/../ponytail/install-into-repo.sh" "$REPO" 2>&1)"
-printf '%s\n' "$out" | grep -c "already installed" | grep -q "^2$" && pass "second run: both skills detected, nothing re-fetched" || fail "ponytail re-run not idempotent"
+before="$(cd "$REPO" && find .claude -type f -exec shasum {} + | sort)"
+assert_rc 0 "ponytail re-run succeeds" "$HERE/../ponytail/install.sh" --into "$REPO"
+after="$(cd "$REPO" && find .claude -type f -exec shasum {} + | sort)"
+assert_eq "$before" "$after" "second run leaves every installed file byte-identical"
 
 # ---- RED controls ----
-red "ponytail without a repo arg must fail" 1 "usage: install-into-repo.sh" "$HERE/../ponytail/install-into-repo.sh"
+red "ponytail without --into must fail" 64 "usage: --into" "$HERE/../ponytail/install.sh"
 
 finish
