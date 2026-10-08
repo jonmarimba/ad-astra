@@ -117,7 +117,16 @@ APP="\$(cd "\$(dirname "\$0")" && pwd)/$NAME.app"
 LOG="$LOG"
 before=0
 [ -f "\$LOG" ] && before=\$(wc -l < "\$LOG")
-open -g -W -a "\$APP" || { echo "$NAME: FAILED to launch \$APP"; exit 1; }
+# LaunchServices refuses an occasional launch on a machine under heavy load (seen at a load average
+# of 30: one launch of three failed, the same app launched fine a second later). A scheduled job
+# that dies on that wastes its whole run, so try three times before giving up. \`open -W\` fails only
+# when the app could not be launched; an app that ran and then failed returns 0 here.
+launched=0
+for attempt in 1 2 3; do
+  if open -g -W -a "\$APP"; then launched=1; break; fi
+  sleep 2
+done
+[ "\$launched" = 1 ] || { echo "$NAME: FAILED to launch \$APP"; exit 1; }
 new="\$(tail -n +\$((before + 1)) "\$LOG")"
 printf '%s\n' "\$new" | grep -v '^=== run '
 # The .app swallows the wrapped script's exit code; the app command records it in the log

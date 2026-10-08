@@ -102,4 +102,15 @@ red "non-executable script must fail" 1 "is not executable" "$WIA" "$SB/noexec.s
 red "unknown flag must fail" 64 "unknown flag '--outdri'" "$WIA" "$SB/job.sh" --log "$SB/l.log" --outdri "$SB/out"
 red "missing script must fail" 64 "usage: wrap-in-app" "$WIA" --log "$SB/l.log"
 
+# ---- a launch that really cannot succeed still fails, after the retries ----
+# The shim retries `open` because LaunchServices refuses an occasional launch on a loaded machine.
+# That must not turn a genuinely missing app into a silent success: three tries, then the named failure.
+mv "$APP" "$SB/out/TestJobWrapper.app.gone"
+t0=$(date +%s)
+gone_out="$(bash "$SHIM" 2>&1)"; gone_rc=$?
+elapsed=$(( $(date +%s) - t0 ))
+assert_eq 1 "$gone_rc" "a missing app makes the shim exit 1"
+case "$gone_out" in *"FAILED to launch"*) pass "and names the failure" ;; *) fail "no 'FAILED to launch' in: $gone_out" ;; esac
+[ "$elapsed" -ge 4 ] && pass "after trying more than once (${elapsed}s, two 2s pauses)" || fail "gave up after ${elapsed}s: the retry loop did not run"
+
 finish

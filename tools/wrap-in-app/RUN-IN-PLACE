@@ -1,0 +1,1 @@
+Builds a signed Automator .app around a shell script so scheduled runs get macOS TCC permissions. Run it from the checkout; each app it emits belongs to the machine and the script's owner.
