@@ -61,6 +61,14 @@ game changer
 best-in-class
 deep dive
 
+# --- "carry" (Jonathan, 2026-10-08) ---
+# Machine-flavored filler verb for "has", "includes" or "contains": "the builds carry the fix", "the
+# release carries fresh data". Jonathan banned it while reviewing the 2707 build email. Substring
+# match, so "carry" also catches "carrying" and "carryover"; "carries" and "carried" need their own lines.
+carry
+carries
+carried
+
 # --- the "matters" family ---
 # THE LIST HELD ONLY THE STOCK PHRASES, AND THE RULE IS THE WHOLE VERB. CLAUDE.md says never
 # write "matters" at all, and this section encoded six set-pieces instead — so "something that
