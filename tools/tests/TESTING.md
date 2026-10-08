@@ -31,6 +31,12 @@ Every astra script that puts Homebrew on `PATH` lets `ASTRA_PATH` replace it. Th
 
 The fakes encode Homebrew behavior that bit us on the real machine. `bundle list` can print a banner on stdout. `upgrade` and `uninstall` autoremove orphaned dependencies, including ones the tool never installed. When you add a brew verb to an installer, add it to the fake first.
 
+### The real Homebrew
+
+`test-real-brew.sh` installs a genuine Homebrew into a mktemp directory with `git clone`. It takes the real Homebrew out of `PATH`, including its `opt/` directories, and runs the verbs astra's tools use against the new one. This checks the fake's assumptions instead of repeating them. It proved that a bare `brew uninstall` autoremoves unrelated orphans, and that the `HOMEBREW_NO_AUTOREMOVE` guard stops it. It needs the network and says so when it has none.
+
+Only relocatable bottles pour into another prefix: `jq`, `uv` and `exiftool` do. Bottles tied to `/opt/homebrew/Cellar` (`poppler`, `gettext`, `ffmpeg`) cannot be installed anywhere else, so the full upgrade of every tool stays on the stand-in. Formulae that build from source, such as `axe` and `imsg`, fail inside another sandbox (an agent's shell) because Homebrew refuses to nest its own. They work in an ordinary terminal.
+
 ## Review step
 
 New tools and non-trivial changes get an adversarial review before shipping. The review is the `code-review` skill on the diff, or a `panel` round (skills/convocation) with the other CLIs as independent reviewers. Findings get fixed in place, not appended.
