@@ -17,7 +17,7 @@
 #   ./install.sh --into <repo>    deps + wire that repo
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 # The kit's own files, in the order a reader should meet them.
 # md2pdf is the headless PDF path and it was MISSING from this list until
@@ -29,6 +29,9 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$P
 KIT_FILES="generate_pdf_sidecars.sh pdf_metadata.sh hook_pre_commit.sh update_sidecars.sh export_docx.py pdf_add_footer.py md2pdf marked_to_pdf.sh reocr_all_pdfs.sh reocr_all_pdfs_parallel.sh"
 
 install_deps() {
+  # ASTRA_SKIP_MACHINE_DEPS=1 wires the repo without touching Homebrew or uv: for a machine
+  # whose dependencies are managed another way, and for tests of the wiring itself.
+  [ -z "${ASTRA_SKIP_MACHINE_DEPS:-}" ] || { echo "ASTRA_SKIP_MACHINE_DEPS set; not installing ocrmypdf/tesseract/poppler/marker"; return 0; }
   command -v brew >/dev/null && brew bundle --file="$HERE/Brewfile" \
     || echo "no brew; ensure ocrmypdf, tesseract, poppler present"
   command -v uv >/dev/null || { echo "installing uv…"; curl -LsSf https://astral.sh/uv/install.sh | sh; }
@@ -126,7 +129,7 @@ if git -c core.quotePath=false diff --cached --name-only --diff-filter=ACM | gre
     if [ ! -x "$_kit" ]; then
         echo "pre-commit: PDFs are staged but $_kit is missing." >&2
         echo "  Refusing to commit PDFs with no text sidecars. Reinstall:" >&2
-        echo "    js-db-ad-astra/tools/pdf-sidecars/install.sh --into ." >&2
+        echo "    python3 <your astra checkout>/tools/lib/template.py install legal-pdf --into ." >&2
         exit 1
     fi
     "$_kit" || exit $?

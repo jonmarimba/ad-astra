@@ -16,7 +16,7 @@ Each agent gets the identical task file, a separate working directory, and NO si
 The runner does this round: one call dispatches every brand through its own CLI, validates each voice before it starts, and refuses a short-handed round.
 
 ```sh
-~/svnCheckouts/js-db-ad-astra/tools/convocation/panel TASK.md --out out --agents claude,codex,qwen --tag round1
+.astra/convocation/panel TASK.md --out out --agents claude,codex,qwen --tag round1
 ```
 
 It finds `claude`, `codex` and `qwen` on PATH; `CLAUDE_BIN`, `CODEX_BIN` and `QWEN_BIN` override them. Resist the urge to peek and steer mid-round — a steered agent is a copy of you.

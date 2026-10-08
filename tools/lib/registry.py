@@ -45,7 +45,10 @@ import sys
 from pathlib import Path
 
 ASTRA = Path(__file__).resolve().parent.parent.parent      # js-db-ad-astra
-WORKSPACE = Path(os.environ.get("ASTRA_WORKSPACE", Path.home() / "svnCheckouts")).resolve()
+# The workspace is the directory the astra checkout sits in, so repos cloned beside it are
+# in scope on any machine. It used to default to ~/svnCheckouts, which refused every install
+# on a machine that keeps its checkouts anywhere else. ASTRA_WORKSPACE still overrides.
+WORKSPACE = Path(os.environ.get("ASTRA_WORKSPACE", ASTRA.parent)).resolve()
 REGISTRY = ASTRA / "tools" / "lib" / "installed.json"
 
 FORBIDDEN_PREFIXES = [

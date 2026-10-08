@@ -6,7 +6,7 @@
 #
 #   panel TASK.md --out outdir [--agents claude,codex,qwen] [--tag round1]
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 TASK="${1:?usage: panel TASK.md --out DIR [--agents claude,codex,qwen] [--tag round1]}"; shift
 OUT="convocation-out"; AGENTS="claude,codex,qwen"; TAG="round1"
 while [ $# -gt 0 ]; do case "$1" in
@@ -25,7 +25,7 @@ PROMPT="$(cat "$TASK")"
 # with macOS; alarm + exec is the portable equivalent, exit 142 on expiry.
 with_timeout() { local s="$1"; shift; perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$s" "$@"; }
 # Resolve each CLI from PATH; an *_BIN variable still overrides.
-resolve_bin() { command -v "$1" 2>/dev/null || echo "/opt/homebrew/bin/$1"; }
+resolve_bin() { command -v "$1" 2>/dev/null || echo "$1"; }
 CLAUDE_BIN="${CLAUDE_BIN:-$(resolve_bin claude)}"
 CODEX_BIN="${CODEX_BIN:-$(resolve_bin codex)}"
 QWEN_BIN="${QWEN_BIN:-$(resolve_bin qwen)}"

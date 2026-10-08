@@ -6,8 +6,9 @@
 #   astra status                    what this repo asked for, what it has, hooks wired?
 #   astra list                      the named sets (templates.json) and every tool
 #   astra sync [dir...]             once per machine or fresh clone: wire the hooks
-#                                   and pull updates in every repo under ~/svnCheckouts
-#                                   (or the dirs given) that has astra tools. Git does
+#                                   and pull updates in every repo beside this astra
+#                                   checkout (or under the dirs given) that has astra
+#                                   tools. Git does
 #                                   not clone hooks, so a new checkout needs this once.
 #
 # A name is either a set from tools/lib/templates.json (writing, legal-pdf,
@@ -43,7 +44,7 @@ case "$cmd" in
     python3 "$A/tools/lib/astra_manifest.py" status "$repo"
     [ -x "$repo/.astra/astra-update" ] && "$repo/.astra/astra-update" || true ;;
   sync)
-    roots=("${names[@]+"${names[@]}"}"); [ ${#roots[@]} -gt 0 ] || roots=("$HOME/svnCheckouts")
+    roots=("${names[@]+"${names[@]}"}"); [ ${#roots[@]} -gt 0 ] || roots=("$(dirname "$A")")   # the directory astra sits in, not a fixed home path
     seen=" "
     for root in "${roots[@]}"; do
       while IFS= read -r m; do

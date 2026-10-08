@@ -23,7 +23,7 @@
 #   convoq search '<terms>'       full-text search; --kind human for his words
 #   convoq show <token>           jump to full context around a hit
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 # The engine is a git submodule of astra (vendor/authsec-bridge, from
 # jonmarimba/authsec-bridge), so astra carries its own pinned copy and never
@@ -32,21 +32,36 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$P
 # a crash in `convoq update`. CONVOQ_BRIDGE still overrides it.
 # Run from the astra checkout, the engine sits beside it. An installed copy
 # (<repo>/.astra/convoq/convoq) finds astra through the manifest's recorded
-# source, then ~/svnCheckouts/js-db-ad-astra. convoq searches THIS machine's
-# transcripts, so needing astra's engine on the machine is inherent to it.
+# source, then $ASTRA_SOURCE (the same override astra-update honours) for a repo
+# whose recorded source is on another machine. There is no guessed default
+# location: a path into one person's home directory is wrong on every other
+# machine, and the failure below names the real remedy. convoq searches THIS
+# machine's transcripts, so needing astra's engine on the machine is inherent.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 if [ -n "${CONVOQ_BRIDGE:-}" ]; then BRIDGE="$CONVOQ_BRIDGE"
 elif [ -d "$HERE/../../vendor/authsec-bridge/src" ]; then BRIDGE="$HERE/../../vendor/authsec-bridge"
 else
   ASTRA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tools"]["convoq"]["source"])' "$HERE/../manifest.json" 2>/dev/null)"
-  [ -d "${ASTRA:-/nonexistent}/vendor/authsec-bridge/src" ] || ASTRA="$HOME/svnCheckouts/js-db-ad-astra"
-  BRIDGE="$ASTRA/vendor/authsec-bridge"
+  [ -d "${ASTRA:-/nonexistent}/vendor/authsec-bridge/src" ] || ASTRA="${ASTRA_SOURCE:-}"
+  BRIDGE="${ASTRA:-/nonexistent}/vendor/authsec-bridge"
 fi
-PY="${CONVOQ_PYTHON:-/opt/homebrew/bin/python3}"
+# The first interpreter that is 3.10+, wherever this machine keeps Python: Homebrew on Apple
+# Silicon or Intel, a versioned binary, pyenv, or the system one when it is new enough.
+# CONVOQ_PYTHON still wins outright. If none qualifies, the checks below say why.
+PY="${CONVOQ_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for cand in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
+    c="$(command -v "$cand" 2>/dev/null)" || continue
+    if "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then PY="$c"; break; fi
+    FIRST_PY="${FIRST_PY:-$c}"
+  done
+  PY="${PY:-${FIRST_PY:-python3}}"
+fi
 
 if [ ! -d "$BRIDGE/src/session_bridge" ]; then
   echo "convoq: session_bridge not found at $BRIDGE/src" >&2
-  echo "convoq: it needs the astra checkout with its submodule: git -C <astra> submodule update --init (or set CONVOQ_BRIDGE)" >&2
+  echo "convoq: it needs the astra checkout with its submodule. Set ASTRA_SOURCE=<path to the astra checkout>," >&2
+  echo "convoq: and run git -C <astra> submodule update --init there (or set CONVOQ_BRIDGE to the engine directly)." >&2
   exit 3
 fi
 
@@ -94,7 +109,7 @@ if [ "${1:-}" = "update" ] && [ "$#" -eq 1 ]; then
   # alphanumerics). Replacing only '/' misses a path with a '.' or space; replacing EVERY
   # non-alphanumeric wrongly mangles '_'. Either miss sends the folder lookup astray and
   # `update` falls through to unqualified discovery, indexing an unrelated session. Verified
-  # against real dirs: /Users/jonathan/.kicker -> -Users-jonathan--kicker. (ghost-openclaw
+  # against real dirs: <home>/.kicker -> <home with dashes>--kicker. (ghost-openclaw
   # peer review of 775599d, then 09fa603/1569394.)
   SLUG="$(printf '%s' "$REPO_ROOT" | sed 's#[\\/:.[:space:]]#-#g')"
   PROJ_DIR="$HOME/.claude/projects/$SLUG"

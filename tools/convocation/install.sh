@@ -5,7 +5,7 @@
 # copy through a different package manager.
 #   claude = npm -g @anthropic-ai/claude-code   codex = npm -g @openai/codex   qwen = brew qwen-code
 set -euo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 
 # --into <repo> installs the per-repo piece ONLY: convocation's doctrine. It
 # never installs machine software, so `astra add base` in a repo cannot run
@@ -22,6 +22,10 @@ if [ -n "$INTO" ]; then
   # The skill that walks an agent through a convocation, installed with its doctrine.
   . "$HERE/../lib/astra-install.sh"; astra_target --into "$INTO"
   astra_place_at convocation-skill "agents-and-prompts/skills/convocation/SKILL.md:.claude/skills/convocation/SKILL.md"
+  # The dispatcher the doctrine names. It is one self-contained file, so it travels with the
+  # repo (.astra/convocation/panel) instead of being reached through a path into the astra
+  # checkout, which exists at a different place on every machine.
+  astra_place convocation panel
   exit 0
 fi
 

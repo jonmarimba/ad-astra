@@ -40,6 +40,10 @@ The practical consequences: build with the `build` tool (it returns warnings inl
 
 Each repo answers for itself. `.astra/manifest.json` records which templates the repo has, the full resolved tool list, and the exact content hashes of every installed file. There is no central registry by design. The first push-based design let a bug in this repo damage other repos, so the direction was inverted. Each repo pulls, and this repo never reaches into anyone.
 
+## Where the astra checkout lives
+
+Nothing assumes a fixed location. Clone this repo anywhere, under any name. A repo records where it was installed from in its manifest. Suppose you move the checkout, or clone a repo onto a machine with no copy at the recorded path. Set `ASTRA_SOURCE=<path to your astra checkout>`, and updates and `convoq` work again. Clone the checkout with `--recurse-submodules`, because `convoq` needs the engine in `vendor/authsec-bridge`. `tools/tests/test-portable-install.sh` proves all of this by installing from a renamed copy into a repo on a machine with an empty home directory.
+
 ## How updates happen
 
 `.astra/astra-update --pull`, run inside your repo, asks this repo whether anything moved on and updates in place. It only touches files that are still exactly what the installer wrote; anything you edited locally is reported, never overwritten. Every install wires a post-commit and a post-merge hook that run it in the background, so a repo you commit to or pull into stays current without anyone thinking about it.
