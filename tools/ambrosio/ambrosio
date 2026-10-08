@@ -577,11 +577,14 @@ run_cloud() {
   fi
 
   if [ -x "$OMNIROUTE_SYNC_BIN" ]; then
-    out="$("$OMNIROUTE_SYNC_BIN" 2>&1)"; rc=$?
+    # --prune on every run: dead models get cleaned up alongside the additive sync.
+    # The pruner has its own provider-outage safety guard (refuses when ALL models fail),
+    # so passing it unconditionally is safe.
+    out="$("$OMNIROUTE_SYNC_BIN" --prune 2>&1)"; rc=$?
     # The sync narrates every run. Only surface the lines that mean something changed or
     # something could not be verified; a clean "added 0" run is silence, per the schd
     # convention that output means attention is needed.
-    printf '%s\n' "$out" | grep -Ei 'added [1-9]|timed out|skip |could NOT|unverified|FAIL' || true
+    printf '%s\n' "$out" | grep -Ei 'added [1-9]|pruned [1-9]|timed out|skip |could NOT|unverified|FAIL|DEAD|NEEDS ENABLING' || true
     [ "$rc" -ne 0 ] && log "omniroute-model-sync exited $rc"
   else
     echo "ambrosio: omniroute-model-sync NOT FOUND at $OMNIROUTE_SYNC_BIN — the cloud catalog did NOT sync"
