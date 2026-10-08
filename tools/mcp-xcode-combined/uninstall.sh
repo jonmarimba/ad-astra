@@ -36,10 +36,19 @@ if [ -f "$MCPJSON" ] && jq -e --arg n "$NAME" '.mcpServers[$n]' "$MCPJSON" >/dev
   fi
 fi
 
+QWENJSON="$TARGET/.qwen/settings.json"
+if [ -f "$QWENJSON" ] && jq -e --arg n "$NAME" '.mcpServers[$n]' "$QWENJSON" >/dev/null 2>&1; then
+  tmp="$(mktemp)"
+  jq --arg n "$NAME" 'del(.mcpServers[$n]) | if (.mcpServers | length) == 0 then del(.mcpServers) else . end' "$QWENJSON" > "$tmp" \
+    || { rm -f "$tmp"; echo "mcp-xcode-combined: FAIL — $QWENJSON is not valid JSON; fix it by hand." >&2; exit 65; }
+  if [ "$(jq 'length' "$tmp")" = 0 ]; then rm -f "$QWENJSON" "$tmp"; echo "mcp-xcode-combined: removed $NAME; $QWENJSON held nothing else, so it is gone too"
+  else mv "$tmp" "$QWENJSON"; echo "mcp-xcode-combined: removed $NAME from $QWENJSON"; fi
+fi
+
 CODEXTOML="$TARGET/.codex/config.toml"
 if [ -f "$CODEXTOML" ]; then
   python3 - "$CODEXTOML" "$NAME" <<'PY'
-import sys
+import os, sys
 path, name = sys.argv[1], sys.argv[2]
 header = f"[mcp_servers.{name}]"
 lines = open(path).read().split("\n")
@@ -55,8 +64,12 @@ for line in lines:
         out.append(line)
 if removed:
     text = "\n".join(out).rstrip("\n") + "\n"
-    open(path, "w").write(text if text.strip() else "")
-    print(f"mcp-xcode-combined: removed {header} from {path}")
+    if text.strip():
+        open(path, "w").write(text)
+        print(f"mcp-xcode-combined: removed {header} from {path}")
+    else:
+        os.remove(path)
+        print(f"mcp-xcode-combined: removed {header}; {path} held nothing else, so it is gone too")
 PY
 fi
 exit 0

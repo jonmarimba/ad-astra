@@ -46,6 +46,23 @@ if [ -f "$TOOLS/mcp-xcode-combined/uninstall.sh" ]; then
   "$TOOLS/mcp-xcode-combined/install.sh" --into "$R2" >/dev/null 2>&1
   "$TOOLS/mcp-xcode-combined/uninstall.sh" --into "$R2" >/dev/null 2>&1
   assert_no_file "$R2/.mcp.json" "a .mcp.json holding only our entry is removed"
+  # all three agents get the entry, creating each file when it is missing, and uninstall removes
+  # exactly that: the first install used to leave Codex and Qwen without Xcode (found 2026-10-08)
+  R4="$SB/repo4"; mkdir -p "$R4"
+  "$TOOLS/mcp-xcode-combined/install.sh" --into "$R4" >/dev/null 2>&1
+  assert_eq "http://127.0.0.1:8767/mcp" "$(jq -r '.mcpServers["xcode-combined"].url' "$R4/.mcp.json")" "a fresh repo gets the Claude entry"
+  assert_eq "http://127.0.0.1:8767/mcp" "$(jq -r '.mcpServers["xcode-combined"].httpUrl' "$R4/.qwen/settings.json")" "a fresh repo gets the Qwen entry, in Qwen's httpUrl shape"
+  assert_contains "$R4/.codex/config.toml" "[mcp_servers.xcode-combined]" "a fresh repo gets the Codex entry, with no config file there before"
+  "$TOOLS/mcp-xcode-combined/install.sh" --into "$R4" >/dev/null 2>&1
+  assert_eq 1 "$(grep -c 'mcp_servers.xcode-combined' "$R4/.codex/config.toml")" "installing twice does not duplicate the Codex entry"
+  mkdir -p "$SB/repo5/.qwen"; printf '{"mcpServers":{"keep":{"command":"x"}},"theme":"dark"}\n' > "$SB/repo5/.qwen/settings.json"
+  "$TOOLS/mcp-xcode-combined/install.sh" --into "$SB/repo5" >/dev/null 2>&1
+  "$TOOLS/mcp-xcode-combined/uninstall.sh" --into "$SB/repo5" >/dev/null 2>&1
+  assert_eq '{"mcpServers":{"keep":{"command":"x"}},"theme":"dark"}' "$(jq -c . "$SB/repo5/.qwen/settings.json")" "uninstall restores a Qwen config with other settings exactly"
+  "$TOOLS/mcp-xcode-combined/uninstall.sh" --into "$R4" >/dev/null 2>&1
+  assert_no_file "$R4/.mcp.json" "uninstall removes the .mcp.json it created"
+  assert_no_file "$R4/.qwen/settings.json" "and the Qwen settings it created"
+  assert_no_file "$R4/.codex/config.toml" "and the Codex config it created"
   # RED control: an uninstall that touches a repo it never installed into must not invent files
   R3="$SB/repo3"; mkdir -p "$R3"
   "$TOOLS/mcp-xcode-combined/uninstall.sh" --into "$R3" >/dev/null 2>&1

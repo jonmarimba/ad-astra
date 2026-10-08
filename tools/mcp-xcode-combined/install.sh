@@ -10,14 +10,19 @@
 # unanswered dialog even CRASHES the bridge (assertionFailure in MCPBridge.main(), crash
 # logs 2026-08-26..09-01). This tool exists so no repo ever direct-spawns those two servers.
 #
-# Writes an HTTP server entry (no process spawned, nothing to approve per-repo):
+# Writes an HTTP server entry for ALL THREE agents (no process spawned, nothing to approve per-repo):
 #   Claude Code -> <repo>/.mcp.json               (server "xcode-combined", type http)
-#   Codex CLI   -> <repo>/.codex/config.toml      (only if that file already exists;
-#                                                  codex on this Mac carries the entry
-#                                                  user-globally, added 2026-09-01)
+#   Qwen Code   -> <repo>/.qwen/settings.json     (mcpServers.xcode-combined.httpUrl)
+#   Codex CLI   -> <repo>/.codex/config.toml      ([mcp_servers.xcode-combined] url)
+# Each file is created when it is missing. That matters: Qwen and Codex take a project config INSTEAD
+# of the user-level one, not merged with it, so a repo whose other MCP servers made a project config
+# but whose Xcode entry did not would lose Xcode in that agent. This tool used to write the Codex
+# entry only if .codex/config.toml already existed and never wrote Qwen's, so the first install of
+# swift-ios (this tool runs before the bundle creates those files) left Codex without Xcode until a
+# second install, and Qwen without it for good (found 2026-10-08 by test-template-swift.sh).
 #
 # The mcp-bundle engine handles stdio spawns only, so this writes its own entries.
-# Dependencies: jq (Claude entry), python3 (codex toml edit).
+# Dependencies: jq (Claude and Qwen entries), python3 (codex toml edit).
 #
 # Usage: ./install.sh --into <repo>
 set -uo pipefail
@@ -49,22 +54,34 @@ else
 fi
 echo "mcp-xcode-combined: wrote $NAME -> $URL into $MCPJSON"
 
-# Codex keeps per-repo config in <repo>/.codex/config.toml. Only touch it if the repo
-# already opted into one — codex on this machine has the aggregator user-globally.
+# Qwen keeps per-repo config in <repo>/.qwen/settings.json; an HTTP server is a `httpUrl` entry (the
+# shape `qwen mcp add --scope project --transport http` writes).
+QWENJSON="$TARGET/.qwen/settings.json"
+mkdir -p "$TARGET/.qwen"
+if [ -f "$QWENJSON" ]; then
+  tmp="$(mktemp)"
+  jq --arg name "$NAME" --arg url "$URL" '.mcpServers[$name] = {"httpUrl":$url}' "$QWENJSON" > "$tmp" \
+     || { rm -f "$tmp"; echo "mcp-xcode-combined: FAIL — $QWENJSON is not valid JSON; fix it by hand." >&2; exit 65; }
+  mv "$tmp" "$QWENJSON"
+else
+  jq -n --arg name "$NAME" --arg url "$URL" '{"mcpServers": {($name): {"httpUrl":$url}}}' > "$QWENJSON"
+fi
+echo "mcp-xcode-combined: wrote $NAME -> $URL into $QWENJSON"
+
+# Codex keeps per-repo config in <repo>/.codex/config.toml.
 CODEXTOML="$TARGET/.codex/config.toml"
-if [ -f "$CODEXTOML" ]; then
-  python3 - "$CODEXTOML" "$NAME" "$URL" <<'PY'
-import sys
+mkdir -p "$TARGET/.codex"
+python3 - "$CODEXTOML" "$NAME" "$URL" <<'PY'
+import os, sys
 path, name, url = sys.argv[1], sys.argv[2], sys.argv[3]
-s = open(path).read()
+s = open(path).read() if os.path.exists(path) else ""
 header = f"[mcp_servers.{name}]"
 if header in s:
     print(f"mcp-xcode-combined: {path} already has {header}; left as-is")
 else:
     with open(path, "a") as f:
-        f.write(f"\n{header}\nurl = \"{url}\"\n")
-    print(f"mcp-xcode-combined: appended {header} to {path}")
+        f.write(("\n" if s and not s.endswith("\n\n") else "") + f"{header}\nurl = \"{url}\"\n")
+    print(f"mcp-xcode-combined: wrote {header} into {path}")
 PY
-fi
 
 exit 0
