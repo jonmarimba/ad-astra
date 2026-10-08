@@ -29,6 +29,7 @@ LMS_BIN="~/.lmstudio/bin/lms"
 LMS_FORMAT="--mlx"
 MAX_PER_RUN="1"
 MIN_PARAMS_B="7"
+CLOUD="0"
 EOF
 
 # trending payload has ONE candidate — "GLM-4.5-Air" — that would normally consume the sole

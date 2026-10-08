@@ -13,11 +13,12 @@
 # Routing: new entries route THROUGH OmniRoute (baseUrl http://localhost:20128/v1), not direct
 # to a local port — Jonathan's explicit preference (single system of record, log visibility).
 #
-# The model id used for routing comes from `omniroute api models get-api-models` — the real
-# management "models getter" endpoint (Jonathan's term, and he's right: this is the documented
-# way to get this, not something to derive/guess). It returns each model's actual `fullModel`
-# id (e.g. "ollamacloud/gemma4:31b" — nothing like the display-name-derived tag guessing this
-# script used at first) and an `available` boolean. First version of this script guessed a tag
+# Model ids come from OmniRoute's management getter and its live `/v1/models` serving catalog.
+# The management getter can lag: on 2026-10-08 it listed 12 Ollama Cloud routes while the serving
+# catalog listed 29, including GLM 5.3 and Kimi K3. The union is verified by real route probes.
+# Effort-specific aliases are skipped when building the picker. The getter returns each model's
+# actual `fullModel` id (e.g. "ollamacloud/gemma4:31b" — unlike display-name-derived guessing) and
+# an `available` boolean. First version of this script guessed a tag
 # from the catalog's display name and verified it against `ollama show`; that missed 3 of 9
 # ollamacloud models outright (Gemma, Nemotron, Qwen 3.5 — their real ids don't follow the
 # lowercase-dashes-plus-":cloud" pattern at all) and, worse, an earlier iteration used the raw
@@ -38,10 +39,9 @@
 #
 # Never touches the active `model` selection, never touches ambrosio, never touches anything
 # outside the modelProviders.openai list (qwen) / omniroute.models map (OpenCode).
-# With --prune: after the additive pass, probes each ollamacloud/ entry in both configs that
-# is NOT in the getter's live catalog and removes those that fail the probe (the getter can be
-# stale, so the probe is the authority). This closes the gap where retired models sat in configs
-# indefinitely. The probe uses the same verified-live check as the additive pass.
+# With --prune: after the additive pass, probes existing Ollama Cloud entries. A failing route
+# stays in the pickers until a second failed check at least 24 hours later. A temporary provider
+# outage cannot remove every route because pruning also requires another route to answer.
 set -uo pipefail
 export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 
@@ -84,7 +84,20 @@ for m in data.get('models', []):
         # tab-separated: fullModel, display name, available (1/0) — avoids fighting the shell
         # over spaces in display names like 'DeepSeek V4 Pro'.
         print(f\"{m['fullModel']}\t{m['name']}\t{1 if m.get('available') else 0}\")
-" > "$TMP/models.tsv"
+" > "$TMP/management-models.tsv"
+
+# The management getter can lag behind routes already served by OmniRoute. Read the
+# serving catalog too, and probe every candidate before adding it to a picker.
+"$OMNIROUTE_BIN" --output json api models get-api-v1-models 2>"$TMP/serving-stderr.log" \
+  | sed -n '/^{/,$p' > "$TMP/serving.json"
+if ! jq -e '.data | type == "array"' "$TMP/serving.json" >/dev/null 2>"$TMP/serving-parse.log"; then
+  echo "omniroute-model-sync: serving catalog unavailable; refusing additions and pruning until both catalogs can be compared" >&2
+  cat "$TMP/serving-stderr.log" "$TMP/serving-parse.log" >&2
+  exit 1
+fi
+jq -r -f "$(dirname "$0")/serving-candidates.jq" "$TMP/serving.json" > "$TMP/serving-models.tsv"
+cat "$TMP/serving-models.tsv" "$TMP/management-models.tsv" \
+  | awk -F '\t' '!seen[$1]++' > "$TMP/models.tsv"
 
 if [ ! -s "$TMP/models.tsv" ]; then
   echo "omniroute-model-sync: OmniRoute returned zero ollamacloud entries — is 'omniroute serve' up? Nothing to do." >&2
@@ -280,12 +293,16 @@ if [ "$PRUNE" -eq 1 ]; then
 
   # Collect ollamacloud ids from both configs
   jq -r '.modelProviders.openai[]? | .id' "$QW" 2>/dev/null | grep '^ollamacloud/' | sort -u > "$TMP/qw_ids.txt"
-  grep -o '"ollamacloud/[^"]*"' "$OC" 2>/dev/null | tr -d '"' | sort -u > "$TMP/oc_ids.txt"
+  python3 "$(dirname "$0")/opencode-model-ids.py" "$OC" | sort -u > "$TMP/oc_ids.txt"
   sort -u "$TMP/qw_ids.txt" "$TMP/oc_ids.txt" > "$TMP/all_config_ids.txt"
 
   PRUNED_QW=0
   PRUNED_OC=0
   PRUNE_IDS=""
+  PRUNE_LEDGER="${OMNIROUTE_SYNC_STATE_DIR:-$HOME/.cache/omniroute-model-sync}/prune-first-failed.tsv"
+  mkdir -p "$(dirname "$PRUNE_LEDGER")"
+  [ -f "$PRUNE_LEDGER" ] || : > "$PRUNE_LEDGER"
+  : > "$TMP/next-prune-ledger.tsv"
 
   # First pass: probe everything and collect results. Then check for a provider-level
   # outage before removing anything — if every ollamacloud model in the configs is dead,
@@ -309,13 +326,21 @@ if [ "$PRUNE" -eq 1 ]; then
       continue
     fi
 
-    if grep -qxF "$cid" "$GETTER_IDS"; then
-      echo "  DEAD (getter says available, but routing rejects): $cid"
+    first_failed="$(awk -F '\t' -v id="$cid" '$1 == id {print $2; exit}' "$PRUNE_LEDGER")"
+    now="$(date +%s)"
+    if [ -z "$first_failed" ]; then
+      printf '%s\t%s\n' "$cid" "$now" >> "$TMP/next-prune-ledger.tsv"
+      echo "  UNAVAILABLE (first failed check; keeping for a second daily check): $cid"
+    elif [ $((now - first_failed)) -lt 86400 ]; then
+      printf '%s\t%s\n' "$cid" "$first_failed" >> "$TMP/next-prune-ledger.tsv"
+      echo "  UNAVAILABLE (less than 24 hours since first failed check; keeping): $cid"
     else
-      echo "  DEAD (not in getter, routing fails): $cid"
+      echo "  RETIRED CANDIDATE (failed checks at least 24 hours apart): $cid"
+      DEAD_LIST="$DEAD_LIST $cid"
     fi
-    DEAD_LIST="$DEAD_LIST $cid"
   done < "$TMP/all_config_ids.txt"
+
+  [ "$DRY_RUN" -eq 1 ] || mv "$TMP/next-prune-ledger.tsv" "$PRUNE_LEDGER"
 
   if [ "$ALIVE_COUNT" -eq 0 ] && [ "$TOTAL_PROBED" -gt 0 ]; then
     echo "omniroute-model-sync: ALL $TOTAL_PROBED ollamacloud models failed the probe — this looks like a provider-level outage, not individual retirements. Refusing to prune. Check whether OmniRoute's Ollama Cloud connection is healthy."

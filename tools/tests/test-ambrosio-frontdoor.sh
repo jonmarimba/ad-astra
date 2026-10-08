@@ -120,6 +120,7 @@ out3="$(bash "$AMBROSIO" check 2>/dev/null)"
 printf '%s' "$out3" | grep -q "ollama-watch NOT FOUND" \
     && pass "missing surface is reported on stdout" \
     || fail "missing surface was skipped silently — the front door stopped watching and said nothing"
+assert_rc 1 "missing surface returns failure" bash "$AMBROSIO" check
 export OLLAMA_WATCH_BIN="$SB/stub/ollama-watch"
 
 # ---- 5. A cloud tool that fails is reported, not swallowed.
@@ -133,8 +134,18 @@ err="$(bash "$AMBROSIO" check 2>&1 >/dev/null)"
 printf '%s' "$err" | grep -q "omniroute-model-sync exited 3" \
     && pass "a failing cloud tool is reported" \
     || fail "a failing cloud tool was swallowed: $err"
+assert_rc 1 "failing cloud tool returns failure" bash "$AMBROSIO" check
 
 # ---- 6. CLOUD=0 turns the cloud half off, for anyone who wants the old behaviour.
+cat > "$SB/stub/omniroute-model-sync" <<EOF
+#!/bin/bash
+echo "\$*" > "$SB/dry-sync-args"
+exit 0
+EOF
+chmod +x "$SB/stub/omniroute-model-sync"
+bash "$AMBROSIO" check --dry-run >/dev/null 2>"$SB/dry.err"
+assert_contains "$SB/dry-sync-args" "--prune --dry-run" "dry run reaches the cloud sync without changing its configuration"
+
 rm -f "$SB/watch.calls" "$SB/sync.calls"
 cat > "$SB/stub/omniroute-model-sync" <<'EOF'
 #!/bin/bash

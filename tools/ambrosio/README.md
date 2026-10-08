@@ -9,7 +9,7 @@ ambrosio check [--dry-run]   # whole loop; silent if host down or nothing new
 ambrosio status              # host up/down + loaded models + seen count + want-list + current trending candidates
 ```
 
-The tool is **reachability-gated**: it does nothing but a fast 6s probe while the host (M5) is unreachable. That is cheap enough to run every 4 hours. The cadence was daily; it changed because the M5 isn't always on the tailnet and daily was too sparse a retry window. Config `~/.ambrosio/config`: `HOST`/`SSH_TARGET`, `WATCHLIST`, `SIZE_CAP_GB`, `MAX_PER_RUN`, `MIN_PARAMS_B`, `LMS_BIN`, `LMS_FORMAT`.
+The tool is **reachability-gated**: it does nothing but a fast 6s probe while the host (M5) is unreachable. The current GhOST job runs it once a day; more frequent scans previously triggered Hugging Face rate limits. Config `~/.ambrosio/config`: `HOST`/`SSH_TARGET`, `WATCHLIST`, `SIZE_CAP_GB`, `MAX_PER_RUN`, `MIN_PARAMS_B`, `LMS_BIN`, `LMS_FORMAT`.
 
 The **want-list** lives at `~/.ambrosio/wantlist.txt`, one model family term per line. Tried first every run, ahead of the reactive trending scan, through the identical resolve/size-check/pull path — no separate code, same treatment. An explicit want-list entry always goes through, even if it shares a family with something already loaded (the redundancy check only gates the reactive scan). An entry stays in the file until it pulls successfully or is removed. The list is durable across the host being asleep for a while, not a queue that silently drains.
 
@@ -37,5 +37,9 @@ Tests: `tools/tests/test-ambrosio-frontdoor.sh`.
 
 The two cloud surfaces used to carry their own schd jobs — `ollama-watch` every 24h and `omniroute-model-sync` every 6h. Both were removed on 2026-08-22 once `check` started driving them, so each surface runs exactly once per pass instead of twice.
 
-Ambrosio's own job runs every 4 hours, which makes both cloud surfaces MORE frequent than before rather than less. The library watch goes from daily to four-hourly, and the catalog sync goes from six-hourly to four-hourly. There is no latency regression anywhere in the consolidation, which is why it was safe to do rather than something to weigh.
+The GhOST scheduler now runs `ambrosio check` once a day. Its cloud surfaces run in that same pass. The former four-hour schedule was retired after it triggered Hugging Face rate limits.
 
+
+The local model selector uses the configured `SIZE_CAP_GB` as a repository download-size ceiling and passes selected MLX repository URLs to LM Studio for download. It does not measure available disk space or estimate whether the selected model, its context, and other workloads fit in the host's current unified memory. The configured ceiling is policy, not a hardware probe.
+
+`check --dry-run` now forwards `--dry-run` to the OmniRoute catalog sync and does not advance the seen, held, or announced watermarks. A cloud surface that is missing or exits with an error makes `check` return nonzero after the other surfaces have run.

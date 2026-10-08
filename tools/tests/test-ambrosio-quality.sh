@@ -40,6 +40,7 @@ LMS_BIN="~/.lmstudio/bin/lms"
 LMS_FORMAT="--mlx"
 MAX_PER_RUN="2"
 MIN_PARAMS_B="7"
+CLOUD="0"
 EOF
 
 # ---- fixture: host already has a real Qwen3 family model loaded (real repo, matches
