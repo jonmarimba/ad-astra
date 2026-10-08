@@ -81,7 +81,8 @@
    "tools": [
     "convocation",
     "convoq",
-    "no-silent-truncation"
+    "no-silent-truncation",
+    "act-first-doctrine"
    ]
   }
  }

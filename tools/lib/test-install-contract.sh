@@ -47,7 +47,7 @@ for t in $REPO_TOOLS; do
   out="$("$ASTRA" add "$t" --into "$R" 2>&1)"; rc=$?
   [ $rc -eq 0 ] || { bad "$t: install failed (rc=$rc): $(echo "$out" | tail -2 | tr '\n' ' ')"; continue; }
   # convocation and writing-doctrine record as doctrine-<slug>
-  entry="$t"; case "$t" in convocation) entry=doctrine-convocation ;; writing-doctrine) entry=doctrine-writing ;; esac
+  entry="$t"; case "$t" in convocation) entry=doctrine-convocation ;; writing-doctrine) entry=doctrine-writing ;; act-first-doctrine) entry=doctrine-act-first ;; esac
   if ! manifest_has "$R" "$entry"; then bad "$t: no manifest entry '$entry'"; continue; fi
   missing=0; n=0
   while IFS= read -r d; do n=$((n+1)); [ -e "$R/$d" ] || missing=$((missing+1)); done < <(recorded_dests "$R" "$entry")
