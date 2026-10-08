@@ -36,7 +36,7 @@ if ! command -v axe >/dev/null; then
   brew install cameroncooke/axe/axe || { echo "axe: FAIL — brew install cameroncooke/axe/axe" >&2; exit 69; }
 else
   # install == update, per the repo rule: pull the latest from the external source.
-  brew upgrade cameroncooke/axe/axe 2>/dev/null || true
+  HOMEBREW_NO_AUTOREMOVE=1 brew upgrade cameroncooke/axe/axe 2>/dev/null || true   # never autoremove the owner's orphans
 fi
 axe --version >/dev/null 2>&1 || command -v axe >/dev/null || { echo "axe: FAIL — installed but not on PATH" >&2; exit 69; }
 echo "axe: $(command -v axe) ready"

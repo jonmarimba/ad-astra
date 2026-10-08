@@ -31,7 +31,7 @@ real_before="$(real_snapshot)"
 # ---- the machine's PATH: the fakes, what they install, and the system directories. Nothing else. ----
 # The agent CLI is a machine tool the bundle needs to write config; it is a native binary, so a symlink
 # makes it the one real program on an otherwise fake machine.
-mkdir -p "$W/sys"; ln -sf "$(command -v claude)" "$W/sys/claude"
+mkdir -p "$W/sys"   # the real agent CLI is linked in later, for the template step
 WPATH="$FAKES:$W/brew/prefix/bin:$HOME_W/.local/bin:$W/sys:/usr/bin:/bin:/usr/sbin:/sbin"
 world() {  # run a command inside the throwaway machine
   env -i HOME="$HOME_W" FAKE_WORLD="$W" PATH="$WPATH" ASTRA_PATH="$WPATH" TMPDIR="$SB" \
@@ -56,12 +56,17 @@ json.dump({"tag_name": "v9.9.9", "assets": [
 PY
 printf 'not a real model, but a file whisper-cli never reads in this test' > "$W/hub/ggml-base.en.bin"
 
-TOOLS="axe periphery frame-review botline botmsg geo-evidence speech-bee graphify-repo pdf-sidecars mcp-ios-simulator mcp-mac-control-mcp xcode-mcp-front"
+TOOLS="axe periphery frame-review botline botmsg geo-evidence speech-bee graphify-repo pdf-sidecars harness-settings convocation agent-sync mcp-ios-simulator mcp-mac-control-mcp xcode-mcp-front"
+NTOOLS="$(echo $TOOLS | wc -w | tr -d ' ')"
 brew_state() { ls "$W/brew/state" 2>/dev/null | sort | tr '\n' ' '; }
 version_of() { cat "$W/brew/state/$1" 2>/dev/null; }
 
+# An orphaned dependency the machine's owner keeps, which real Homebrew would autoremove during any
+# upgrade or uninstall. No astra tool may let that happen to formulae it did not install.
+mkdir -p "$W/brew/state"; echo 1 > "$W/brew/state/kept-orphan"; : > "$W/brew/state/.orphan-kept-orphan"
+
 echo "== the machine starts empty, and the real one cannot answer for it"
-assert_eq "" "$(brew_state)" "no formula is installed"
+assert_eq "kept-orphan " "$(brew_state)" "only the owner's own orphan is installed; nothing from astra"
 assert_eq "" "$(world sh -c 'command -v axe; command -v periphery; command -v idb; command -v ffmpeg' 2>/dev/null)" "axe, periphery, idb and ffmpeg are not found, whatever this machine has"
 red "the fake brew refuses a verb nothing should use" 99 "unsupported verb" world brew frobnicate
 red "the fake pipx refuses one too" 99 "unsupported verb" world pipx run something
@@ -73,10 +78,10 @@ for t in $TOOLS; do assert_contains "$SB/plan.out" "$t" "the plan includes $t"; 
 world "$TOOLBOX/tools/astra" upgrade $TOOLS > "$SB/up1.out" 2>&1; rc=$?
 assert_eq 0 "$rc" "astra upgrade succeeds on an empty machine"
 [ "$rc" = 0 ] || tail -n 25 "$SB/up1.out" | sed 's/^/        /'
-assert_contains "$SB/up1.out" "12 ok, 0 failed" "all twelve tools report ok"
+assert_contains "$SB/up1.out" "$NTOOLS ok, 0 failed" "all $NTOOLS tools report ok"
 # Every formula each tool's own Brewfile names must now exist, whatever those files say today.
 missing=""
-for t in axe periphery frame-review botline botmsg geo-evidence speech-bee graphify-repo pdf-sidecars; do
+for t in axe periphery frame-review botline botmsg geo-evidence speech-bee graphify-repo pdf-sidecars harness-settings agent-sync; do
   for f in $(sed -n 's/^[[:space:]]*brew[[:space:]]*"\([^"]*\)".*/\1/p' "$TOOLBOX/tools/$t/Brewfile" 2>/dev/null); do
     [ -f "$W/brew/state/${f##*/}" ] || missing="$missing $t:$f"
   done
@@ -91,6 +96,12 @@ assert_file "$W/brew/prefix/bin/idb" "and it was linked into Homebrew's bin, whe
 assert_file "$W/uv/osxphotos" "uv installed osxphotos"
 assert_file "$W/uv/graphifyy" "uv installed graphify"
 assert_file "$W/uv/marker-pdf" "uv installed marker for pdf-sidecars"
+assert_contains "$W/pip.log" "install --user --upgrade --quiet tomlkit" "pip installed tomlkit for harness-settings, through the fake pip"
+assert_eq "tomlkit-ok" "$(world python3 -c 'import tomlkit' && echo tomlkit-ok)" "and the machine can now import it"
+assert_file "$W/brew/prefix/bin/claude" "convocation installed the claude CLI through npm"
+assert_file "$W/brew/prefix/bin/codex" "and codex"
+assert_file "$W/brew/state/qwen-code" "and qwen through brew, the method this machine already uses"
+assert_eq 0 "$(grep -c 'rsync' "$W/brew/log" | tr -d ' ' | sed 's/^[1-9].*/0/')" "(agent-sync's deps ran against a toolbox copy with no .git without failing on the submodule)"
 assert_file "$APPS/MacControlMCP.app/Contents/MacOS/MacControlMCP" "MacControlMCP.app was downloaded into the sandbox Applications directory"
 assert_file "$HOME_W/.cache/whisper/ggml-base.en.bin" "the whisper model was fetched into the sandbox HOME"
 assert_not_contains "$W/brew/log" "unsupported" "no installer used a brew verb the fake does not implement"
@@ -122,8 +133,35 @@ echo "== and an upgrade after an uninstall puts it back"
 world "$TOOLBOX/tools/astra" upgrade axe > "$SB/up3.out" 2>&1; rc=$?
 assert_eq 0 "$rc" "upgrade reinstalls a removed tool"
 assert_file "$W/brew/state/axe" "axe is back"
+assert_file "$W/brew/state/kept-orphan" "an unrelated orphaned formula survived every upgrade and uninstall (real brew would have autoremoved it)"
+# `bundle list` printed an "==> Auto-updating Homebrew..." banner on stdout, as real brew can; no word of it
+# may reach `brew upgrade` as if it were a formula name.
+assert_not_contains "$W/brew/log" "brew upgrade ==>" "no banner word was handed to brew upgrade as a formula name"
+assert_not_contains "$W/brew/log" "brew upgrade Auto-updating" "and neither was part of the banner text"
+
+echo "== wrapper apps: built once, never rebuilt, because a rebuild destroys the permission grants they hold"
+# handlebars builds a real signed .app in the toolbox copy with the real wrap-in-app and codesign.
+world "$TOOLBOX/tools/handlebars/install.sh" > "$SB/hb1.out" 2>&1; rc=$?
+assert_eq 0 "$rc" "handlebars installs: brew deps, then the real wrapper app"
+[ "$rc" = 0 ] || tail -n 12 "$SB/hb1.out" | sed 's/^/        /'
+HB="$TOOLBOX/tools/handlebars/Handlebars.app"
+assert_dir "$HB" "Handlebars.app was built"
+codesign --verify --deep "$HB" >/dev/null 2>&1 && pass "and it is validly signed" || fail "the app's signature does not verify"
+hb_hash="$(find "$HB" -type f -exec shasum {} + | sort | shasum | cut -c1-40)"
+world "$TOOLBOX/tools/handlebars/install.sh" > "$SB/hb2.out" 2>&1; rc=$?
+assert_eq 0 "$rc" "installing again succeeds"
+assert_contains "$SB/hb2.out" "not rebuilding" "and says it left the existing app alone"
+assert_eq "$hb_hash" "$(find "$HB" -type f -exec shasum {} + | sort | shasum | cut -c1-40)" "every byte of the app is unchanged, so its permission grants survive"
+world "$TOOLBOX/tools/handlebars/uninstall.sh" > "$SB/hb3.out" 2>&1; rc=$?
+assert_eq 0 "$rc" "uninstall succeeds"
+assert_no_file "$HB" "and removes the app"
 
 echo "== a template install in this world installs the software its tools need, and a repo uninstall leaves it"
+# The fake agent CLIs convocation's deps put in the prefix would be driven by the bundle's `mcp add` steps
+# (and do nothing), and the fake claude would shadow the real one. Remove them: on this machine the only
+# agent CLI is the real claude, and the bundle writes the other agents' config files itself.
+rm -f "$W/brew/prefix/bin/claude" "$W/brew/prefix/bin/codex" "$W/brew/prefix/bin/qwen"
+ln -sf "$(command -v claude)" "$W/sys/claude"
 # Remove what the upgrade put there, so the template install has to bring it back through the real
 # ios-simulator and mac-control installers, with no skip knob.
 world pipx uninstall fb-idb; world brew uninstall idb-companion >/dev/null 2>&1
@@ -132,6 +170,11 @@ assert_no_file "$HOME_W/.local/bin/idb" "idb is gone before the template install
 REPO="$W/repo"; mkdir -p "$REPO"; git -C "$REPO" init -q; git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 world python3 "$TOOLBOX/tools/lib/template.py" install swift-ios --into "$REPO" > "$SB/tpl1.out" 2>&1; rc=$?
 assert_eq 0 "$rc" "swift-ios installs into a repo on the throwaway machine"
+if [ "$rc" != 0 ]; then
+  grep -m3 "FAILED" "$SB/tpl1.out" | sed "s/^/        /"
+  # the template rolled the repo back, so re-run the failing member alone and show what it saw
+  ( cd "$REPO" && world "$TOOLBOX/tools/mcp-mac-control-mcp/install.sh" --into "$REPO" 2>&1 | tail -n 8 | sed 's/^/        | /'; echo "        .mcp.json: $(tr -d '\n' < "$REPO/.mcp.json" 2>&1 | cut -c1-200)" )
+fi
 [ "$rc" = 0 ] || tail -n 15 "$SB/tpl1.out" | sed 's/^/        /'
 assert_file "$W/brew/state/idb-companion" "the installer brought idb-companion back through brew"
 assert_file "$HOME_W/.local/bin/idb" "and the idb CLI through pipx"

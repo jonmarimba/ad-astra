@@ -53,7 +53,9 @@ uc_rm_symlink(){ # remove a symlink ONLY if it points into this tool — never a
 uc_brew(){ # usage: uc_brew <formula> "<why it's shared / what may break>"
   if [ "$UNINSTALL_DEPS" = 1 ]; then
     uc_warn "removing shared brew dep '$1'" "$2" "Other tools on this machine may rely on it."
-    "$BREW_BIN" uninstall "$1" || echo "  ($BREW_BIN uninstall $1 failed or it was already gone)"
+    # HOMEBREW_NO_AUTOREMOVE: real brew autoremoves every unneeded dependency after an uninstall, not
+    # just this formula's own, which would delete orphans the machine's owner keeps (found 2026-10-08).
+    HOMEBREW_NO_AUTOREMOVE=1 "$BREW_BIN" uninstall "$1" || echo "  ($BREW_BIN uninstall $1 failed or it was already gone)"
   else
     echo "  KEEPING shared dep '$1' (brew). To remove it too, re-run with --deps, or:  $BREW_BIN uninstall $1"
   fi

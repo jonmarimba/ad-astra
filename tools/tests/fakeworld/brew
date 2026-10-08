@@ -13,7 +13,12 @@ install_one() {  # install_one <name-or-tap/name>
   if [ -f "$S/$f" ]; then echo "Warning: $f is already installed"; return 0; fi
   echo 1 > "$S/$f"
   local b; b="$(binname "$f")"
-  printf '#!/bin/sh\necho "%s fake"\n' "$f" > "$P/bin/$b"; chmod +x "$P/bin/$b"
+  case "$f" in
+    jq) # astra runs jq for real, so the installed one must work: hand the call to the system's
+      printf '#!/bin/sh\nexec /usr/bin/jq "$@"\n' > "$P/bin/$b" ;;
+    *) printf '#!/bin/sh\necho "%s fake"\n' "$f" > "$P/bin/$b" ;;
+  esac
+  chmod +x "$P/bin/$b"
   if [ "$f" = node ]; then
     # real Node ships npm and npx beside it; `npm view <pkg> version` is how installers check a package exists
     printf '#!/bin/sh\necho "npm $*" >> "%s/npm.log"\n[ "$1" = view ] && echo 1.0.0\nexit 0\n' "$FAKE_WORLD" > "$P/bin/npm"
@@ -21,6 +26,18 @@ install_one() {  # install_one <name-or-tap/name>
     chmod +x "$P/bin/npm" "$P/bin/npx"
   fi
   echo "==> Installing $f (fake)"
+}
+# Real Homebrew autoremoves unneeded dependencies after `upgrade` and `uninstall`, including ones that
+# have nothing to do with the formula you named (found 2026-10-08: a failed `brew uninstall` of a
+# nonexistent formula removed three unrelated formulae from the real machine). A formula whose state
+# file has a sibling `.orphan-<name>` marker stands for one of those. HOMEBREW_NO_AUTOREMOVE=1 stops it.
+autoremove() {
+  [ -z "${HOMEBREW_NO_AUTOREMOVE:-}" ] || return 0
+  local o f
+  for o in "$S"/.orphan-*; do [ -e "$o" ] || continue
+    f="${o##*/.orphan-}"; [ -f "$S/$f" ] || continue
+    echo "==> Autoremoving unneeded formula: $f"; rm -f "$S/$f" "$P/bin/$(binname "$f")" "$o"
+  done
 }
 formulae_of() { sed -n 's/^[[:space:]]*brew[[:space:]]*"\([^"]*\)".*/\1/p' "$1"; }
 case "${1:-}" in
@@ -31,19 +48,21 @@ case "${1:-}" in
     for a in "$@"; do case "$a" in -*) continue ;; esac
       f="${a##*/}"; [ -f "$S/$f" ] || { echo "Error: $f not installed" >&2; exit 1; }
       echo $(( $(cat "$S/$f") + 1 )) > "$S/$f"; echo "==> Upgrading $f (fake)"
-    done ;;
+    done; autoremove ;;
   uninstall) shift
     for a in "$@"; do case "$a" in -*) continue ;; esac
       f="${a##*/}"; [ -f "$S/$f" ] || { echo "Error: No such keg: $f" >&2; exit 1; }
       rm -f "$S/$f" "$P/bin/$(binname "$f")"; echo "Uninstalling $f (fake)"
-    done ;;
+    done; autoremove ;;
   list) for f in $(ls "$S"); do echo "$f"; done ;;
   tap) : ;;
   bundle)
     shift; sub=""; file=""
     while [ $# -gt 0 ]; do case "$1" in list) sub=list; shift ;; --file=*) file="${1#--file=}"; shift ;; --file) file="$2"; shift 2 ;; *) shift ;; esac; done
     [ -f "$file" ] || { echo "Error: Brewfile not found: $file" >&2; exit 1; }
-    if [ "$sub" = list ]; then formulae_of "$file"
+    if [ "$sub" = list ]; then
+      [ -n "${HOMEBREW_NO_AUTO_UPDATE:-}" ] || echo "==> Auto-updating Homebrew..."
+      formulae_of "$file"
     else for f in $(formulae_of "$file"); do install_one "$f" || exit $?; done; fi ;;
   *) echo "fakeworld/brew: unsupported verb: $*" >&2; exit 99 ;;
 esac

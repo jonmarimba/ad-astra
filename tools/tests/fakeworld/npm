@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# fakeworld/npm — a stand-in npm: `npm install -g <pkg>` puts a shim in the fake Homebrew prefix (where a
+# real global install would land), `npm view <pkg> version` answers, and any other verb fails loudly.
+set -uo pipefail
+: "${FAKE_WORLD:?fakeworld/npm needs FAKE_WORLD}"
+P="$FAKE_WORLD/brew/prefix/bin"; mkdir -p "$P" "$FAKE_WORLD/npm"
+echo "npm $*" >> "$FAKE_WORLD/npm.log"
+binname() { case "$1" in @anthropic-ai/claude-code) echo claude ;; @openai/codex) echo codex ;; *) echo "${1##*/}" ;; esac; }
+case "${1:-}" in
+  view) echo 1.0.0 ;;
+  install|i)
+    shift; global=0; pkgs=()
+    for a in "$@"; do case "$a" in -g|--global) global=1 ;; -*) ;; *) pkgs+=("$a") ;; esac; done
+    [ "$global" = 1 ] || { echo "fakeworld/npm: only global installs are implemented: $*" >&2; exit 99; }
+    for a in "${pkgs[@]}"; do
+      echo 1 > "$FAKE_WORLD/npm/${a//\//_}"
+      printf '#!/bin/sh\necho "%s fake"\n' "$a" > "$P/$(binname "$a")"; chmod +x "$P/$(binname "$a")"
+    done ;;
+  *) echo "fakeworld/npm: unsupported verb: $*" >&2; exit 99 ;;
+esac

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# fakeworld/python3 — the machine's python3, with one difference: `python3 -m pip ...` is a stand-in that
+# installs into a sandbox site directory, and `python3 -c "import <pkg>"` for a package that stand-in
+# installed succeeds. Everything else runs the real interpreter, so astra's own Python still works.
+set -uo pipefail
+: "${FAKE_WORLD:?fakeworld/python3 needs FAKE_WORLD}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SITE="$FAKE_WORLD/pip"; mkdir -p "$SITE"
+real_python() {  # the first python3 on PATH that is not this file's directory
+  local d IFS=:
+  for d in $PATH; do [ "$d" = "$HERE" ] && continue; [ -x "$d/python3" ] && { echo "$d/python3"; return; }; done
+}
+if [ "${1:-}" = -m ] && [ "${2:-}" = pip ]; then
+  echo "pip ${*:3}" >> "$FAKE_WORLD/pip.log"
+  verb="${3:-}"
+  case "$verb" in
+    install) for a in "${@:4}"; do case "$a" in -*) ;; *) echo 1 > "$SITE/$a" ;; esac; done ;;
+    *) echo "fakeworld/python3: unsupported pip verb: $*" >&2; exit 99 ;;
+  esac
+  exit 0
+fi
+if [ "${1:-}" = -c ]; then
+  case "${2:-}" in
+    "import "*) pkg="${2#import }"; pkg="${pkg%% *}"; [ -f "$SITE/$pkg" ] && exit 0 ;;
+  esac
+fi
+exec "$(real_python)" "$@"

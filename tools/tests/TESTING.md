@@ -23,6 +23,14 @@ A file joins the slow tier by carrying `# TIER: slow — <reason>` in its first 
 
 Copy the shape of `test-botline.sh`. Source `lib.sh`, sandbox via `$SB`, gate deps with `need`, assert by effect, include RED controls, end with `finish`. If the tool's transport can't be exercised without side effects on a human or another machine, give the TOOL an injectable-binary env seam. Use the `IMSG_BIN` pattern rather than giving the test a mock framework.
 
+## A throwaway machine for install, upgrade and uninstall
+
+`tools/tests/fakeworld/` holds stand-ins for `brew`, `pipx`, `uv`, `npm` and `python3 -m pip`. Each keeps real state under `$FAKE_WORLD`: a prefix, a cellar with versions, shims in a sandbox `~/.local/bin`, and a call log. Each fails with exit 99 on any verb the installers are not meant to use.
+
+Every astra script that puts Homebrew on `PATH` lets `ASTRA_PATH` replace it. That lets a test build a machine that sees nothing the real one has. `test-machine-lifecycle.sh` uses this to run `astra upgrade`, the uninstallers, a wrapper-app build, and a template install and uninstall against an empty machine.
+
+The fakes encode Homebrew behavior that bit us on the real machine. `bundle list` can print a banner on stdout. `upgrade` and `uninstall` autoremove orphaned dependencies, including ones the tool never installed. When you add a brew verb to an installer, add it to the fake first.
+
 ## Review step
 
 New tools and non-trivial changes get an adversarial review before shipping. The review is the `code-review` skill on the diff, or a `panel` round (skills/convocation) with the other CLIs as independent reviewers. Findings get fixed in place, not appended.
