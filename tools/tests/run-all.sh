@@ -16,7 +16,7 @@
 # up). ASTRA_FAST_BUDGET_S overrides the budget; its only legitimate uses are the RED
 # control in test-run-tiers.sh and a deliberately slower CI box.
 set -uo pipefail
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH="${ASTRA_PATH:-/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:$PATH}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 BUDGET="${ASTRA_FAST_BUDGET_S:-20}"
 # Wall time on a machine that is busy with other work measures the neighbours, not this suite: at a
@@ -97,6 +97,16 @@ for t in "${fast[@]}"; do
 done
 
 elapsed=$(( $(date +%s) - start ))
+# Load can climb DURING the run (another job starts), so the verdict uses the busier of the load at the
+# start and the load now. Scaling only at the start let a run that began on a quiet machine fail at 31s.
+if [ -z "${ASTRA_FAST_NO_LOAD_SCALE:-}" ]; then
+  load_end="$(sysctl -n vm.loadavg 2>/dev/null | awk '{gsub(/[{}]/,""); print int($1)}')"
+  if [ -n "$load_end" ] && [ -n "${cores:-}" ] && [ "$cores" -gt 0 ]; then
+    scale_end=$(( (load_end + cores - 1) / cores ))
+    base="${ASTRA_FAST_BUDGET_S:-20}"
+    [ $(( base * scale_end )) -gt "$BUDGET" ] && BUDGET=$(( base * scale_end ))
+  fi
+fi
 echo ""
 [ "$slow" -gt 0 ] && echo "(skipped $slow slow-tier file(s) — run-slow.sh runs them)"
 if [ "$elapsed" -gt "$BUDGET" ]; then
