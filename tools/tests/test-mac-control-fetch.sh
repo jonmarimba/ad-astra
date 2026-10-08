@@ -15,6 +15,7 @@ assert_file "$FETCH" "fetch-app.sh exists"
 API="$SB/api"; REL="$API/repos/acme/widget/releases"; DL="$SB/dl"
 mkdir -p "$REL" "$DL" "$SB/build/MacControlMCP.app/Contents/MacOS"
 printf '#!/bin/sh\necho stub\n' > "$SB/build/MacControlMCP.app/Contents/MacOS/MacControlMCP"
+chmod +x "$SB/build/MacControlMCP.app/Contents/MacOS/MacControlMCP"   # the bundle refuses an app whose binary is not executable
 tar czf "$DL/MacControlMCP-9.9.9-macos-universal.tar.gz" -C "$SB/build" MacControlMCP.app
 ( cd "$DL" && shasum -a 256 MacControlMCP-9.9.9-macos-universal.tar.gz > MacControlMCP-9.9.9-macos-universal.tar.gz.sha256 )
 python3 - "$REL/latest" "$DL" <<'PY'
@@ -52,6 +53,21 @@ fetch >"$SB/cur.out" 2>&1
 assert_contains "$SB/cur.out" "already at latest" "reports the app is current"
 [ "$(stat -f %Sm -t %Y "$SB/Apps/MacControlMCP.app/Contents/MacOS/MacControlMCP")" = 2000 ] \
   && pass "the installed app was not replaced" || fail "an up-to-date app was reinstalled"
+
+echo "== one decision: the downloader, the installer and the bundle agree on where the app is"
+# Three files used to spell the path. The installer decides, and MAC_CONTROL_APP moves it for all of
+# them, so the entry written into .mcp.json points at the app the downloader actually installed.
+need claude "npm install -g @anthropic-ai/claude-code"
+REPO="$SB/repo"; mkdir -p "$REPO" "$SB/home"; git -C "$REPO" init -q
+( cd "$REPO" && env -u GH_TOKEN GH_CONFIG_DIR="$SB/no-gh" MAC_CONTROL_USE_CURL=1 MAC_CONTROL_REPO=acme/widget \
+    GH_API_BASE="file://$API" MAC_CONTROL_APP="$SB/Apps2/MacControlMCP.app" HOME="$SB/home" \
+    "$ASTRA_ROOT/tools/mcp-mac-control-mcp/install.sh" --into "$REPO" >"$SB/inst.out" 2>&1 ); irc=$?
+assert_eq 0 "$irc" "install.sh installs the app and writes the repo entry"
+[ "$irc" = 0 ] || sed 's/^/        /' "$SB/inst.out" | tail -n 15 | cut -c1-200
+assert_file "$SB/Apps2/MacControlMCP.app/Contents/MacOS/MacControlMCP" "the app landed where MAC_CONTROL_APP says"
+assert_eq "$SB/Apps2/MacControlMCP.app/Contents/MacOS/MacControlMCP" \
+  "$(jq -r '.mcpServers["mac-control-mcp"].command' "$REPO/.mcp.json")" \
+  "the .mcp.json entry points at that same app, not at /Applications"
 
 echo "== RED controls"
 rm -rf "$SB/Apps"; mkdir -p "$SB/Apps/MacControlMCP.app/Contents"; echo keep > "$SB/Apps/MacControlMCP.app/Contents/marker"

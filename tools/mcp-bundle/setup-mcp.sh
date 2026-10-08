@@ -29,7 +29,9 @@ typeset -a ALL_MCPS=(
   kickerd
 )
 
-readonly MAC_CONTROL_MCP_EXECUTABLE="/Applications/MacControlMCP.app/Contents/MacOS/MacControlMCP"
+# The installer (mcp-mac-control-mcp/fetch-app.sh) decides where the app goes, /Applications by default;
+# MAC_CONTROL_APP moves it for both, so the downloader and this check can never disagree.
+readonly MAC_CONTROL_MCP_EXECUTABLE="${MAC_CONTROL_APP:-/Applications/MacControlMCP.app}/Contents/MacOS/MacControlMCP"
 readonly MAC_CONTROL_MCP_RELEASES="https://github.com/AdelElo13/mac-control-mcp/releases"
 
 log() {
