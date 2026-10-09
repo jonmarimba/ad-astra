@@ -45,7 +45,7 @@ MCPJSON="$TARGET/.mcp.json"
 if [ -f "$MCPJSON" ]; then
   tmp="$(mktemp)"
   jq --arg name "$NAME" --arg url "$URL" \
-     '.mcpServers[$name] = {"type":"http","url":$url}' "$MCPJSON" > "$tmp" \
+     'del(.mcpServers.xcode, .mcpServers."xcode-mcp-server", .mcpServers.XcodeBuildMCP, .mcpServers."xcode-mcp-front") | .mcpServers[$name] = {"type":"http","url":$url}' "$MCPJSON" > "$tmp" \
      || { echo "mcp-xcode-combined: FAIL — $MCPJSON is not valid JSON; fix it by hand." >&2; exit 65; }
   mv "$tmp" "$MCPJSON"
 else
@@ -60,7 +60,7 @@ QWENJSON="$TARGET/.qwen/settings.json"
 mkdir -p "$TARGET/.qwen"
 if [ -f "$QWENJSON" ]; then
   tmp="$(mktemp)"
-  jq --arg name "$NAME" --arg url "$URL" '.mcpServers[$name] = {"httpUrl":$url}' "$QWENJSON" > "$tmp" \
+  jq --arg name "$NAME" --arg url "$URL" 'del(.mcpServers.xcode, .mcpServers."xcode-mcp-server", .mcpServers.XcodeBuildMCP, .mcpServers."xcode-mcp-front") | .mcpServers[$name] = {"httpUrl":$url}' "$QWENJSON" > "$tmp" \
      || { rm -f "$tmp"; echo "mcp-xcode-combined: FAIL — $QWENJSON is not valid JSON; fix it by hand." >&2; exit 65; }
   mv "$tmp" "$QWENJSON"
 else
@@ -75,6 +75,15 @@ python3 - "$CODEXTOML" "$NAME" "$URL" <<'PY'
 import os, sys
 path, name, url = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path).read() if os.path.exists(path) else ""
+legacy = {"[mcp_servers.xcode]", "[mcp_servers.xcode-mcp-server]", "[mcp_servers.XcodeBuildMCP]", "[mcp_servers.xcode-mcp-front]"}
+kept, skip = [], False
+for line in s.splitlines(keepends=True):
+    if line.strip().startswith("["):
+        table = line.strip()
+        skip = table in legacy or any(table.startswith(prefix[:-1] + ".") for prefix in legacy)
+    if not skip:
+        kept.append(line)
+s = "".join(kept)
 header = f"[mcp_servers.{name}]"
 if header in s:
     # Update the url inside OUR table only, so a changed XCODE_COMBINED_URL moves Codex with

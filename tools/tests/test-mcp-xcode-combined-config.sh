@@ -13,15 +13,23 @@ need python3 "xcode-select --install"
 INST="$ASTRA_ROOT/tools/mcp-xcode-combined/install.sh"
 UNINST="$ASTRA_ROOT/tools/mcp-xcode-combined/uninstall.sh"
 
-REPO="$SB/repo"; mkdir -p "$REPO/.codex"
+REPO="$SB/repo"; mkdir -p "$REPO/.codex" "$REPO/.qwen"
+printf '{"mcpServers":{"xcode":{"command":"xcrun","args":["mcpbridge"]},"xcode-mcp-front":{"type":"http","url":"http://127.0.0.1:8765/mcp"},"other":{"type":"http","url":"http://127.0.0.1:1/other"}}}\n' > "$REPO/.mcp.json"
+printf '{"mcpServers":{"XcodeBuildMCP":{"command":"npx","args":["xcodebuildmcp"]},"other":{"httpUrl":"http://127.0.0.1:1/other"}}}\n' > "$REPO/.qwen/settings.json"
 # a Codex config that already holds other tables, both before and after ours
-printf '[mcp_servers.other]\nurl = "http://127.0.0.1:1/other"\n\n[mcp_servers.xcode-combined]\nurl = "http://127.0.0.1:1/stale"\n\n[mcp_servers.after]\nurl = "http://127.0.0.1:2/after"\n' > "$REPO/.codex/config.toml"
+printf '[mcp_servers.other]\nurl = "http://127.0.0.1:1/other"\n\n[mcp_servers.xcode-mcp-server]\ncommand = "uvx"\n\n[mcp_servers.xcode-mcp-server.env]\nDEBUG = "1"\n\n[mcp_servers.xcode-combined]\nurl = "http://127.0.0.1:1/stale"\n\n[mcp_servers.after]\nurl = "http://127.0.0.1:2/after"\n' > "$REPO/.codex/config.toml"
 
 echo "== first install overrides a stale entry"
 XCODE_COMBINED_URL="http://127.0.0.1:9001/mcp" bash "$INST" --into "$REPO" > "$SB/i1.out" 2>&1
 assert_eq 0 "$?" "install succeeds"
 assert_eq "http://127.0.0.1:9001/mcp" "$(jq -r '.mcpServers["xcode-combined"].url' "$REPO/.mcp.json")" "Claude's entry has the URL"
 assert_eq "http://127.0.0.1:9001/mcp" "$(jq -r '.mcpServers["xcode-combined"].httpUrl' "$REPO/.qwen/settings.json")" "Qwen's entry has the URL"
+assert_eq 'false' "$(jq -r '.mcpServers | has("xcode") or has("xcode-mcp-front")' "$REPO/.mcp.json")" "Claude's direct and old front entries are gone"
+assert_eq 'false' "$(jq -r '.mcpServers | has("XcodeBuildMCP")' "$REPO/.qwen/settings.json")" "Qwen's direct build entry is gone"
+assert_eq 'http://127.0.0.1:1/other' "$(jq -r '.mcpServers.other.url' "$REPO/.mcp.json")" "Claude's unrelated entry survives"
+assert_eq 'http://127.0.0.1:1/other' "$(jq -r '.mcpServers.other.httpUrl' "$REPO/.qwen/settings.json")" "Qwen's unrelated entry survives"
+if grep -Fq '[mcp_servers.xcode-mcp-server]' "$REPO/.codex/config.toml"; then fail "Codex still has the direct Xcode entry"; else pass "Codex's direct entry is gone"; fi
+if grep -Fq '[mcp_servers.xcode-mcp-server.env]' "$REPO/.codex/config.toml"; then fail "Codex still has the direct Xcode environment"; else pass "Codex's direct environment is gone"; fi
 got="$(awk '/^\[mcp_servers.xcode-combined\]/{f=1;next} /^\[/{f=0} f && /^url/' "$REPO/.codex/config.toml")"
 assert_eq 'url = "http://127.0.0.1:9001/mcp"' "$got" "Codex's entry replaced the stale URL"
 assert_contains "$REPO/.codex/config.toml" 'url = "http://127.0.0.1:1/other"' "RED: the table before ours is untouched"
