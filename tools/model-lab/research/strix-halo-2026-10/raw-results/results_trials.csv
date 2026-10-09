@@ -1,0 +1,8 @@
+trials-tiel,trials=5,fixed=5/5,loops(max_repeat>=4)=0/5,avg_seconds=18,avg_turns=5
+trials-agentworld,trials=5,fixed=5/5,loops(max_repeat>=4)=0/5,avg_seconds=44,avg_turns=6
+trials-qwen36,trials=5,fixed=5/5,loops(max_repeat>=4)=0/5,avg_seconds=16,avg_turns=5
+trials-ornith,trials=5,fixed=5/5,loops(max_repeat>=4)=0/5,avg_seconds=16,avg_turns=5.2
+trials-coder30b,trials=5,fixed=5/5,loops(max_repeat>=4)=2/5,avg_seconds=20,avg_turns=10.8
+trials-qwen35-122b,trials=5,fixed=5/5,loops(max_repeat>=4)=0/5,avg_seconds=35,avg_turns=6
+trials-gptoss120b,trials=5,fixed=5/5,loops(max_repeat>=4)=0/5,avg_seconds=15,avg_turns=6.4
+trials-qwen38-27b-mtp,trials=3,fixed=3/3,loops(max_repeat>=4)=0/3,avg_seconds=40,avg_turns=5

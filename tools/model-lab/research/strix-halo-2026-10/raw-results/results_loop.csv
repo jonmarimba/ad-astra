@@ -1,0 +1,7 @@
+openai/gpt-oss-120b,temp=1,top_p=1,top_k=0,presence=0,rep_scores=0.02|0.015|0.014|0.004,finish=length|length|length|length
+qwen3-coder-30b-a3b-instruct,temp=0.7,top_p=0.8,top_k=20,presence=0,rep_scores=0.019|0.008|0.075|0.015,finish=length|stop|stop|length
+ornith-1.5-35b-a3b-uncensored,temp=1,top_p=0.95,top_k=20,presence=0,rep_scores=0|0|0.068|0,finish=length|length|length|length
+qwen-agentworld-35b-a3b,temp=1,top_p=0.95,top_k=20,presence=0,rep_scores=0.015|0.058|0.026|0.008,finish=length|length|length|length
+ud,temp=1,top_p=0.95,top_k=20,presence=0,rep_scores=0|0.01|0|0.002,finish=length|length|length|length
+qwen3.6-35b-a3b-mtp,temp=1,top_p=0.95,top_k=20,presence=0,rep_scores=0.032|0.027|0|0.003,finish=length|length|length|length
+tiel-coder-35b-a3b-mtp,temp=1,top_p=0.95,top_k=20,presence=0,rep_scores=0|0.004|0|0.002,finish=length|length|length|length

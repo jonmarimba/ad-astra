@@ -1,0 +1,13 @@
+ls-tiel-A-baseline,,decode_tok_s=54.4|55.6,prompt_tokens=24476|prefill_tok_s_cold=972|ttft_cold=25.0|ttft_cached=1.7|ttft_newprefix=24.8|decode_long=48.2
+ls-tiel-B-ub1024,-ub 1024 -b 2048,decode_tok_s=55.6|55.5,prompt_tokens=24476|prefill_tok_s_cold=1,086|ttft_cold=22.4|ttft_cached=2.2|ttft_newprefix=22.4|decode_long=47.8
+ls-tiel-C-ub256,-ub 256,decode_tok_s=55.5|55.3,prompt_tokens=24476|prefill_tok_s_cold=776|ttft_cold=31.3|ttft_cached=1.4|ttft_newprefix=31.4|decode_long=48.4
+ls-tiel-D-cachereuse,--cache-reuse 256,decode_tok_s=55.7|55.7,prompt_tokens=24476|prefill_tok_s_cold=980|ttft_cold=24.8|ttft_cached=1.7|ttft_newprefix=24.8|decode_long=48.7
+ls-gptoss-A-baseline,,decode_tok_s=55.1|55.5,prompt_tokens=20625|prefill_tok_s_cold=762|ttft_cold=27.0|ttft_cached=0.2|ttft_newprefix=26.8|decode_long=45.7
+ls-tiel-E-fa-auto,-ub 1024 -b 2048 -fa auto,decode_tok_s=55.1|55.6,prompt_tokens=24476|prefill_tok_s_cold=1,088|ttft_cold=22.3|ttft_cached=2.2|ttft_newprefix=22.4|decode_long=48.0
+ls-tiel-F-mmap,-ub 1024 -b 2048 -lm mmap,decode_tok_s=54.8|54.9,prompt_tokens=24476|prefill_tok_s_cold=1,086|ttft_cold=22.4|ttft_cached=2.2|ttft_newprefix=22.5|decode_long=48.5
+ls-tiel-G-threads12,-ub 1024 -b 2048 -t 12,decode_tok_s=55.1|55.3,prompt_tokens=24476|prefill_tok_s_cold=1,084|ttft_cold=22.4|ttft_cached=2.2|ttft_newprefix=22.4|decode_long=48.2
+ls-tiel-H-ub2048,-ub 2048 -b 4096,decode_tok_s=55.0|55.5,prompt_tokens=24476|prefill_tok_s_cold=933|ttft_cold=26.0|ttft_cached=3.6|ttft_newprefix=26.1|decode_long=48.2
+ls-tiel-I-mtp,-ub 1024 -b 2048 --spec-type draft-mtp --spec-draft-n-max 3,decode_tok_s=65.1|76.7,prompt_tokens=24476|prefill_tok_s_cold=994|ttft_cold=24.4|ttft_cached=3.0|ttft_newprefix=24.5|decode_long=86.1
+ls-tiel-J-ngrammod,-ub 1024 -b 2048 --spec-type ngram-mod,decode_tok_s=43.1|55.5,prompt_tokens=24476|prefill_tok_s_cold=1,084|ttft_cold=22.4|ttft_cached=2.2|ttft_newprefix=22.4|decode_long=20.8
+ls-tiel-K-mtp-agent,-ub 1024 -b 2048 --spec-type draft-mtp --spec-draft-n-max 3,decode_tok_s=68.6|69.9,prompt_tokens=24476|prefill_tok_s_cold=998|ttft_cold=24.4|ttft_cached=3.0|ttft_newprefix=24.4|decode_long=80.0
+ls-gptoss-B-ub1024-agent,-ub 1024 -b 2048,decode_tok_s=54.8|54.9,prompt_tokens=20625|prefill_tok_s_cold=799|ttft_cold=25.7|ttft_cached=0.2|ttft_newprefix=25.7|decode_long=46.0

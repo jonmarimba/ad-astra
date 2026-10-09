@@ -77,7 +77,13 @@ cd "$ASTRA_ROOT/tools" || exit 1
 problems=""
 # A symlink under tools/ is a stub another test planted for a moment (test-template-partial-rollback
 # links stub-ok and stub-fail in while the fast tier runs in parallel). No real tool is a symlink.
-for d in */; do [ -L "${d%/}" ] && continue; problems="$problems$(check "${d%/}")"$'\n'; done
+for d in */; do
+  [ -L "${d%/}" ] && continue
+  found="$(check "${d%/}")"
+  # Look again before reporting: the stub may have been unlinked while it was being checked.
+  { [ -d "${d%/}" ] && [ ! -L "${d%/}" ]; } || continue
+  problems="$problems$found"$'\n'
+done
 problems="$(printf '%s' "$problems" | sed '/^$/d')"
 assert_empty "$problems" "every directory under tools/ is a declared kind and keeps its promises"
 [ -z "$problems" ] || printf '%s\n' "$problems" | sed 's/^/        /'

@@ -1,0 +1,49 @@
+time,repo,quant,gb,engine,variant,status,load_s,first_token_s,tok_s,cold_s,cached_s,agent_hard,agent_loops,agent_secs,notes
+2026-10-06 02:15:11,unsloth/gemma-4-26B-A4B-it-qat-GGUF,UD-Q4_K_XL,14.2,lmstudio,ub1024/b2048,ok,11.5,2.6,72.7,94.7,4.9,,,,
+2026-10-06 02:15:11,unsloth/gemma-4-26B-A4B-it-qat-GGUF,UD-Q4_K_XL,14.2,lmstudio,ub512/b512,ok,8.1,2.32,73.2,97.2,4.5,,,,
+2026-10-06 02:15:11,unsloth/gemma-4-26B-A4B-it-qat-GGUF,UD-Q4_K_XL,14.2,lmstudio,best ub1024,agent,,,,,,5/5,0,78,easy 0/3; 
+2026-10-06 02:15:11,unsloth/gemma-4-26B-A4B-it-qat-GGUF,UD-Q4_K_XL,14.2,stock,ub1024,ok,,0.67,77.8,93.8,4.1,,,,
+2026-10-06 02:15:11,unsloth/gemma-4-26B-A4B-it-qat-GGUF,UD-Q4_K_XL,14.2,stock,ub1024,agent,,,,,,5/5,0,36,
+2026-10-06 02:48:28,bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF,Q5_K_L,25.3,lmstudio,ub1024/b2048,ok,58.9,123.78,60.4,91.8,4.0,,,,
+2026-10-06 02:48:28,bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF,Q5_K_L,25.3,lmstudio,ub512/b512,ok,16.7,2.89,60.6,27.5,118.0,,,,
+2026-10-06 02:48:28,bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF,Q5_K_L,25.3,lmstudio,best ub512,agent,,,,,,5/5,0,95,easy 0/3; 
+2026-10-06 02:48:28,bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF,Q5_K_L,25.3,stock,ub1024,ok,,1.18,60.2,22.1,2.2,,,,
+2026-10-06 02:48:28,bartowski/Kwaipilot_KAT-Coder-V2.5-Dev-GGUF,Q5_K_L,25.3,stock,ub1024,agent,,,,,,5/5,0,19,
+2026-10-06 03:36:01,ornith-ai/Ornith-1.0-35B-GGUF,Q6_K,28.5,lmstudio,ub1024/b2048,ok,15.0,2.92,61.3,26.1,4.0,,,,
+2026-10-06 03:36:01,ornith-ai/Ornith-1.0-35B-GGUF,Q6_K,28.5,lmstudio,ub512/b512,ok,14.9,2.92,61.5,29.7,93.1,,,,
+2026-10-06 03:36:01,ornith-ai/Ornith-1.0-35B-GGUF,Q6_K,28.5,lmstudio,best ub1024,agent,,,,,,5/5,0,95,easy 0/3; 
+2026-10-06 03:36:01,ornith-ai/Ornith-1.0-35B-GGUF,Q6_K,28.5,stock,ub1024,ok,,1.13,64.7,22.2,2.2,,,,
+2026-10-06 03:36:01,ornith-ai/Ornith-1.0-35B-GGUF,Q6_K,28.5,stock,ub1024,agent,,,,,,5/5,0,18,
+2026-10-06 04:22:00,bartowski/endless-frontier_BigBang-v1-GGUF,Q5_K_L,25.8,lmstudio,ub1024/b2048,ok,14.4,2.95,43.4,68.6,37.5,,,,
+2026-10-06 04:22:00,bartowski/endless-frontier_BigBang-v1-GGUF,Q5_K_L,25.8,lmstudio,ub512/b512,ok,18.4,50.83,62.3,29.1,3.9,,,,
+2026-10-06 04:22:00,bartowski/endless-frontier_BigBang-v1-GGUF,Q5_K_L,25.8,lmstudio,best ub512,agent,,,,,,5/5,0,85,easy 0/3; 
+2026-10-06 04:22:00,bartowski/endless-frontier_BigBang-v1-GGUF,Q5_K_L,25.8,stock,ub1024,ok,,1.15,61.9,21.0,2.2,,,,
+2026-10-06 04:22:00,bartowski/endless-frontier_BigBang-v1-GGUF,Q5_K_L,25.8,stock,ub1024,agent,,,,,,5/5,0,20,
+2026-10-06 05:10:36,FINAL-Bench/POCKET-35B-GGUF,Q4_K_M,21.2,lmstudio,ub1024/b2048,ok,9.8,2.85,73.4,25.1,32.9,,,,
+2026-10-06 05:10:36,FINAL-Bench/POCKET-35B-GGUF,Q4_K_M,21.2,lmstudio,ub512/b512,ok,23.2,2.95,72.6,26.3,3.4,,,,
+2026-10-06 05:10:36,FINAL-Bench/POCKET-35B-GGUF,Q4_K_M,21.2,lmstudio,best ub1024,agent,,,,,,5/5,0,89,easy 0/3; 
+2026-10-06 05:10:36,FINAL-Bench/POCKET-35B-GGUF,Q4_K_M,21.2,stock,ub1024,ok,,1.29,73.9,21.7,2.2,,,,
+2026-10-06 05:10:36,FINAL-Bench/POCKET-35B-GGUF,Q4_K_M,21.2,stock,ub1024,agent,,,,,,5/5,0,16,
+2026-10-06 05:46:17,unsloth/Muse-Glimmer-30B-GGUF,UD-Q5_K_XL,21.8,lmstudio,ub1024/b2048,ok,63.6,3.22,10.2,87.7,4.3,,,,
+2026-10-06 05:46:17,unsloth/Muse-Glimmer-30B-GGUF,UD-Q5_K_XL,21.8,lmstudio,ub512/b512,ok,17.0,3.22,10.0,73.2,4.1,,,,
+2026-10-06 05:46:17,unsloth/Muse-Glimmer-30B-GGUF,UD-Q5_K_XL,21.8,lmstudio,best ub512,agent,,,,,,None/None,,,easy 0/3; 
+2026-10-06 05:46:17,unsloth/Muse-Glimmer-30B-GGUF,UD-Q5_K_XL,21.8,stock,ub1024,ok,,1.16,10.4,71.8,2.1,,,,
+2026-10-06 05:46:17,unsloth/Muse-Glimmer-30B-GGUF,UD-Q5_K_XL,21.8,stock,ub1024,agent,,,,,,5/5,0,133,
+2026-10-06 07:07:36,ibm-granite/granite-4.2-30b-GGUF,Q6_K,24.0,lmstudio,ub1024/b2048,ok,16.7,278.84,9.3,344.8,2.9,,,,
+2026-10-06 07:07:36,ibm-granite/granite-4.2-30b-GGUF,Q6_K,24.0,lmstudio,ub512/b512,ok,20.4,2.59,9.3,214.4,98.4,,,,
+2026-10-06 07:07:36,ibm-granite/granite-4.2-30b-GGUF,Q6_K,24.0,lmstudio,best ub512,agent,,,,,,2/5,0,283,easy None/None; 
+2026-10-06 07:07:36,ibm-granite/granite-4.2-30b-GGUF,Q6_K,24.0,stock,ub1024,ok,,0.57,9.4,243.9,0.6,,,,
+2026-10-06 07:07:36,ibm-granite/granite-4.2-30b-GGUF,Q6_K,24.0,stock,ub1024,agent,,,,,,None/None,,,
+2026-10-06 08:11:07,unsloth/gemma-4-31B-it-qat-GGUF,UD-Q4_K_XL,17.3,lmstudio,ub1024/b2048,ok,10.6,3.04,12.6,399.7,12.5,,,,
+2026-10-06 08:11:07,unsloth/gemma-4-31B-it-qat-GGUF,UD-Q4_K_XL,17.3,lmstudio,ub512/b512,ok,10.0,3.01,12.5,521.4,11.5,,,,
+2026-10-06 08:11:07,unsloth/gemma-4-31B-it-qat-GGUF,UD-Q4_K_XL,17.3,lmstudio,best ub1024,agent,,,,,,5/5,0,261,easy None/None; 
+2026-10-06 08:11:07,unsloth/gemma-4-31B-it-qat-GGUF,UD-Q4_K_XL,17.3,stock,ub1024,ok,,0.95,12.7,404.2,14.1,,,,
+2026-10-06 08:11:07,unsloth/gemma-4-31B-it-qat-GGUF,UD-Q4_K_XL,17.3,stock,ub1024,agent,,,,,,5/5,0,147,
+2026-10-06 09:18:20,bartowski/FrogNano-4B-2609-GGUF,Q6_K_S,3.6,lmstudio,ub1024/b2048,ok,6.0,2.73,79.8,25.8,5.0,,,,
+2026-10-06 09:18:20,bartowski/FrogNano-4B-2609-GGUF,Q6_K_S,3.6,lmstudio,ub512/b512,ok,5.7,2.7,72.8,25.1,7.4,,,,
+2026-10-06 09:18:20,bartowski/FrogNano-4B-2609-GGUF,Q6_K_S,3.6,lmstudio,best ub512,agent,,,,,,5/5,0,30,easy 0/3; 
+2026-10-06 09:18:20,bartowski/FrogNano-4B-2609-GGUF,Q6_K_S,3.6,stock,ub1024,ok,,0.9,54.0,21.7,2.3,,,,
+2026-10-06 09:18:20,bartowski/FrogNano-4B-2609-GGUF,Q6_K_S,3.6,stock,ub1024,agent,,,,,,5/5,0,24,
+2026-10-06 10:03:35,unsloth/Qwen3.8-Flash-Next-GGUF,UD-Q2_K_XL,78.9,lmstudio,ub1024/b2048,failed,,,,,,,,,COULD NOT REACH THE SERVER at http://localhost:1234 (HTTP Error 400: Bad Request). Is LM Studio's server running?
+2026-10-06 10:03:35,unsloth/Qwen3.8-Flash-Next-GGUF,UD-Q2_K_XL,78.9,stock,ub1024,ok,,2.29,28.3,54.8,4.6,,,,
+2026-10-06 10:03:35,unsloth/Qwen3.8-Flash-Next-GGUF,UD-Q2_K_XL,78.9,stock,ub1024,agent,,,,,,5/5,0,31,

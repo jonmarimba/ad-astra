@@ -1,0 +1,1 @@
+Runs from the astra checkout on macOS, Linux and Windows as tools/model-lab/model-lab; it keeps its profiles and history in ~/.model-lab and installs nothing.

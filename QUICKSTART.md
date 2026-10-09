@@ -67,7 +67,7 @@ Some repo-config installers also install the program their entry points at. The 
 
 ### Run in place
 
-These tools have a `RUN-IN-PLACE` file instead of an `install.sh`. Small scripts fall here, such as `peer-review`, `bio-build`, `omniroute-health`, `ambrosio`, and `ollama-watch`. Run `ls tools/*/RUN-IN-PLACE` for the full list. They run straight from this checkout and install nothing. The `RUN-IN-PLACE` file in each directory says why. They update when you `git pull` the toolbox.
+These tools have a `RUN-IN-PLACE` file instead of an `install.sh`. Small scripts fall here, such as `peer-review`, `bio-build`, `omniroute-health`, `ambrosio`, and `ollama-watch`. The `model-lab` tool is also one. It scouts and benchmarks local models for a machine's hardware, and it runs on Windows as well as macOS. Run `ls tools/*/RUN-IN-PLACE` for the full list. They run straight from this checkout and install nothing. The `RUN-IN-PLACE` file in each directory says why. They update when you `git pull` the toolbox.
 
 To see a tool's kind, read the first lines of its `install.sh`, or look for `RUN-IN-PLACE` in its directory. Every installable tool has an `uninstall.sh` that undoes its own install and nothing else.
 

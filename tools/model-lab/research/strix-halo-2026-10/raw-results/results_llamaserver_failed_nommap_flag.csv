@@ -1,0 +1,5 @@
+ls-tiel-A-baseline,LOAD_FAILED,exited=True
+ls-tiel-B-ub1024,LOAD_FAILED,exited=True
+ls-tiel-C-ub256,LOAD_FAILED,exited=True
+ls-tiel-D-cachereuse,LOAD_FAILED,exited=True
+ls-gptoss-A-baseline,LOAD_FAILED,exited=True

@@ -1,0 +1,7 @@
+qwen3-coder-30b-a3b-instruct,prompt_tokens=22484,ttft_s=41.1,prefill_tok_s=546,decode_tok_s=45.1
+openai/gpt-oss-120b,prompt_tokens=20634,ttft_s=33.6,prefill_tok_s=614,decode_tok_s=41.4
+nvidia/nemotron-3-super,ERROR,The underlying connection was closed: The connection was closed unexpectedly.
+qwen/qwen3.8-27b,ERROR,Unable to connect to the remote server
+nvidia/nemotron-3-super,qwen/qwen3.8-27b,ERROR,The remote server returned an error: (400) Bad Request.
+nvidia/nemotron-3-super,prompt_tokens=23272,ttft_s=69.3,prefill_tok_s=336,decode_tok_s=22.2
+qwen/qwen3.8-27b,ERROR,The remote server returned an error: (400) Bad Request.

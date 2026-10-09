@@ -43,3 +43,7 @@ The GhOST scheduler now runs `ambrosio check` once a day. Its cloud surfaces run
 The local model selector uses the configured `SIZE_CAP_GB` as a repository download-size ceiling and passes selected MLX repository URLs to LM Studio for download. It does not measure available disk space or estimate whether the selected model, its context, and other workloads fit in the host's current unified memory. The configured ceiling is policy, not a hardware probe.
 
 `check --dry-run` now forwards `--dry-run` to the OmniRoute catalog sync and does not advance the seen, held, or announced watermarks. A cloud surface that is missing or exits with an error makes `check` return nonzero after the other surfaces have run.
+
+## Deeper search: model-lab
+
+Ambrosio watches every day and pulls a few models against a fixed size limit. It does not measure what the hardware can run. `tools/model-lab` answers that question. It scouts Hugging Face for models that fit a named machine's memory, runs speed and agent tests, and writes a report. It takes hours, so you run it by hand about once a month, on macOS or Windows. The two tools stay separate. After a model-lab run, `model-lab wantlist --from queue.json --ambrosio` appends the models worth trying to `~/.ambrosio/wantlist.txt`, and ambrosio pulls them on its normal pass.

@@ -1,0 +1,9 @@
+time,name,path,fixed,n,loops,avg_s,note
+2026-10-06 18:09:37,ling-3.0-tiny,C:\Users\Jonathan/.lmstudio/models\bartowski\Ling-3.0-tiny-GGUF\Ling-3.0-tiny-Q5_K_L.gguf,15,15,0,8,
+2026-10-06 18:11:52,pocket,C:\Users\Jonathan/.lmstudio/models\FINAL-Bench\POCKET-35B-GGUF\POCKET-35B-Q4_K_M.gguf,15,15,0,18,
+2026-10-06 18:19:08,lightning,C:\Users\Jonathan/.lmstudio/models\ggml-org\NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF\NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf,15,15,0,18,
+2026-10-06 18:23:53,ornith-1.0-35b,C:\Users\Jonathan/.lmstudio/models\ornith-ai\Ornith-1.0-35B-GGUF\ornith-1.0-35b-Q6_K.gguf,15,15,0,18,
+2026-10-06 18:28:42,kat-coder,C:\Users\Jonathan/.lmstudio/models\bartowski\Kwaipilot_KAT-Coder-V2.5-Dev-GGUF\Kwaipilot_KAT-Coder-V2.5-Dev-Q5_K_L.gguf,15,15,0,18,
+2026-10-06 18:33:39,bigbang,C:\Users\Jonathan/.lmstudio/models\bartowski\endless-frontier_BigBang-v1-GGUF\endless-frontier_BigBang-v1-Q5_K_L.gguf,15,15,0,22,
+2026-10-06 18:41:08,frognano,C:\Users\Jonathan/.lmstudio/models\bartowski\FrogNano-4B-2609-GGUF\FrogNano-4B-2609-Q6_K_S.gguf,14,15,0,24,
+2026-10-06 18:47:20,flash-next-ud,C:\Users\Jonathan/.lmstudio/models\unsloth\Qwen3.8-Flash-Next-GGUF\UD-Q2_K_XL\Qwen3.8-Flash-Next-UD-Q2_K_XL-00001-of-00003.gguf,15,15,0,32,

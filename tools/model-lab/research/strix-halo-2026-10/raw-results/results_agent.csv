@@ -1,0 +1,17 @@
+agent-smoke-agentworld,turns=5,tool_calls=4,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=28,err=
+agent-agentworld,turns=5,tool_calls=4,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=20,err=
+agent-gptoss120b,turns=12,tool_calls=12,invalid_args=0,max_identical_repeat=10,fixed=False,seconds=16,err=
+agent-qwen35-122b,turns=6,tool_calls=5,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=25,err=
+agent-coder30b,turns=5,tool_calls=4,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=8,err=
+agent-ornith35b,turns=6,tool_calls=5,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=14,err=
+agent-qwen36-35b,turns=5,tool_calls=4,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=10,err=
+agent-qwen38-27b-mtp,turns=5,tool_calls=5,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=27,err=
+gptoss-dbg-a-default,turns=12,tool_calls=12,invalid_args=0,max_identical_repeat=10,fixed=False,seconds=16,err=
+gptoss-dbg-b-toolname,turns=12,tool_calls=12,invalid_args=0,max_identical_repeat=10,fixed=False,seconds=16,err=
+gptoss-dbg-c-temp1,turns=12,tool_calls=12,invalid_args=0,max_identical_repeat=10,fixed=False,seconds=16,err=
+gptoss-dbg-d-both,turns=12,tool_calls=12,invalid_args=0,max_identical_repeat=10,fixed=False,seconds=15,err=
+agent-tiel35b,turns=5,tool_calls=4,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=10,err=
+gptoss-dbg-e-keepreasoning,turns=12,tool_calls=12,invalid_args=0,max_identical_repeat=10,fixed=False,seconds=16,err=
+gptoss-dbg-f-keepreasoning-temp1,turns=12,tool_calls=12,invalid_args=0,max_identical_repeat=10,fixed=False,seconds=15,err=
+gptoss-dbg-g-listtool,turns=6,tool_calls=5,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=10,err=
+gptoss-dbg-h-listtool2,turns=6,tool_calls=5,invalid_args=0,max_identical_repeat=0,fixed=True,seconds=9,err=
