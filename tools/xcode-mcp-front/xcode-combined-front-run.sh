@@ -1,8 +1,8 @@
 #!/bin/bash
 # xcode-combined-front-run.sh — the actual process launchd supervises for the
-# COMBINED instance: both Apple's mcpbridge AND Drew's drews-xcode-mcp behind
-# ONE endpoint, tools prefixed per-upstream (xcode__..., drews__...) so a
-# same-named tool from either side can never collide or shadow the other.
+# COMBINED instance: Apple's mcpbridge, Drew's drews-xcode-mcp, and
+# XcodeBuildMCP behind ONE endpoint, with separate tool prefixes
+# (xcode__..., drews__..., xbm__...).
 #
 # All the real logic is in the ONE shared daemon.py (Upstream class handles
 # per-upstream connect/reconnect/click, build_server() handles the
@@ -71,6 +71,20 @@ cat > "$XCODE_MCP_FRONT_MCP_INFO" <<'EOF'
   }
 }
 EOF
+
+# The generated file stays strict JSON. Resolve this install's wrapper path after the
+# quoted heredoc, so the documentation strings above cannot execute shell syntax.
+tmp_info="$(mktemp "$XCODE_MCP_FRONT_HOME/.mcp_info.XXXXXX")"
+jq --arg command "$HERE/xcodebuildmcp-run.sh" \
+  '.mcpServers.xbm.command = $command | .mcpServers.xbm.args = []' \
+  "$XCODE_MCP_FRONT_MCP_INFO" > "$tmp_info" || {
+  rm -f "$tmp_info"
+  exit 65
+}
+mv "$tmp_info" "$XCODE_MCP_FRONT_MCP_INFO" || {
+  rm -f "$tmp_info"
+  exit 74
+}
 
 # shellcheck disable=SC1091
 . "$HERE/self-preempt.sh"

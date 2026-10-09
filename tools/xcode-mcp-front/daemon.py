@@ -1392,13 +1392,23 @@ def build_server(upstreams: list[Upstream]) -> Server:
     mcpbridge_para = (
         "\n\nApple's own Xcode MCP bridge (`xcrun mcpbridge`) is one of the upstreams "
         "here. You will likely also see other Xcode-adjacent MCP servers configured "
-        "alongside — commonly xcode-mcp-server (a third-party tool, Drew's) and "
-        "XcodeBuildMCP. That overlap is INTENTIONAL, not a conflict to resolve. If a "
-        "call here fails or behaves inconsistently, try the equivalent tool on one of "
-        "the others instead of giving up — and if one consistently works better or "
-        "worse for a task, say so out loud in your response; that is wanted "
-        "information."
+        "alongside, including Drew's tool and XcodeBuildMCP. These tools serve different "
+        "jobs. If Xcode says an agent is not approved for a workspace, call "
+        "XcodeOpenWorkspace for that workspace before retrying. That workspace check "
+        "is separate from the bridge connection's Allow dialog."
         if fronts_mcpbridge else "")
+    fronts_xcodebuildmcp = any(u.name == "xbm" and u.prefix == "xbm__"
+                                for u in upstreams)
+    simulator_run_para = (
+        "\n\nFor a simulator build, install, and launch on this combined surface, set "
+        "workspacePath, scheme, simulatorId, and bundleId with "
+        "xbm__session_set_defaults, then call xbm__build_run_sim. Check its returned "
+        "build status and process ID. Drew's run_project_unmonitored only dispatches "
+        "a launch; it does not verify that the app started. For Apple's RunProject, "
+        "call XcodeListWorkspaces and pass the windowtab- identifier for the visible "
+        "Xcode window. A workspace- identifier for the same path may build but fail "
+        "to launch."
+        if fronts_xcodebuildmcp and not single else "")
     if single:
         u0 = upstreams[0]
         shown = f"{u0.prefix}<tool>" if u0.prefix else "the upstream's own tool names, unprefixed"
@@ -1408,7 +1418,7 @@ def build_server(upstreams: list[Upstream]) -> Server:
             "daemon stays up instead of each client spawning its own copy.\n\n"
             "If a call says 'not connected right now', this daemon is already retrying "
             "on its own every few seconds, so a short retry should work without any "
-            f"manual action.{mcpbridge_para}"
+            f"manual action.{mcpbridge_para}{simulator_run_para}"
         )
     else:
         roster = "; ".join(
@@ -1424,6 +1434,7 @@ def build_server(upstreams: list[Upstream]) -> Server:
             "The tool list reflects the upstreams available AT THE MOMENT YOU LIST. If "
             "an upstream named above is missing from the list, it is reconnecting; "
             f"re-run tools/list to pick it up when it returns.{mcpbridge_para}"
+            f"{simulator_run_para}"
         )
 
     # The modern (2026-07-28+) wire has no standing GET stream: clients hear changes on

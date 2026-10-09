@@ -3,7 +3,7 @@
 Three ways to reach Xcode-adjacent MCP tools, pick whichever fits:
 
 1. **`xcode-mcp-front` alone** — just Apple's `xcrun mcpbridge`, fronted so you can drive Xcode without the per-PID "Allow" popup firing on every new connecting process. Port 8765, tools unprefixed (`BuildProject`, `XcodeListWindows`, ...).
-2. **`xcode-combined-front`** — BOTH `mcpbridge` and Drew's `xcode-mcp` (`drews-xcode-mcp`) behind one endpoint, tools prefixed per-upstream (`xcode__BuildProject`, `drews__run_project_unmonitored`, ...) so a same-named tool from either side can never collide or shadow the other. Port 8767.
+2. **`xcode-combined-front`** — Apple's `mcpbridge`, Drew's `drews-xcode-mcp`, and XcodeBuildMCP behind one endpoint. Tools carry upstream prefixes (`xcode__`, `drews__`, `xbm__`) so names do not collide. Port 8767.
 3. **Drew's `drews-xcode-mcp` directly, no wrapper at all** — it has no popup friction of its own (folder-allowlist auth, not a live per-PID prompt). If you only need Drew's tools, just spawn `uvx drews-xcode-mcp` as a normal stdio MCP server, same as you always could. Nothing in this directory is required for that case.
 
 All three share the exact same `daemon.py` — no duplicated logic between (1) and (2); (3) needs no daemon at all.
@@ -12,7 +12,7 @@ All three share the exact same `daemon.py` — no duplicated logic between (1) a
 
 Xcode's MCP connection approval is keyed per connecting PID (confirmed by Jonathan, 2026-08-03). kicker runs many concurrent nodes, each configured to spawn `xcrun mcpbridge` itself. That's many concurrent PIDs, so many concurrent approval popups for what is functionally the same tool. Two off-the-shelf MCP aggregators were evaluated and rejected. `mcp-aggregator` (domdomegg) requires a full OIDC identity provider and can only front remote Streamable-HTTP upstreams, not local stdio subprocesses like `mcpbridge`. It architecturally can't do this job at all, regardless of its stronger maintenance reputation. `combine-mcp` (nazar256) has the right shape (spawns local stdio children directly, no auth layer) but is a stdio server itself, spawned fresh per client. It would collapse 3 processes to 1 per session, but it wouldn't fix the N-concurrent-nodes-N-popups problem, since each session still gets its own instance. Neither does the actual multiplexing job needed (many clients sharing one persistent upstream connection), so this is a small hand-rolled daemon instead.
 
-Drew's tool never got a standalone daemon of its own for the same reason config (3) above exists. It was built, verified end to end (real tool calls, real results, no permission prompt at all), then torn back down. The entire justification for this daemon is "one persistent connection avoids N popups," and Drew's tool has no popup to avoid in the first place. It only shows up here as one half of the *combined* daemon (2), where the value isn't popup-avoidance but having both toolsets behind one endpoint.
+Drew's tool never got a standalone daemon of its own for the same reason config (3) above exists. It was built, verified end to end (real tool calls, real results, no permission prompt at all), then torn back down. The daemon keeps one Apple connection open to avoid repeated approval prompts. The combined endpoint also exposes Drew's tools and XcodeBuildMCP under separate prefixes.
 
 ## Status: validated and running
 
@@ -40,13 +40,13 @@ Everything below was confirmed against the real daemons and real Xcode on 2026-0
 
 MCP client config: `"type": "http", "url": "http://127.0.0.1:8765/mcp"` in place of a stdio `xcrun mcpbridge` entry. Already wired into this session's own config (`js-project-GhOST/.mcp.json`); not yet wired into `js-llmKicker/.mcp.json` for real kicker node traffic.
 
-### Config 2 — xcode-combined-front (port 8767, xcode__ / drews__ prefixed)
+### Config 2 — xcode-combined-front (port 8767)
 
 Same daemon.py, different env config. Set up like this:
 
 ```sh
 # xcode-combined-front-run.sh sets:
-#   XCODE_MCP_FRONT_UPSTREAMS="xcode:1:xcrun:mcpbridge;drews:0:uvx:drews-xcode-mcp"
+#   XCODE_MCP_FRONT_MCP_INFO=~/.xcode-combined-front/_mcp_info.json
 #   XCODE_MCP_FRONT_PORT=8767
 #   XCODE_MCP_FRONT_HOME=~/.xcode-combined-front
 ../wrap-in-app/wrap-in-app xcode-combined-front-run.sh --log ~/.xcode-combined-front/daemon.log --name XcodeCombinedFront --outdir .
@@ -56,7 +56,21 @@ Same daemon.py, different env config. Set up like this:
 # template) — KeepAlive MUST be bare true, see the gotcha below.
 ```
 
-MCP client config: `"type": "http", "url": "http://127.0.0.1:8767/mcp"`. Tool names are prefixed — use `xcode__BuildProject`, `drews__run_project_unmonitored`, etc., never the bare upstream name.
+MCP client config: `"type": "http", "url": "http://127.0.0.1:8767/mcp"`. The launcher writes its three-upstream config to `_mcp_info.json`. Use the names shown by `tools/list`.
+
+For a simulator run, set `workspacePath`, `scheme`, `simulatorId`, and `bundleId` with `xbm__session_set_defaults`, then call `xbm__build_run_sim`. Check the returned build status and process ID. On 2026-10-09, this route built, installed, and launched Work Tool on the visible iPad Pro simulator, both before and after the system component repair. Apple's `RunProject` also works when given the visible Xcode window's workspace identifier; see below. Drew's `run_project_unmonitored` also built and launched `WorkTool PRIVATE` on that simulator. Its response confirms dispatch before the launch completes; a subsequent Apple `GetConsoleOutput` call reported the new session and PID 59979, and that process was running. Match the process name to the scheme when checking a run: `WorkTool PRIVATE.app/WorkTool PRIVATE` is separate from `WorkTool.app/WorkTool`.
+
+`check-simulator-components.py` compares the selected Xcode's signed `XcodeSystemResources.pkg` against the installed package receipt and three shared frameworks: CoreSimulator, CoreDevice, and CoreDeviceUtilities. Xcode 27.2 beta had installed newer versions of all three. A plain `sudo installer -pkg /Applications/Xcode.app/Contents/Resources/Packages/XcodeSystemResources.pkg -target /` changed the receipt to 27.0 but skipped the newer frameworks. The installer log said each component was skipped because a higher version was installed. Moving those three frameworks aside and reinstalling the 27.0 package replaced them; the version check then passed. Removing the beta app alone would have left the shared components in place.
+
+The repaired CoreSimulator service runs version 1171.7, `simctl` sees the booted iPad Pro, and XcodeBuildMCP launches Work Tool there. The remaining Apple `RunProject` failure came from targeting a second workspace instance without a GUI window. `XcodeListWorkspaces` showed `workspace-EY3faa8ZfF` and `windowtab-g88j6XBNeo` for the same Work Tool path. The former built but returned "The app failed to launch after building successfully." The latter followed the visible Xcode window's active `WorkTool PRIVATE` scheme, launched the app with a PID and session reference, and supported `GetConsoleOutput` for that session. Use a `windowtab-...` identifier for Apple's Run and console tools. `XcodeOpenWorkspace` can expose a separate `workspace-...` instance for the same path, so verify the identifier with `XcodeListWorkspaces` before running. The earlier `DeviceInteractionInstallAndRun` failure belongs to the windowless session; it was not needed for the working Run path.
+
+If another Xcode beta changes the shared frameworks, run `check-simulator-components.py`, then `sudo ./restore-selected-xcode-components.sh` from this directory. The repair script uses the selected Xcode's package, backs up the three existing frameworks, closes Xcode and Device Hub, installs the package, and checks the installed versions. It restores the backup if installation or verification fails. Keep the backup until simulator runs have been checked.
+
+XcodeBuildMCP opens `devices://` URLs when it runs an app. macOS was sending those URLs to Xcode 27.2 beta's Device Hub even though `xcode-select` pointed at Xcode 27.0. The combined launcher runs XcodeBuildMCP with a scoped `open` shim that sends only `devices://` URLs to the Device Hub beside its selected developer directory. Other `open` calls pass through unchanged. This leaves the Mac's default URL handler alone. `tools/tests/test-xcodebuildmcp-open.sh` checks the routing with a fake `open` command.
+
+The `devices:///manage/select` URL opens two windows in that one Device Hub process: the management window and the compact simulator window. The scoped launcher closes the management window after it sees the matching compact window. If the compact window is not visible yet, it leaves the management window open so the run remains visible. A live Work Tool build and run on 2026-10-09 left one Device Hub window and a running app. Do not quit Device Hub to clear an extra window, since quitting it shuts down the simulator.
+
+The bridge's connection Allow dialog and Xcode's workspace approval are separate. If `XcodeListWorkspaces` says the agent is not approved, call `XcodeOpenWorkspace` with the workspace path. The approval clicker acts only when an Allow dialog actually appears.
 
 ### Config 3 — Drew's tool directly, no wrapper
 
