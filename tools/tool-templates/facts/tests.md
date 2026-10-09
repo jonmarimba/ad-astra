@@ -1,23 +1,7 @@
-# Overlap: test-listing + test-running — MEASURED 2026-08-31, live, by effect
-Apple GetTestList (open workspace): structured — activeTestPlanName, counts
-  (enabled/disabled/total), each test's displayName + filePath. Worked on the open
-  SwiftPM package (AstraProbe), found example() with its path.
-Drew list_project_tests (BuildCmp.xcodeproj): "no test target configured" — requires a
-  .xcodeproj with a configured test target; cannot enumerate a SwiftPM package.
-DECISION: Apple owns test-listing and test-running. Sieve drews__list_project_tests and
-  drews__run_project_tests.
-Reason: Apple returns structured test-plan-aware results and works on the open workspace
-  including SwiftPM packages; Drew requires a configured .xcodeproj test target.
-CAVEAT (for Jonathan): evidence is from a SwiftPM package, which favours Apple. For a
-  real iOS .xcodeproj with a test target, Drew's path-based run (test a project without
-  opening it) is a genuine advantage. If your workflow is path-based testing of unopened
-  .xcodeproj apps, flip this decision.
+# Test tool ownership
 
-# NOT overlaps (verified by behaviour, both kept):
-# list-windows: Apple=Xcode workspace tabs; Drew=Mac app windows.
-# project-discovery: Apple XcodeGlob=glob files IN the open project; Drew
-#   get_xcode_projects=find .xcodeproj files on disk.
-# screenshot: Apple RenderPreview=render a SwiftUI preview snapshot; Drew
-#   take_*_screenshot=capture a window's pixels.
-# fs-list: Apple XcodeLS=project-navigator (feeds its file-ops suite, project-relative);
-#   Drew get_directory_listing=filesystem ls with sizes/mtimes. Different scopes.
+On 2026-10-09, Apple's `GetTestList` found `WorkTool_PRIVATEUITests/testBatchCloseUI()` in the open Work Tool PRIVATE scheme. Drew's `list_project_tests` found the same test with an explicit workspace path and scheme. Apple's result included the active plan, enabled status, and source location. Drew's listing took about 28 seconds because it built for testing. Apple owns test listing on the combined front.
+
+Apple's `RunAllTests` and `RunSomeTests` own normal tests in the open Xcode workspace. Drew's `run_project_tests` has not been run in this comparison, so there is no measured runner verdict. It is hidden to give the open-workspace test task one owner. XcodeBuildMCP's `test_sim` remains available because it accepts prepared `.xctestrun` and `.xctestproducts` files. Those inputs are a distinct test task.
+
+The 2026-08-31 comparison used a SwiftPM package and a project without a configured test target. Drew could not list tests there. On 2026-09-01, Drew chose a dependency scheme in Goals Tool and failed to list its tests. The current Work Tool result shows Drew can list tests when given the right scheme. These observations support Apple's listing result without claiming Drew cannot test an iOS project.

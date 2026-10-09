@@ -118,8 +118,10 @@ assert_contains "$SB/init.out" "xbm__session_set_defaults" \
   "the combined surface names the simulator setup tool"
 assert_contains "$SB/init.out" "xbm__build_run_sim" \
   "the combined surface directs simulator runs to the verified build-and-launch route"
-assert_contains "$SB/init.out" "only dispatches a launch" \
-  "the instructions distinguish an unmonitored dispatch from a verified launch"
+assert_contains "$SB/init.out" "For an interactive run in an open Xcode window" \
+  "the instructions choose Apple's RunProject for the visible Xcode window"
+assert_contains "$SB/init.out" "When Xcode is closed" \
+  "the instructions reserve XcodeBuildMCP's run for the Xcode-closed case"
 assert_contains "$SB/init.out" "windowtab-" \
   "the instructions point Apple's Run tool at the visible workspace"
 

@@ -3,7 +3,7 @@
 Three ways to reach Xcode-adjacent MCP tools, pick whichever fits:
 
 1. **`xcode-mcp-front` alone** — just Apple's `xcrun mcpbridge`, fronted so you can drive Xcode without the per-PID "Allow" popup firing on every new connecting process. Port 8765, tools unprefixed (`BuildProject`, `XcodeListWindows`, ...).
-2. **`xcode-combined-front`** — Apple's `mcpbridge`, Drew's `drews-xcode-mcp`, and XcodeBuildMCP behind one endpoint. Tools carry upstream prefixes (`xcode__`, `drews__`, `xbm__`) so names do not collide. Port 8767.
+2. **`xcode-combined-front`** — Apple's `mcpbridge`, Drew's `drews-xcode-mcp`, and XcodeBuildMCP behind one endpoint. Tools use upstream prefixes (`xcode__`, `drews__`, `xbm__`) so names do not collide. Port 8767.
 3. **Drew's `drews-xcode-mcp` directly, no wrapper at all** — it has no popup friction of its own (folder-allowlist auth, not a live per-PID prompt). If you only need Drew's tools, just spawn `uvx drews-xcode-mcp` as a normal stdio MCP server, same as you always could. Nothing in this directory is required for that case.
 
 All three share the exact same `daemon.py` — no duplicated logic between (1) and (2); (3) needs no daemon at all.
@@ -58,7 +58,11 @@ Same daemon.py, different env config. Set up like this:
 
 MCP client config: `"type": "http", "url": "http://127.0.0.1:8767/mcp"`. The launcher writes its three-upstream config to `_mcp_info.json`. Use the names shown by `tools/list`.
 
-For a simulator run, set `workspacePath`, `scheme`, `simulatorId`, and `bundleId` with `xbm__session_set_defaults`, then call `xbm__build_run_sim`. Check the returned build status and process ID. On 2026-10-09, this route built, installed, and launched Work Tool on the visible iPad Pro simulator, both before and after the system component repair. Apple's `RunProject` also works when given the visible Xcode window's workspace identifier; see below. Drew's `run_project_unmonitored` also built and launched `WorkTool PRIVATE` on that simulator. Its response confirms dispatch before the launch completes; a subsequent Apple `GetConsoleOutput` call reported the new session and PID 59979, and that process was running. Match the process name to the scheme when checking a run: `WorkTool PRIVATE.app/WorkTool PRIVATE` is separate from `WorkTool.app/WorkTool`.
+For an interactive run, use Apple's `RunProject` with the visible Xcode window's `windowtab-...` identifier. It waits for launch and returns a PID and console session. When Xcode is closed, set `workspacePath`, `scheme`, `simulatorId`, and `bundleId` with `xbm__session_set_defaults`, then use `xbm__build_run_sim`. That route built and launched Work Tool on 2026-10-09. Drew's `run_project_unmonitored` also launched the app in that check, but its response confirmed dispatch before launch completed. The combined front hides it so the visible run has one owner.
+
+Apple's `GetTestList`, `RunAllTests`, and `RunSomeTests` own tests in the open workspace. XcodeBuildMCP's `test_sim` accepts prepared `.xctestrun` and `.xctestproducts` files. Drew found the Work Tool PRIVATE UI test with an explicit scheme, but listing took about 28 seconds. The combined front hides Drew's test tools; its test runner was not measured. See `../tool-templates/facts/tests.md`.
+
+The ownership map in [OWNERSHIP.md](OWNERSHIP.md) lists the overlapping tasks and the distinct tools retained from each upstream.
 
 `check-simulator-components.py` compares the selected Xcode's signed `XcodeSystemResources.pkg` against the installed package receipt and three shared frameworks: CoreSimulator, CoreDevice, and CoreDeviceUtilities. Xcode 27.2 beta had installed newer versions of all three. A plain `sudo installer -pkg /Applications/Xcode.app/Contents/Resources/Packages/XcodeSystemResources.pkg -target /` changed the receipt to 27.0 but skipped the newer frameworks. The installer log said each component was skipped because a higher version was installed. Moving those three frameworks aside and reinstalling the 27.0 package replaced them; the version check then passed. Removing the beta app alone would have left the shared components in place.
 

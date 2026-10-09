@@ -1400,14 +1400,13 @@ def build_server(upstreams: list[Upstream]) -> Server:
     fronts_xcodebuildmcp = any(u.name == "xbm" and u.prefix == "xbm__"
                                 for u in upstreams)
     simulator_run_para = (
-        "\n\nFor a simulator build, install, and launch on this combined surface, set "
-        "workspacePath, scheme, simulatorId, and bundleId with "
+        "\n\nFor an interactive run in an open Xcode window, call XcodeListWorkspaces "
+        "and pass its windowtab- identifier to Apple's RunProject. That tool verifies "
+        "the launch and returns a process ID and console session. A workspace- "
+        "identifier for the same path may build but fail to launch. When Xcode is "
+        "closed, set workspacePath, scheme, simulatorId, and bundleId with "
         "xbm__session_set_defaults, then call xbm__build_run_sim. Check its returned "
-        "build status and process ID. Drew's run_project_unmonitored only dispatches "
-        "a launch; it does not verify that the app started. For Apple's RunProject, "
-        "call XcodeListWorkspaces and pass the windowtab- identifier for the visible "
-        "Xcode window. A workspace- identifier for the same path may build but fail "
-        "to launch."
+        "build status and process ID."
         if fronts_xcodebuildmcp and not single else "")
     if single:
         u0 = upstreams[0]

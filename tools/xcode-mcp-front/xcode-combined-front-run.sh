@@ -45,24 +45,28 @@ cat > "$XCODE_MCP_FRONT_MCP_INFO" <<'EOF'
         {"tool": "build_sim", "why": "Narrow slice: compile-only build overlaps the measured build owner (Drew's, exposed as `build`); build_run_sim is the piece nothing else has."},
         {"tool": "clean", "why": "Narrow slice: drews__clean_project owns clean."},
         {"tool": "discover_projs", "why": "Narrow slice: drews__get_xcode_projects owns on-disk project discovery."},
-        {"tool": "get_app_bundle_id", "why": "Narrow slice: plumbing helper outside the kept loop."},
-        {"tool": "get_sim_app_path", "why": "Narrow slice: plumbing helper outside the kept loop."},
         {"tool": "install_app_sim", "why": "Narrow slice: ios-simulator's install_app owns this; build_run_sim installs on its own."},
         {"tool": "launch_app_sim", "why": "Narrow slice: ios-simulator's launch_app owns this; build_run_sim launches on its own."},
         {"tool": "stop_app_sim", "why": "Narrow slice: ios-simulator's terminate_app owns this."},
-        {"tool": "list_schemes", "why": "Narrow slice: scheme listing owned elsewhere on this surface."},
-        {"tool": "list_sims", "why": "Narrow slice: drews__list_booted_simulators and ios-simulator cover sims."},
         {"tool": "screenshot", "why": "Narrow slice: drews' and ios-simulator's screenshots own capture."},
         {"tool": "record_sim_video", "why": "Narrow slice: ios-simulator's record_video/stop_recording own video."},
-        {"tool": "show_build_settings", "why": "Narrow slice: build-settings reads stay with the Xcode-side owners."},
-        {"tool": "snapshot_ui", "why": "Narrow slice: idb/ios-simulator ui_describe_all owns semantic UI snapshots."}
+        {"tool": "snapshot_ui", "why": "Apple DeviceInteractionSynthesize returns the current UI hierarchy and screenshot in its device session; Apple owns Xcode device inspection."}
       ]
     },
     "drews": {
       "command": "uvx", "args": ["drews-xcode-mcp"],
       "block": [
-        {"tool": "list_project_tests", "why": "MEASURED (facts/tests.md): Apple's GetTestList gives structured test-plan results and works on the open workspace incl SwiftPM; Drew needs a configured .xcodeproj test target. Apple owns test-listing. (CAVEAT in facts/tests.md for path-based .xcodeproj workflows.)"},
-        {"tool": "run_project_tests", "why": "MEASURED (facts/tests.md): Apple owns test-running for the open workspace; see the CAVEAT for path-based .xcodeproj workflows."}
+        {"tool": "create_project", "why": "Apple XcodeNewProject uses Xcode's template catalog and owns new Xcode project creation."},
+        {"tool": "get_project_schemes", "why": "Apple XcodeListSchemes returned the three Work Tool picker schemes; Drew returned dependency schemes too. Apple owns open-workspace schemes."},
+        {"tool": "list_run_destinations", "why": "Apple XcodeListRunDestinations identifies the active, eligible picker destinations. Drew returns simulator IDs but not picker eligibility. Apple owns destination selection."},
+        {"tool": "get_active_run_destination", "why": "Apple XcodeListRunDestinations includes the active destination. Drew's separate query duplicates that answer."},
+        {"tool": "set_run_destination", "why": "Apple owns the Xcode destination family; XcodeSwitchRunDestination changes the selected destination."},
+        {"tool": "list_project_tests", "why": "Apple GetTestList returned the same Work Tool test immediately, with enabled status and source location. Drew required a build-for-testing pass."},
+        {"tool": "run_project_tests", "why": "Apple owns tests for the open workspace with RunAllTests and RunSomeTests. Drew's run was not measured; XBM test_sim retains prepared-artifact testing."},
+        {"tool": "run_project_unmonitored", "why": "Apple RunProject verifies launch and returns a PID and console session in the visible Xcode window. Drew only confirms dispatch."},
+        {"tool": "run_project_with_user_interaction", "why": "Apple RunProject owns interactive Xcode runs and avoids Drew's blocking completion dialog."},
+        {"tool": "stop_project", "why": "Apple StopProject owns stopping apps launched through the visible Xcode window."},
+        {"tool": "take_simulator_screenshot", "why": "The ios-simulator screenshot tool owns simulator pixel capture; Drew's separate capture duplicates it."}
       ],
       "map": [
         {"tool": "build_project", "name": "build", "why": "MEASURED: Drew wins the build overlap; expose it under one canonical name so the model sees a single build tool, not two vendors' names."}
