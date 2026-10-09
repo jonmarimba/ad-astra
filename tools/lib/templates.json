@@ -55,11 +55,13 @@
    ]
   },
   "kicker-dev": {
-   "description": "Working on kicker itself \u2014 its own daemon surface plus the mac and Xcode tooling. Left flat on purpose: composing it with the new xcode template would silently grow what kicker repos install.",
+   "description": "Working on kicker itself: its own daemon, Mac control, and the Xcode 27 combined front.",
    "tools": [
     "mcp-kickerd",
-    "mcp-mac-control-mcp",
-    "mcp-xcode"
+    "mcp-mac-control-mcp"
+   ],
+   "templates": [
+    "xcode"
    ]
   },
   "writing": {

@@ -3,8 +3,8 @@
 # mcp-bundle/install.sh — install the kicker MCP server set INTO A GIVEN REPO.
 #
 # Usage:
-#   ./install.sh --into <repo>                 # all servers
-#   ./install.sh --into <repo> xcode ios-simulator   # just these
+#   ./install.sh --into <repo>                 # current default server set
+#   ./install.sh --into <repo> xcode-combined ios-simulator   # just these
 #   ./install.sh --into <repo> --list          # what would be installed
 #
 # WHAT THIS IS
@@ -18,8 +18,8 @@
 #   Qwen Code    ->  <repo>/.qwen/settings.json
 #   Codex CLI    ->  <repo>/.codex/config.toml
 #
-# Servers in the bundle: mac-control-mcp, xcode-mcp-server, xcode, ios-simulator,
-# XcodeBuildMCP, mobile-mcp, kickerd.
+# The default bundle uses xcode-combined with mac-control-mcp, ios-simulator,
+# mobile-mcp, and kickerd. Direct Xcode servers remain explicit options.
 #
 # WHERE THIS IS GOING (not built yet — do not pretend otherwise)
 # --------------------------------------------------------------
@@ -74,6 +74,6 @@ fi
 
 echo
 echo "wrote (repo-local only):"
-for f in .mcp.json .qwen/settings.json .codex/config.toml; do
+for f in .mcp.json .qwen/settings.json .gemini/settings.json .codex/config.toml; do
   [ -e "$TARGET/$f" ] && echo "  $TARGET/$f"
 done

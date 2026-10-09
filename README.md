@@ -24,9 +24,11 @@ A template is a named set of tools for one kind of project. A template can hold 
 <!-- template-tree:start -->
 ```
 kicker-dev/
+  xcode/
+    mcp-xcode-combined  [repo-config]
+    xcode-mcp-front  [machine]
   mcp-kickerd  [repo-config]
   mcp-mac-control-mcp  [repo-config]
-  mcp-xcode  [repo-config]
 legal-pdf/
   base/
     writing/

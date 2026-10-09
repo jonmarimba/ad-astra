@@ -10,9 +10,10 @@
 # unanswered dialog even CRASHES the bridge (assertionFailure in MCPBridge.main(), crash
 # logs 2026-08-26..09-01). This tool exists so no repo ever direct-spawns those two servers.
 #
-# Writes an HTTP server entry for ALL THREE agents (no process spawned, nothing to approve per-repo):
+# Writes an HTTP server entry for all four agents (no process spawned by the repo):
 #   Claude Code -> <repo>/.mcp.json               (server "xcode-combined", type http)
 #   Qwen Code   -> <repo>/.qwen/settings.json     (mcpServers.xcode-combined.httpUrl)
+#   Gemini CLI  -> <repo>/.gemini/settings.json   (mcpServers.xcode-combined.httpUrl)
 #   Codex CLI   -> <repo>/.codex/config.toml      ([mcp_servers.xcode-combined] url)
 # Each file is created when it is missing. That matters: Qwen and Codex take a project config INSTEAD
 # of the user-level one, not merged with it, so a repo whose other MCP servers made a project config
@@ -22,7 +23,7 @@
 # second install, and Qwen without it for good (found 2026-10-08 by test-template-swift.sh).
 #
 # The mcp-bundle engine handles stdio spawns only, so this writes its own entries.
-# Dependencies: jq (Claude and Qwen entries), python3 (codex toml edit).
+# Dependencies: jq (JSON entries), python3 (Codex TOML edit).
 #
 # Usage: ./install.sh --into <repo>
 set -uo pipefail
@@ -54,19 +55,20 @@ else
 fi
 echo "mcp-xcode-combined: wrote $NAME -> $URL into $MCPJSON"
 
-# Qwen keeps per-repo config in <repo>/.qwen/settings.json; an HTTP server is a `httpUrl` entry (the
-# shape `qwen mcp add --scope project --transport http` writes).
-QWENJSON="$TARGET/.qwen/settings.json"
-mkdir -p "$TARGET/.qwen"
-if [ -f "$QWENJSON" ]; then
-  tmp="$(mktemp)"
-  jq --arg name "$NAME" --arg url "$URL" 'del(.mcpServers.xcode, .mcpServers."xcode-mcp-server", .mcpServers.XcodeBuildMCP, .mcpServers."xcode-mcp-front") | .mcpServers[$name] = {"httpUrl":$url}' "$QWENJSON" > "$tmp" \
-     || { rm -f "$tmp"; echo "mcp-xcode-combined: FAIL — $QWENJSON is not valid JSON; fix it by hand." >&2; exit 65; }
-  mv "$tmp" "$QWENJSON"
-else
-  jq -n --arg name "$NAME" --arg url "$URL" '{"mcpServers": {($name): {"httpUrl":$url}}}' > "$QWENJSON"
-fi
-echo "mcp-xcode-combined: wrote $NAME -> $URL into $QWENJSON"
+# Qwen and Gemini use `httpUrl` for streamable HTTP MCP servers.
+for agent in qwen gemini; do
+  AGENTJSON="$TARGET/.$agent/settings.json"
+  mkdir -p "$TARGET/.$agent"
+  if [ -f "$AGENTJSON" ]; then
+    tmp="$(mktemp)"
+    jq --arg name "$NAME" --arg url "$URL" 'del(.mcpServers.xcode, .mcpServers."xcode-mcp-server", .mcpServers.XcodeBuildMCP, .mcpServers."xcode-mcp-front") | .mcpServers[$name] = {"httpUrl":$url}' "$AGENTJSON" > "$tmp" \
+       || { rm -f "$tmp"; echo "mcp-xcode-combined: FAIL — $AGENTJSON is not valid JSON; fix it by hand." >&2; exit 65; }
+    mv "$tmp" "$AGENTJSON"
+  else
+    jq -n --arg name "$NAME" --arg url "$URL" '{"mcpServers": {($name): {"httpUrl":$url}}}' > "$AGENTJSON"
+  fi
+  echo "mcp-xcode-combined: wrote $NAME -> $URL into $AGENTJSON"
+done
 
 # Codex keeps per-repo config in <repo>/.codex/config.toml.
 CODEXTOML="$TARGET/.codex/config.toml"
@@ -102,8 +104,8 @@ if header in s:
         f.write("\n".join(lines))
     print(f"mcp-xcode-combined: set url in {header} of {path}")
 else:
-    with open(path, "a") as f:
-        f.write(("\n" if s and not s.endswith("\n\n") else "") + f"{header}\nurl = \"{url}\"\n")
+    with open(path, "w") as f:
+        f.write(s + ("\n" if s and not s.endswith("\n\n") else "") + f"{header}\nurl = \"{url}\"\n")
     print(f"mcp-xcode-combined: wrote {header} into {path}")
 PY
 

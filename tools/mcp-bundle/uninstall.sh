@@ -45,7 +45,7 @@ fi
 echo
 echo "remaining config in $TARGET:"
 found=0
-for f in .mcp.json .qwen/settings.json .codex/config.toml; do
+for f in .mcp.json .qwen/settings.json .gemini/settings.json .codex/config.toml; do
   [ -e "$TARGET/$f" ] && { echo "  still present: $f"; found=1; }
 done
 # `[ cond ] && echo` as the LAST statement returns the test's exit code, so a

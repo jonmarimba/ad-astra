@@ -93,6 +93,14 @@ assert_file "$MAC/.doctrine/act-first.md" "and the base doctrine"
 assert_not_contains "$SB/mac.out" "MACHINE axe" "axe is not part of mac-swift"
 assert_eq "mac-swift" "$(jq -r '.template_tools | keys | join(",")' "$MAC/.astra/manifest.json")" "the manifest records the template"
 
+echo "== kicker-dev uses the combined Xcode front"
+KICKER="$SB/kicker"; new_repo "$KICKER"
+env_run python3 "$TEMPLATE" install kicker-dev --into "$KICKER" > "$SB/kicker.out" 2>&1; rc=$?
+assert_eq 0 "$rc" "kicker-dev installs"
+assert_eq "kickerd,mac-control-mcp,xcode-combined" "$(servers "$KICKER")" "kicker-dev has the combined front and no direct Xcode server"
+assert_eq "http://127.0.0.1:8767/mcp" "$(jq -r '.mcpServers["xcode-combined"].httpUrl' "$KICKER/.gemini/settings.json")" "Gemini has the combined front"
+assert_not_contains "$KICKER/.codex/config.toml" "[mcp_servers.xcode]" "Codex has no direct Apple bridge"
+
 echo "== RED controls"
 red "an unknown template is refused" 66 "no such template or tool" env_run python3 "$TEMPLATE" install no-such-template --into "$MAC"
 red "installing into a directory that is not there is refused" 66 "no such" env_run python3 "$TEMPLATE" install mac-swift --into "$SB/missing"

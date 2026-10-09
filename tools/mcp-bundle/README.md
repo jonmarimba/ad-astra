@@ -1,6 +1,6 @@
 # mcp-bundle — the kicker MCP server set, installed PER REPO
 
-The first astra tool that is really a *bundle* of tools. `setup-mcp.sh` is copied verbatim from `js-llmKicker/scripts/setup-mcp.sh` — astra-fied as-is, deliberately not refactored yet.
+The first astra tool that is a bundle of tools. `setup-mcp.sh` began as a copy of `js-llmKicker/scripts/setup-mcp.sh`. The default now uses the Xcode 27 combined front.
 
 ```
 ./install.sh   --into <repo> [servers...]
@@ -8,14 +8,15 @@ The first astra tool that is really a *bundle* of tools. `setup-mcp.sh` is copie
 ./setup-mcp.sh --list           # read-only, from inside a repo
 ```
 
-Servers: `mac-control-mcp`, `xcode-mcp-server`, `xcode`, `ios-simulator`, `XcodeBuildMCP`, `mobile-mcp`, `kickerd`.
+The default set uses `xcode-combined` with `mac-control-mcp`, `ios-simulator`, `mobile-mcp`, and `kickerd`. Direct Xcode providers remain available by explicit name.
 
-It configures the same set for three agents that each store config differently:
+It configures the set for four agents that each store config differently:
 
 | agent | file |
 |---|---|
 | Claude Code | `<repo>/.mcp.json` via `claude mcp add --scope project` |
 | Qwen Code | `<repo>/.qwen/settings.json` |
+| Gemini CLI | `<repo>/.gemini/settings.json` |
 | Codex CLI | `<repo>/.codex/config.toml` |
 
 ## Never global

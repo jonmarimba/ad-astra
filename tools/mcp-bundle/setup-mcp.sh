@@ -6,14 +6,15 @@ set -euo pipefail
 # Configure the same MCP server set for:
 #   - Claude Code: ./.mcp.json via `claude mcp add --scope project`
 #   - Qwen Code:   ./.qwen/settings.json
+#   - Gemini CLI: ./.gemini/settings.json for xcode-combined
 #   - Codex CLI:   ./.codex/config.toml
 #
-# Default action with no args: install all.
+# Default action with no args: install the current MCP set.
 #
 # Usage:
 #   ./scripts/setup-mcp.sh
 #   ./scripts/setup-mcp.sh --install
-#   ./scripts/setup-mcp.sh --install xcode ios-simulator
+#   ./scripts/setup-mcp.sh --install xcode-combined ios-simulator
 #   ./scripts/setup-mcp.sh --disable
 #   ./scripts/setup-mcp.sh --disable xcode
 #   ./scripts/setup-mcp.sh --list
@@ -21,6 +22,7 @@ set -euo pipefail
 
 typeset -a ALL_MCPS=(
   mac-control-mcp
+  xcode-combined
   xcode-mcp-server
   xcode
   ios-simulator
@@ -28,6 +30,9 @@ typeset -a ALL_MCPS=(
   mobile-mcp
   kickerd
 )
+typeset -a DEFAULT_MCPS=(mac-control-mcp xcode-combined ios-simulator mobile-mcp kickerd)
+readonly XCODE_COMBINED_URL="${XCODE_COMBINED_URL:-http://127.0.0.1:8767/mcp}"
+readonly BUNDLE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # The installer (mcp-mac-control-mcp/fetch-app.sh) decides where the app goes, /Applications by default;
 # MAC_CONTROL_APP moves it for both, so the downloader and this check can never disagree.
@@ -72,12 +77,12 @@ Usage:
   setup-mcp.sh --help
 
 Default:
-  With no arguments, installs all MCPs.
+  With no arguments, installs the current MCP set.
 
 Options:
   --install [mcp-name ...]
     Install one or more MCPs.
-    With no MCP names, installs all.
+    With no MCP names, installs the current MCP set.
 
   --disable [mcp-name ...]
     disable one or more MCPs.
@@ -91,6 +96,7 @@ Options:
 
 Known MCPs:
   mac-control-mcp
+  xcode-combined
   xcode-mcp-server
   xcode
   ios-simulator
@@ -117,9 +123,9 @@ list_mcps() {
 
 resolve_targets() {
   # Prints selected MCP names, one per line.
-  # Empty selection means all.
+  # Empty selection means the current default set.
   if [[ "$#" -eq 0 ]]; then
-    printf "%s\n" "${ALL_MCPS[@]}"
+    printf "%s\n" "${DEFAULT_MCPS[@]}"
     return
   fi
 
@@ -264,6 +270,9 @@ ensure_deps_for_target() {
   local name="$1"
 
   case "$name" in
+    xcode-combined)
+      ensure_claude
+      ;;
     mac-control-mcp)
       ensure_mac_control_mcp
       ensure_claude
@@ -320,6 +329,9 @@ install_claude_one() {
   claude_disable_one "$name"
 
   case "$name" in
+    xcode-combined)
+      claude mcp add --scope project --transport http xcode-combined "$XCODE_COMBINED_URL"
+      ;;
     mac-control-mcp)
       claude mcp add --scope project mac-control-mcp -- "$MAC_CONTROL_MCP_EXECUTABLE"
       ;;
@@ -379,6 +391,9 @@ qwen_json_for_target() {
   local name="$1"
 
   case "$name" in
+    xcode-combined)
+      printf '{"httpUrl":"%s"}\n' "$XCODE_COMBINED_URL"
+      ;;
     mac-control-mcp)
       cat <<EOF
 {
@@ -518,6 +533,9 @@ codex_block_for_target() {
   local name="$1"
 
   case "$name" in
+    xcode-combined)
+      printf '[mcp_servers.xcode-combined]\nurl = "%s"\n' "$XCODE_COMBINED_URL"
+      ;;
     mac-control-mcp)
       cat <<EOF
 [mcp_servers.mac-control-mcp]
@@ -680,6 +698,14 @@ install_targets() {
   local -a targets=("$@")
   local name
 
+  if [[ " ${targets[*]} " == *" xcode-combined "* ]]; then
+    for name in xcode-mcp-server xcode XcodeBuildMCP; do
+      disable_claude_one "$name"
+      disable_qwen_one "$name"
+      disable_codex_one "$name"
+    done
+  fi
+
   for name in "${targets[@]}"; do
     ensure_deps_for_target "$name"
     install_claude_one "$name"
@@ -687,7 +713,11 @@ install_targets() {
     install_codex_one "$name"
   done
 
-  log "Installed selected MCP config for Claude Code, Qwen Code, and Codex"
+  if [[ " ${targets[*]} " == *" xcode-combined "* ]]; then
+    "$BUNDLE_DIR/../mcp-xcode-combined/install.sh" --into "$PWD"
+  fi
+
+  log "Installed selected MCP config"
 }
 
 disable_targets() {
@@ -699,6 +729,10 @@ disable_targets() {
     disable_qwen_one "$name"
     disable_codex_one "$name"
   done
+
+  if [[ " ${targets[*]} " == *" xcode-combined "* ]]; then
+    "$BUNDLE_DIR/../mcp-xcode-combined/uninstall.sh" --into "$PWD"
+  fi
 
   maybe_disable_empty_mcp_json
   maybe_disable_empty_qwen_dir
@@ -743,7 +777,11 @@ main() {
       ;;
   esac
 
-  names=("${(@f)$(resolve_targets "$@")}")
+  if [[ "$action" == "disable" && "$#" -eq 0 ]]; then
+    names=("${ALL_MCPS[@]}")
+  else
+    names=("${(@f)$(resolve_targets "$@")}")
+  fi
 
   case "$action" in
     install)

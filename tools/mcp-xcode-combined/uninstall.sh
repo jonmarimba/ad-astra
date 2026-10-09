@@ -36,14 +36,16 @@ if [ -f "$MCPJSON" ] && jq -e --arg n "$NAME" '.mcpServers[$n]' "$MCPJSON" >/dev
   fi
 fi
 
-QWENJSON="$TARGET/.qwen/settings.json"
-if [ -f "$QWENJSON" ] && jq -e --arg n "$NAME" '.mcpServers[$n]' "$QWENJSON" >/dev/null 2>&1; then
-  tmp="$(mktemp)"
-  jq --arg n "$NAME" 'del(.mcpServers[$n]) | if (.mcpServers | length) == 0 then del(.mcpServers) else . end' "$QWENJSON" > "$tmp" \
-    || { rm -f "$tmp"; echo "mcp-xcode-combined: FAIL — $QWENJSON is not valid JSON; fix it by hand." >&2; exit 65; }
-  if [ "$(jq 'length' "$tmp")" = 0 ]; then rm -f "$QWENJSON" "$tmp"; echo "mcp-xcode-combined: removed $NAME; $QWENJSON held nothing else, so it is gone too"
-  else mv "$tmp" "$QWENJSON"; echo "mcp-xcode-combined: removed $NAME from $QWENJSON"; fi
-fi
+for agent in qwen gemini; do
+  AGENTJSON="$TARGET/.$agent/settings.json"
+  if [ -f "$AGENTJSON" ] && jq -e --arg n "$NAME" '.mcpServers[$n]' "$AGENTJSON" >/dev/null 2>&1; then
+    tmp="$(mktemp)"
+    jq --arg n "$NAME" 'del(.mcpServers[$n]) | if (.mcpServers | length) == 0 then del(.mcpServers) else . end' "$AGENTJSON" > "$tmp" \
+      || { rm -f "$tmp"; echo "mcp-xcode-combined: FAIL — $AGENTJSON is not valid JSON; fix it by hand." >&2; exit 65; }
+    if [ "$(jq 'length' "$tmp")" = 0 ]; then rm -f "$AGENTJSON" "$tmp"; echo "mcp-xcode-combined: removed $NAME; $AGENTJSON held nothing else, so it is gone too"
+    else mv "$tmp" "$AGENTJSON"; echo "mcp-xcode-combined: removed $NAME from $AGENTJSON"; fi
+  fi
+done
 
 CODEXTOML="$TARGET/.codex/config.toml"
 if [ -f "$CODEXTOML" ]; then
