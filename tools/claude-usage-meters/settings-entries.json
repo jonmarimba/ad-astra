@@ -1,0 +1,25 @@
+{
+  "entries": [
+    {
+      "path": ["statusLine"],
+      "value": {
+        "type": "command",
+        "command": "\"$CLAUDE_PROJECT_DIR\"/.astra/claude-usage-meters/statusline.sh",
+        "refreshInterval": 60
+      }
+    },
+    {
+      "path": ["extraKnownMarketplaces", "usage-meters"],
+      "value": {
+        "source": {
+          "source": "github",
+          "repo": "drewster99/claude-usage-meters"
+        }
+      }
+    },
+    {
+      "path": ["enabledPlugins", "usage-meters@usage-meters"],
+      "value": true
+    }
+  ]
+}

@@ -136,14 +136,18 @@ def copy_atomic(src, dest):
 
 
 def place(repo, tool, pairs):
-    hook_specs = [a[len("--hook="):] for a in pairs if a.startswith("--hook=")]
-    pairs = [a for a in pairs if not a.startswith("--hook=")]
     """Copy src:dest pairs and record them under one tool entry. Re-placing a
     tool replaces its entry, so a file a newer installer no longer ships stops
     being tracked (and is removed) rather than lingering forever."""
+    hook_specs = [a[len("--hook="):] for a in pairs if a.startswith("--hook=")]
+    settings_srcs = [a[len("--settings="):] for a in pairs if a.startswith("--settings=")]
+    pairs = [a for a in pairs if not a.startswith(("--hook=", "--settings="))]
     repo = Path(repo)
     data = load(repo)
     old = data.get("tools", {}).get(tool, {})
+    settings = [e for src in settings_srcs for e in load_settings_entries(src)]
+    # Checked before any file is copied, so a conflict leaves the repo exactly as it was.
+    edited_settings = check_settings(repo, tool, settings, old.get("settings"))
     files, paths = {}, {}
     for pair in pairs:
         if ":" not in pair:
@@ -182,6 +186,11 @@ def place(repo, tool, pairs):
     if hook_specs:
         entry["hooks"] = hook_specs
     add_hooks(repo, tool, hook_specs, old.get("hooks"))
+    apply_settings(repo, tool, data, settings, old.get("settings"), edited_settings)
+    if settings:
+        # An edited leaf keeps the value astra last wrote on record, as an edited file keeps its hash.
+        entry["settings"] = [{"path": e["path"], "value": edited_settings.get(json.dumps(e["path"]), e["value"])}
+                             for e in settings]
     remote = source_remote()
     if remote:
         entry["source_remote"] = remote
@@ -298,6 +307,162 @@ def add_hooks(repo, tool, specs, old_specs=None):
     sp.write_text(json.dumps(cfg, indent=2) + "\n")
 
 
+# ---- Claude Code settings entries, per repo ---------------------------------
+# A tool may also own plain entries in <repo>/.claude/settings.json, such as a
+# statusLine or an enabled plugin. It ships them as a JSON file of
+# {"entries": [{"path": [key, ...], "value": ...}]}, passed as
+# --settings=<astra-relative file>. Each path names one leaf, so a tool owns
+# enabledPlugins["x@y"] without owning the rest of enabledPlugins. The manifest
+# records each leaf with its value: uninstall removes a leaf only while it still
+# holds that value, and install refuses to replace a value it did not write.
+
+def load_settings_entries(src_rel):
+    src = ASTRA / src_rel
+    try:
+        entries = json.loads(src.read_text())["entries"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        die(f"{src} is not a settings-entries file ({e})")
+    if not isinstance(entries, list) or not entries:
+        die(f"{src}: 'entries' must be a non-empty list")
+    for e in entries:
+        path = e.get("path") if isinstance(e, dict) else None
+        if (not isinstance(path, list) or not path or not all(isinstance(k, str) and k for k in path)
+                or "value" not in e):
+            die(f"{src}: each entry needs a non-empty 'path' list of keys and a 'value': {e}")
+    return [{"path": e["path"], "value": e["value"]} for e in entries]
+
+
+def _read_settings(repo):
+    sp = _settings_path(repo)
+    if not sp.exists():
+        return {}
+    try:
+        cfg = json.loads(sp.read_text())
+    except Exception as e:
+        die(f"{sp} is unreadable ({e}); refusing to edit it")
+    if not isinstance(cfg, dict):
+        die(f"{sp} does not hold a JSON object; refusing to edit it")
+    return cfg
+
+
+def _write_settings(repo, cfg):
+    sp = _settings_path(repo)
+    if not cfg:
+        if sp.exists():
+            sp.unlink()
+            prune(Path(repo), sp.parent)
+        return
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    tmp = sp.with_name(sp.name + ".astra-tmp")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+    os.replace(tmp, sp)
+
+
+_MISSING = object()
+
+
+def _get_leaf(cfg, path):
+    node = cfg
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return _MISSING
+        node = node[key]
+    return node
+
+
+def _drop_leaf(cfg, path):
+    """Delete one leaf and every object it leaves empty on the way up."""
+    parents = [cfg]
+    for key in path[:-1]:
+        parents.append(parents[-1][key])
+    del parents[-1][path[-1]]
+    for depth in range(len(path) - 1, 0, -1):
+        if parents[depth]:
+            break
+        del parents[depth - 1][path[depth - 1]]
+
+
+def _claimed_by_others(data, tool, path):
+    return any(e["path"] == path
+               for other, entry in data.get("tools", {}).items() if other != tool
+               for e in entry.get("settings", []))
+
+
+def check_settings(repo, tool, entries, old_entries):
+    """Decide, before anything is written, what happens to each leaf that is
+    already set to another value. A leaf this tool wrote and the user changed
+    since is kept, as an edited file is. Any other value belongs to the repo:
+    replacing a repo's own statusLine without asking would silently change its
+    behaviour, so that refuses. ASTRA_FORCE=1 overwrites both.
+    Returns {json path: value astra last wrote} for the kept leaves."""
+    edited = {}
+    if not entries:
+        return edited
+    cfg = _read_settings(repo)
+    for e in entries:
+        node = cfg
+        for key in e["path"][:-1]:
+            node = node.get(key, {})
+            if not isinstance(node, dict):
+                die(f"{_settings_path(repo)}: {key} is not an object; cannot set {'.'.join(e['path'])}")
+    if os.environ.get("ASTRA_FORCE") == "1":
+        return edited
+    ours = {json.dumps(e["path"]): e["value"] for e in (old_entries or [])}
+    for e in entries:
+        key = json.dumps(e["path"])
+        current = _get_leaf(cfg, e["path"])
+        if current is _MISSING or current == e["value"] or ours.get(key, _MISSING) == current:
+            continue
+        if key in ours:
+            print(f"astra: kept your edited setting {'.'.join(e['path'])} in .claude/settings.json "
+                  f"(it differs from what astra wrote; ASTRA_FORCE=1 overwrites it)", file=sys.stderr)
+            edited[key] = ours[key]
+            continue
+        die(f"{_settings_path(repo)} already sets {'.'.join(e['path'])} to {json.dumps(current)}; "
+            f"{tool} would replace it. Remove that entry first, or run again with ASTRA_FORCE=1 "
+            f"to overwrite it.")
+    return edited
+
+
+def remove_settings(repo, tool, data, entries, keep_paths=()):
+    """Remove the leaves this tool recorded, except ones the user changed since
+    (kept, and reported) and ones another installed tool also records."""
+    if not entries:
+        return
+    cfg = _read_settings(repo)
+    keep = {json.dumps(p) for p in keep_paths}
+    for e in entries:
+        if json.dumps(e["path"]) in keep or _claimed_by_others(data, tool, e["path"]):
+            continue
+        current = _get_leaf(cfg, e["path"])
+        if current is _MISSING:
+            continue
+        if current != e["value"] and os.environ.get("ASTRA_FORCE") != "1":
+            print(f"astra: kept your edited setting {'.'.join(e['path'])} in .claude/settings.json "
+                  f"(it differs from what astra wrote; ASTRA_FORCE=1 removes it)", file=sys.stderr)
+            continue
+        _drop_leaf(cfg, e["path"])
+    _write_settings(repo, cfg)
+
+
+def apply_settings(repo, tool, data, entries, old_entries, edited):
+    """Write this tool's leaves, after removing any leaf an older install wrote
+    that this one no longer ships. check_settings has already run; the leaves
+    it reported as edited stay as the user left them."""
+    remove_settings(repo, tool, data, old_entries, keep_paths=[e["path"] for e in entries])
+    if not entries:
+        return
+    cfg = _read_settings(repo)
+    for e in entries:
+        if json.dumps(e["path"]) in edited:
+            continue
+        node = cfg
+        for key in e["path"][:-1]:
+            node = node.setdefault(key, {})
+        node[e["path"][-1]] = e["value"]
+    _write_settings(repo, cfg)
+
+
 def unplace(repo, tool):
     repo = Path(repo)
     data = load(repo)
@@ -306,6 +471,7 @@ def unplace(repo, tool):
         print(f"astra: {tool} is not recorded in {manifest_path(repo)}; nothing to remove")
         return
     remove_hooks(repo, tool, entry.get("hooks"))
+    remove_settings(repo, tool, data, entry.get("settings"))
     was = recorded_hashes(tool, entry)
     for dest in old_dests(tool, entry):
         p = repo / dest
