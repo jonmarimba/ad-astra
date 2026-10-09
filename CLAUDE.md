@@ -4,15 +4,21 @@ This repo is the shared toolbox for AI/dev tools, skills, and operating doctrine
 
 ## Repo layout
 
-**Tools are in `tools/<name>/`.** Each tool directory contains an `install.sh` that installs system-level dependencies and a `Brewfile` listing those dependencies. The installer pulls the dependencies via npm/brew, fresh from the external source every time — never a snapshot. Some tools accept `--into <repo>` to install operating doctrine into a target repo by calling `tools/lib/install-doctrine.sh` under the hood. Examples: `convocation`, `graphify-repo`, `xcode-mcp-front`, `handlebars`, `drew-kit`.
+**Tools are in `tools/<name>/`.** Each directory is one of four kinds. A `# astra-scope:` line near the top of its `install.sh` declares `repo`, `repo-config`, or `machine`. A `RUN-IN-PLACE` file in place of an `install.sh` declares the fourth. Every installable tool has an `uninstall.sh`. A machine tool has a `deps.sh` and a `Brewfile` for the software it owns. Templates in `tools/lib/templates.json` group tools, and a template can hold other templates. `tools/tests/test-tool-kinds.sh` enforces all of this. Some tools install operating doctrine into the target repo by calling `tools/lib/install-doctrine.sh`. Examples: `convocation`, `graphify-repo`, `xcode-mcp-front`, `handlebars`, `drew-kit`.
 
-**Skills are in `agents-and-prompts/skills/<name>/` or `skills/<name>/`.** Each skill has a `SKILL.md` that gets installed into a target repo's `.claude/skills/<name>/`. Some skills have their own `install.sh` for pulling third-party dependencies from an external source. The humanizer skill is the canonical example: its `install.sh` runs `npx skills add blader/humanizer` per-repo to get the upstream 35-pattern AI-tell detection. It then copies our voice-calibration layer alongside it as a separate file. Skills without an install script are plain file copies.
+**Skills are in `agents-and-prompts/skills/<name>/`.** Each skill has a `SKILL.md`. A tool of the same name, such as `tools/asd-ste100`, installs it into a target repo's `.claude/skills/<name>/` and records it in the manifest. The humanizer is the largest example: its installer copies a vendored upstream `SKILL.md` and our voice-calibration layer beside it. `tools/astra new <name> --kind skill` scaffolds the tool for a new skill.
 
 **Doctrine has one installer, `tools/lib/install-doctrine.sh`.** It installs a tool's operating rules into a target repo's `.doctrine/<slug>.md`. It also writes `@`-import blocks into CLAUDE.md and AGENTS.md (repo-relative paths, so they survive clone/move). Only capability-and-policy tools ship doctrine — convocation's convoq-first and mix-brands rules, the ASD-STE100 writing standard, and so on. Pure-mechanism tools do not. Companion scripts `uninstall-doctrine.sh` and `uninstall-common.sh` reverse the process.
 
 ## The cardinal rule
 
-Nothing from this repo is ever installed globally (`--global`, `~/.agents/`, `~/.claude/skills/`). Everything is per-repo. When installing a skill or tool into a repo, run the installer FROM this repo INTO the target repo. The installer pulls any external dependencies fresh from their source every time, so re-running the installer is the update path. Never snapshot an external dependency as a local file — that freezes it and cuts off updates.
+Nothing from this repo is ever installed globally (`--global`, `~/.agents/`, `~/.claude/skills/`). Everything is per-repo. When installing a skill or tool into a repo, run the installer FROM this repo INTO the target repo, with `tools/astra add <tool-or-template>` or `python3 tools/lib/template.py install <name> --into <repo>`.
+
+Each kind of tool stays current a different way. Files in a repo (`# astra-scope: repo`) are refreshed by the repo's post-commit and post-merge hooks, which run `.astra/astra-update --pull`. Config entries (`repo-config`) change when you re-run the installer. Software on the machine (`machine`) is refreshed by `tools/astra upgrade`, which runs each tool's `deps.sh` and nothing else. Run-in-place tools update with `git pull`. QUICKSTART.md explains all four.
+
+Installers pull external dependencies fresh from their source, and a re-run keeps a file the user edited by hand. Do not snapshot an external dependency as a local file, because that freezes it and cuts off updates. The one deliberate exception is the humanizer's upstream `SKILL.md`, vendored under `agents-and-prompts/skills/humanizer/upstream/` with its commit recorded; refresh it with `tools/humanizer/vendor.sh`.
+
+To add a tool, run `tools/astra new <name> --kind <kind>`. CONTRIBUTING.md explains the kinds, the promises each keeps, and the tests that check them.
 
 ## Reference install scripts
 

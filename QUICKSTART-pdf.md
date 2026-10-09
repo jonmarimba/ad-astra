@@ -5,11 +5,11 @@ PDFs are opaque to grep, to agents, and to anything else that reads text. The `l
 ## Install
 
 ```
-cd js-db-ad-astra/tools/lib
+cd <your astra clone>/tools/lib
 python3 template.py install legal-pdf --into ~/path/to/YourRepo
 ```
 
-The installer pulls the system dependencies (ocrmypdf, tesseract, and poppler via Homebrew; marker-pdf via uv), places the kit at `.astra/pdf-sidecars/`, and wires the hooks. Re-running the same command is the update path.
+The template places the kit at `.astra/pdf-sidecars/` and wires the pre-commit hook. It does not install software on your machine. Run `tools/pdf-sidecars/install.sh` once with no arguments to install the system dependencies: ocrmypdf, tesseract, and poppler through Homebrew, and marker-pdf through uv. `tools/astra upgrade pdf-sidecars` refreshes them later. Re-running the template command updates the kit in the repo, and it keeps any file you edited.
 
 ## The sidecars
 
@@ -27,7 +27,7 @@ A sidecar is a verbatim rendering of its PDF, and fidelity to the source is its 
 
 ## The hook
 
-The pre-commit hook regenerates and stages sidecars for every staged PDF. If the kit is missing, the hook refuses the commit loudly, because a PDF with no text layer looks exactly like nothing being wrong. The installer manages only its own block in `.git/hooks/pre-commit`; anything else already in that hook is preserved, and the prior version is backed up.
+The pre-commit hook regenerates and stages sidecars for every staged PDF. If the kit is missing, the hook refuses the commit loudly, because a PDF with no text layer looks exactly like nothing being wrong. The installer manages only its own block in `.git/hooks/pre-commit`; anything else already in that hook is preserved. The installer backs up a hook it has not managed before, once, as `pre-commit.bak.<timestamp>` beside it. Uninstall removes only its own block and tells you where the backup is.
 
 ## Backfill and bulk work
 

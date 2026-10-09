@@ -1,17 +1,18 @@
 # Quickstart
 
-This repo is a toolbox that installs AI development tooling into other repos. It carries MCP servers, command-line tools, skills, and operating doctrine. You install a named template into your project, and the template installs everything a project of that kind needs. A template only ever changes your repo. A few tools need software on the machine itself, and "Where each kind of tool lives" below explains which and why.
+This repo is a toolbox that installs AI development tooling into other repos. It holds MCP servers, command-line tools, skills, and operating doctrine. You install a named template into your project, and the template installs everything a project of that kind needs. A template only ever changes your repo. A few tools need software on the machine itself, and "Where each kind of tool lives" below explains which and why.
 
 ## Install a template into your project
 
-Clone this repo, then point a template at your project checkout:
+Clone this repo anywhere, then point a template at your project checkout. The examples use `~/astra` as the clone location. The toolbox needs macOS, git, Python 3.9 or newer, and jq. Run `tools/astra doctor` after the clone to check them.
 
 ```
-cd js-db-ad-astra/tools/lib
+git clone https://github.com/jonmarimba/ad-astra.git ~/astra
+cd ~/astra/tools/lib
 python3 template.py install swift-ios --into ~/path/to/YourApp
 ```
 
-Re-running the same command is the update path. Installers pull their external dependencies fresh every time, so a re-run also upgrades the tools themselves.
+Re-running the same command is a way to update. Installers pull their external dependencies fresh every time, so a re-run also upgrades the tools themselves. If you edited an installed file by hand, the re-run keeps your edit and tells you so. Set `ASTRA_FORCE=1` on the command to overwrite it instead.
 
 ## Which template
 
@@ -22,7 +23,7 @@ The `base` template installs what every repo gets: the writing discipline, convo
 - `legal-pdf` is for document repos. It adds PDF-to-text sidecars on top of `base`. QUICKSTART-pdf.md covers it.
 - `writing` alone gives just the prose stack. QUICKSTART-writing.md describes each piece.
 
-Run `python3 template.py list` to see all of them with descriptions.
+Run `python3 template.py list` to see all of them with descriptions. Run `tools/astra tree` to see how they nest: a template can hold other templates, to any depth, and the README shows the whole tree. You can also build your own set from existing templates and tools. README.md explains how.
 
 ## What lands in your repo
 
@@ -50,7 +51,7 @@ The manifest does not track these entries, and the hooks do not refresh them. To
 
 ### Software on the machine
 
-These tools declare `# astra-scope: machine`. Some things exist once per machine and cannot live in a repo. Homebrew formulas such as `axe` and `periphery` are one example. Background daemons such as the Xcode aggregator are another. So are signed `.app` wrappers that hold macOS permission grants, and downloaded model files.
+These tools declare `# astra-scope: machine`. Some things exist once per machine and cannot live in a repo. Homebrew formulas such as `axe` are one example. Background daemons such as the Xcode aggregator are another. So are signed `.app` wrappers that hold macOS permission grants, and downloaded model files.
 
 A repo install never runs these. Adding a set to a repo must not install software on your machine as a side effect. When a set needs one, the install prints `MACHINE <tool>: install once per machine` with the command. Run that tool's `install.sh` yourself, once. Its `uninstall.sh` keeps shared software unless you pass `--deps`.
 
@@ -66,7 +67,7 @@ Some repo-config installers also install the program their entry points at. The 
 
 ### Run in place
 
-These tools have a `RUN-IN-PLACE` file instead of an `install.sh`. Seven small scripts fall here, such as `peer-review`, `bio-build`, and `omniroute-health`. They run straight from this checkout and install nothing. The `RUN-IN-PLACE` file in each directory says why. They update when you `git pull` the toolbox.
+These tools have a `RUN-IN-PLACE` file instead of an `install.sh`. Small scripts fall here, such as `peer-review`, `bio-build`, `omniroute-health`, `ambrosio`, and `ollama-watch`. Run `ls tools/*/RUN-IN-PLACE` for the full list. They run straight from this checkout and install nothing. The `RUN-IN-PLACE` file in each directory says why. They update when you `git pull` the toolbox.
 
 To see a tool's kind, read the first lines of its `install.sh`, or look for `RUN-IN-PLACE` in its directory. Every installable tool has an `uninstall.sh` that undoes its own install and nothing else.
 
@@ -84,6 +85,19 @@ Each repo answers for itself. `.astra/manifest.json` records which templates the
 
 Nothing assumes a fixed location. Clone this repo anywhere, under any name. A repo records where it was installed from in its manifest. Suppose you move the checkout, or clone a repo onto a machine with no copy at the recorded path. Set `ASTRA_SOURCE=<path to your astra checkout>`, and updates and `convoq` work again. Clone the checkout with `--recurse-submodules`, because `convoq` needs the engine in `vendor/authsec-bridge`. `tools/tests/test-portable-install.sh` proves all of this by installing from a renamed copy into a repo on a machine with an empty home directory.
 
+## Settings that belong to one machine
+
+Some tools need a value that is true for one person or one Mac. Examples are a phone number to text and the name of another Mac. These values never go in the repo. They live in one file per machine, `~/.config/astra/config`, as `KEY="value"` lines. Nothing creates the file, and git never sees it. A tool that needs a missing value stops and prints the key to add. Each key can also be set as an environment variable, which wins over the file.
+
+- `ASTRA_NOTIFY_PHONE` and `ASTRA_NOTIFY_CHAT_ID` are used by `botline` and `ollama-watch`.
+- `ASTRA_LMS_HOST` is used by `ambrosio` and `lms-prune`.
+- `ASTRA_PEER_HOST` is used by `ai-setup-diff`.
+- `ASTRA_LAUNCHD_PREFIX` sets the launchd labels astra creates. The default is `com.astra`.
+- `ASTRA_WORKLOG` and `ASTRA_PEER_REVIEW_REPOS` are used by `peer-review`.
+- `GHOST_REPO` is used by `handlebars notes-append`.
+
+`tools/lib/astra-config.sh` documents the keys in one place. Treat the file as private, because it can hold a phone number.
+
 ## How updates happen
 
 `.astra/astra-update --pull`, run inside your repo, asks this repo whether anything moved on and updates in place. It only touches files that are still exactly what the installer wrote; anything you edited locally is reported, never overwritten. Every install wires a post-commit hook and a post-merge hook that run it in the background. A repo you commit to or pull into stays current without anyone thinking about it.
@@ -92,12 +106,14 @@ The whole interface is one command, run inside the repo:
 
 ```
 <astra checkout>/tools/astra add writing        # a set from templates.json, or a single tool
-<astra checkout>/tools/astra remove humanizer   # gone for good; no update brings it back
+<astra checkout>/tools/astra remove adhd       # gone for good; no update brings it back
 <astra checkout>/tools/astra status
 <astra checkout>/tools/astra list
+<astra checkout>/tools/astra tree
+<astra checkout>/tools/astra doctor
 ```
 
-Git does not clone hooks, so on a new machine or a fresh clone run `astra sync` once. It wires the hooks in every repo beside the astra checkout (or under the directories you name) that has astra tools. A repo never needs astra to work: installed tools are ordinary committed files, and the hook stays silent when no astra checkout is present.
+A tool that arrived through a template cannot be removed alone. `astra remove` refuses it and names the template that holds it. Remove the template, or add the tool separately first. Git does not clone hooks, so on a new machine or a fresh clone run `astra sync` once. It wires the hooks in every repo beside the astra checkout (or under the directories you name) that has astra tools. A repo never needs astra to work: installed tools are ordinary committed files, and the hook stays silent when no astra checkout is present.
 
 ## How bots know their tooling is current
 
