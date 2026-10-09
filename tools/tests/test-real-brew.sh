@@ -8,7 +8,7 @@
 # "==> Auto-updating" banner on stdout). This installs the genuine article under a temp directory,
 # removes the real Homebrew from PATH, and checks the verbs astra's tools use, so those assumptions are
 # facts about brew and not about a fake. The formulae are real ones that pour in any prefix (jq, uv,
-# exiftool): bottles tied to /opt/homebrew (poppler, gettext, ffmpeg...) cannot be installed elsewhere.
+# exiftool): bottles tied to the default prefix (poppler, gettext, ffmpeg...) cannot be installed elsewhere.
 #
 # It needs the network (GitHub, ghcr.io) and says so loudly when it has none; it is a failure, not a skip.
 set -uo pipefail
@@ -16,7 +16,10 @@ set -uo pipefail
 . "$ASTRA_ROOT/tools/tests/fakeworld/realbrew.sh"
 need git "xcode-select --install"; need curl "ships with macOS"
 curl -sfI -m 10 https://github.com >/dev/null 2>&1 || { fail "no network: this test installs a real Homebrew from github.com"; finish; exit 1; }
-[ -x /opt/homebrew/bin/brew ] || { fail "needs a Homebrew on this machine to borrow its portable Ruby: /opt/homebrew/bin/brew"; finish; exit 1; }
+# Remember where this machine's own Homebrew is, if it has one (Apple Silicon, Intel, or none), so the
+# last check can prove the test never touched it. The temp brew needs nothing from it.
+REAL_BREW="$(command -v brew 2>/dev/null || true)"
+REAL_LOG=""; [ -n "$REAL_BREW" ] && REAL_LOG="$("$REAL_BREW" --prefix 2>/dev/null)/var/log"
 
 D="$SB/hb"; mkdir -p "$D"
 realbrew_build "$D" || { fail "could not install Homebrew into $D"; finish; exit 1; }
@@ -27,7 +30,7 @@ rb() { realbrew_run "$@"; }
 echo "== a real Homebrew, in a temp directory, and the real one is out of the way"
 assert_eq "$RB_PREFIX" "$(rb --prefix | sed 's#^/private##')" "brew's prefix is the temp directory"
 assert_eq "$BREW" "$(env PATH="$ASTRA_PATH" sh -c 'command -v brew')" "the temp brew is the one PATH finds"
-assert_eq "" "$(env PATH="$ASTRA_PATH" sh -c 'command -v ffmpeg axe periphery' 2>/dev/null)" "nothing installed under /opt/homebrew is visible"
+assert_eq "" "$(env PATH="$ASTRA_PATH" sh -c 'command -v ffmpeg axe periphery' 2>/dev/null)" "nothing installed under the machine's own Homebrew is visible"
 
 echo "== the verbs astra's tools use, against the real thing"
 rb install jq > "$SB/i1.out" 2>&1; assert_eq 0 "$?" "brew install jq"
@@ -69,5 +72,9 @@ assert_contains "$SB/raw.out" "Autoremoving" "RED: a bare brew uninstall autorem
 assert_eq "" "$(realbrew_installed oniguruma && echo 1)" "RED: and it took the unrelated orphan with it, so the guard is what protected it"
 
 echo "== the real Homebrew on this machine was never used"
-assert_eq "" "$(grep -l "$D" /opt/homebrew/var/log/* 2>/dev/null)" "(nothing in the real Homebrew's logs mentions the temp prefix)"
+if [ -n "$REAL_LOG" ] && [ -d "$REAL_LOG" ]; then
+  assert_eq "" "$(grep -l "$D" "$REAL_LOG"/* 2>/dev/null)" "(nothing in the real Homebrew's logs mentions the temp prefix)"
+else
+  pass "(this machine has no Homebrew of its own, so there was none to touch)"
+fi
 finish

@@ -2,9 +2,10 @@
  "_comment": "Named groups of astra tools fit for a KIND of project. Non-exclusive: installing one adds its tools and never removes another's, and two templates may overlap freely \u2014 swift-ios and legal-pdf both pull the writing tools, and installing one after the other must leave both intact. A template may also list other TEMPLATES as members ('templates'), resolved transitively; the composed leaves follow Jonathan's dictated structure (SPEC.md, 2026-08-31): Xcode, Swift and Mac as building blocks, higher-level templates as compositions of them.",
  "templates": {
   "xcode": {
-   "description": "Drive Xcode through the ONE combined aggregator: Apple's bridge + Drew's server + a narrow XcodeBuildMCP slice (build_run_sim, test_sim, coverage, session defaults \u2014 the headless capabilities nothing else has) behind a single approved HTTP endpoint with a measured sieve/map. No direct spawns: mcp-xcode, mcp-xcode-mcp-server and mcp-XcodeBuildMCP remain as standalone tools but no template installs them (XcodeBuildMCP folded into the aggregator 2026-09-01).",
+   "description": "Drive Xcode through the ONE combined aggregator: Apple's bridge + Drew's server + a narrow XcodeBuildMCP slice (build_run_sim, test_sim, coverage, session defaults \u2014 the headless capabilities nothing else has) behind a single approved HTTP endpoint with a measured sieve/map. No direct spawns: mcp-xcode, mcp-xcode-mcp-server and mcp-XcodeBuildMCP remain as standalone tools but no template installs them (XcodeBuildMCP folded into the aggregator 2026-09-01.) The aggregator itself is the machine-level tool xcode-mcp-front. A repo install only reports it; run its install.sh once per machine, or nothing answers on the port the repo entry points at.",
    "tools": [
-    "mcp-xcode-combined"
+    "mcp-xcode-combined",
+    "xcode-mcp-front"
    ]
   },
   "swift": {

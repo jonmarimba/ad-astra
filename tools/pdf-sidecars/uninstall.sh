@@ -22,6 +22,7 @@ if [ -n "$UC_REPO" ]; then
       !skip {print}' "$HOOK" > "$HOOK.tmp" && mv "$HOOK.tmp" "$HOOK" && chmod +x "$HOOK"
     grep -qvE '^[[:space:]]*(#!.*)?[[:space:]]*$' "$HOOK" || rm -f "$HOOK"
     echo "  removed the pdf-sidecars pre-commit block"
+    ls "$HOOK".bak.* >/dev/null 2>&1 && echo "  kept the backup of your original hook: $(ls "$HOOK".bak.* | head -1 | sed 's#.*/##') (in $HOOKS; delete it when you no longer need it)"
   fi
   git -C "$TARGET" config --unset jsutils.path 2>/dev/null || true
   astra_remove pdf-sidecars

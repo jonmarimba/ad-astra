@@ -75,7 +75,9 @@ assert_empty "$(check whynot)" "a machine tool that says why it has no deps.sh p
 echo "== every tool in the tree"
 cd "$ASTRA_ROOT/tools" || exit 1
 problems=""
-for d in */; do problems="$problems$(check "${d%/}")"$'\n'; done
+# A symlink under tools/ is a stub another test planted for a moment (test-template-partial-rollback
+# links stub-ok and stub-fail in while the fast tier runs in parallel). No real tool is a symlink.
+for d in */; do [ -L "${d%/}" ] && continue; problems="$problems$(check "${d%/}")"$'\n'; done
 problems="$(printf '%s' "$problems" | sed '/^$/d')"
 assert_empty "$problems" "every directory under tools/ is a declared kind and keeps its promises"
 [ -z "$problems" ] || printf '%s\n' "$problems" | sed 's/^/        /'

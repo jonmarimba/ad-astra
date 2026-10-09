@@ -9,6 +9,7 @@ via a template for that along with the writing tools. Whereas the legal repos
 have the pdf to text stuff and the writing stuff."
 
     template.py list
+    template.py tree [name]
     template.py show <name>
     template.py install   <name> --into <repo>
     template.py uninstall <name> --into <repo>
@@ -146,6 +147,10 @@ def run_tool(name, verb, repo):
         if r.returncode != 0:
             tail = (r.stderr or r.stdout or "").strip().splitlines()
             return False, (tail[-1] if tail else f"exit {r.returncode}")
+        # A quiet success hides one thing the user must see: a file of theirs astra left alone.
+        for line in (r.stderr + r.stdout).splitlines():
+            if line.startswith("astra: kept your edited"):
+                print(f"  {line}", file=sys.stderr)
         return True, ""
     except Exception as e:
         return False, f"{e}"
@@ -270,6 +275,43 @@ def cmd_list(_):
     return 0
 
 
+def tree_lines(templates, name, depth=0, _stack=None):
+    """One template and everything under it, two spaces per level. A template name ends in
+    a slash. A tool is a bare name, tagged when it lives above the repo (`[machine]`,
+    `[repo-config]`), so the tree also shows what level each piece installs at."""
+    _stack = _stack or []
+    pad = "  " * depth
+    if name in _stack:
+        return [f"{pad}{name}/  (cycle: {' -> '.join(_stack + [name])})"]
+    meta = templates.get(name)
+    if meta is None:
+        return [f"{pad}{name}/  (missing: not in the catalogue)"]
+    lines = [f"{pad}{name}/"]
+    for member in meta.get("templates", []):
+        lines += tree_lines(templates, member, depth + 1, _stack + [name])
+    for tool in meta.get("tools", []):
+        tag = scope(tool)
+        lines.append(f"{pad}  {tool}" + (f"  [{tag}]" if tag != "repo" else ""))
+    return lines
+
+
+def cmd_tree(args):
+    """The nesting of templates, as a tree. With a name, that template's tree. Without one,
+    every template that no other template contains."""
+    templates = load()["templates"]
+    if args:
+        if args[0] not in templates:
+            print(f"no such template: {args[0]}", file=sys.stderr)
+            return 66
+        roots = [args[0]]
+    else:
+        contained = {m for meta in templates.values() for m in meta.get("templates", [])}
+        roots = sorted(n for n in templates if n not in contained)
+    for root in roots:
+        print("\n".join(tree_lines(templates, root)))
+    return 0
+
+
 def cmd_show(args):
     name = args[0] if args else ""
     templates = load()["templates"]
@@ -303,14 +345,28 @@ def _apply(verb, args):
     name = args[0] if args and not args[0].startswith("-") else ""
     templates = load()["templates"]
     meta = lookup(templates, name)
-    if not meta:
+    # An uninstall removes what install RECORDED, so it can still run after the catalogue
+    # has changed: a template renamed away, or a member that lost a tool. Install has no
+    # record to consult and resolves from the catalogue.
+    recorded = None
+    if verb == "uninstall" and "--into" in args:
+        recorded = _read_state(_target(args)).get("template_tools", {}).get(name)
+    if not meta and recorded is None:
         print(f"no such template or tool: {name}", file=sys.stderr)
         return 66
     try:
-        member_tools = resolve_tools(templates, name)
+        member_tools = resolve_tools(templates, name) if meta else []
     except ValueError as e:
-        print(f"template.py: {e}", file=sys.stderr)
-        return 65
+        if recorded is None:
+            print(f"template.py: {e}", file=sys.stderr)
+            return 65
+        member_tools = []
+    if recorded is not None:
+        # Live order first (members before the template's own tools, so uninstall mirrors
+        # install), then anything only the record knows about. A tool the catalogue added
+        # since install is not in the record, so this repo never received it: leave it.
+        member_tools = [t for t in member_tools if t in recorded] + \
+                       [t for t in recorded if t not in member_tools]
     repo = _target(args)
 
     # UNINSTALL ONLY WHAT THE RECORD SAYS IS INSTALLED.
@@ -334,6 +390,12 @@ def _apply(verb, args):
               file=sys.stderr)
         print(f"  Recorded: {', '.join(installed_templates(repo)) or '(none)'}",
               file=sys.stderr)
+        recorded_tools = _read_state(repo).get("template_tools", {})
+        holders = [n for n in installed_templates(repo) if name in recorded_tools.get(n, [])]
+        if holders:
+            print(f"  '{name}' came in through: {', '.join(holders)}. Remove that template, "
+                  f"or run `astra add {name}` first to make it a separate install.",
+                  file=sys.stderr)
         return 65
 
     ok_n = fail_n = kept_n = 0
@@ -460,7 +522,7 @@ def cmd_status(args):
 
 
 def main():
-    cmds = {"list": cmd_list, "show": cmd_show, "install": cmd_install,
+    cmds = {"list": cmd_list, "tree": cmd_tree, "show": cmd_show, "install": cmd_install,
             "uninstall": cmd_uninstall, "status": cmd_status}
     if len(sys.argv) < 2 or sys.argv[1] not in cmds:
         print(f"usage: template.py {{{'|'.join(cmds)}}} [name] [--into <repo>]")

@@ -229,8 +229,13 @@ new_repo
 "$ASTRA" add check-prose --into "$R" >/dev/null 2>&1
 rm -f "$R/.git/hooks/post-commit" "$R/.git/hooks/post-merge"     # a fresh clone has no hooks
 out="$(cd / && "$ASTRA" sync "$SCRATCH" 2>&1)"; rc=$?
-[ $rc -eq 0 ] && hooked "$R" post-commit && hooked "$R" post-merge && ok "sync from / rewired the clone's hooks" \
-  || bad "sync failed outside a repo or did not rewire (rc=$rc): $(echo "$out" | tail -1)"
+# SCRATCH also holds a repo that an earlier section gave a non-shell post-commit hook on purpose.
+# sync cannot wire that one and must say so (it once swallowed the error and printed "synced"), so
+# the exit code is 1 here and the check is on the repo this section created.
+hooked "$R" post-commit && hooked "$R" post-merge && ok "sync from / rewired the clone's hooks" \
+  || bad "sync failed outside a repo or did not rewire (rc=$rc): $out"
+if echo "$out" | grep -q "astra sync: FAILED .*not a shell script\|not a shell script"; then ok "sync reported the repo whose hook it could not edit"; else bad "sync said nothing about the repo with a non-shell hook: $out"; fi
+[ $rc -eq 1 ] && ok "and exited 1 because of it" || bad "sync exited $rc although one repo could not be wired"
 
 echo
 echo "passed $PASS, failed $FAIL"

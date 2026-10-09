@@ -192,11 +192,15 @@ end tell' ;;
     # Append HTML to an iCloud note by title. Delegates the actual AppleScript to
     # notes_html_append.sh but runs it FROM this .app's identity, so the Automation
     # (Notes) grant and Aqua pedigree apply.
-    GHOST_REPO="${GHOST_REPO:-$HOME/svnCheckouts/js-project-GhOST}"
     if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
       echo "handlebars notes-append: usage: handlebars.sh notes-append \"Note Title\" /path/to/content.html [match-index]" >&2
       exit 64
     fi
+    # The checkout that holds tools/notes_html_append.sh: $GHOST_REPO, else GHOST_REPO in the
+    # astra config file. No default path, because a default is only right on one machine.
+    . "$(dirname "${BASH_SOURCE[0]}")/../lib/astra-config.sh"
+    GHOST_REPO="$(astra_config_required GHOST_REPO)" || exit 64
+    [ -f "$GHOST_REPO/tools/notes_html_append.sh" ] || { echo "handlebars notes-append: $GHOST_REPO/tools/notes_html_append.sh does not exist; fix GHOST_REPO" >&2; exit 66; }
     exec bash "$GHOST_REPO/tools/notes_html_append.sh" "$2" "$3" "${4:-}" ;;
   read-file)
     # Copy a TCC-protected file using Handlebars' FDA grant.

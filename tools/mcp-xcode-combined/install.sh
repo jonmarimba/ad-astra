@@ -77,7 +77,21 @@ path, name, url = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path).read() if os.path.exists(path) else ""
 header = f"[mcp_servers.{name}]"
 if header in s:
-    print(f"mcp-xcode-combined: {path} already has {header}; left as-is")
+    # Update the url inside OUR table only, so a changed XCODE_COMBINED_URL moves Codex with
+    # the other two agents. Other tables, and every other line of our own table, stay as they are.
+    lines, in_ours, done = s.split("\n"), False, False
+    for i, line in enumerate(lines):
+        if line.strip().startswith("["):
+            in_ours = line.strip() == header
+        elif in_ours and not done and line.strip().startswith("url"):
+            lines[i] = f'url = "{url}"'
+            done = True
+    if not done:
+        at = lines.index(header) + 1
+        lines.insert(at, f'url = "{url}"')
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"mcp-xcode-combined: set url in {header} of {path}")
 else:
     with open(path, "a") as f:
         f.write(("\n" if s and not s.endswith("\n\n") else "") + f"{header}\nurl = \"{url}\"\n")

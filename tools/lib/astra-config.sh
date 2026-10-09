@@ -9,6 +9,7 @@
 #   ASTRA_LAUNCHD_PREFIX  reverse-DNS prefix for launchd labels astra creates (default com.astra)
 #   ASTRA_WORKLOG         path to a worklog tool peer-review records into (optional)
 #   ASTRA_PEER_REVIEW_REPOS  colon-separated repos peer-review also covers (optional)
+#   GHOST_REPO            checkout whose tools/notes_html_append.sh handlebars notes-append runs
 # Usage: . astra-config.sh; astra_config KEY   (prints the value, or nothing)
 ASTRA_CONFIG_FILE="${ASTRA_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/astra/config}"
 astra_config() {

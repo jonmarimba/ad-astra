@@ -5,6 +5,13 @@
 #   astra remove <tool-or-set>...   uninstall; nothing brings it back automatically
 #   astra status                    what this repo asked for, what it has, hooks wired?
 #   astra list                      the named sets (templates.json) and every tool
+#   astra new <name> --kind <kind>  scaffold a new tool (skill, repo, repo-config, machine or
+#                                   run-in-place) with its uninstaller and test; see CONTRIBUTING.md
+#   astra tree [set]                how sets nest: which sets hold which sets and tools, and which
+#                                   tools live above the repo ([machine], [repo-config])
+#   astra doctor [dir...]           one report across the machine: the prerequisites astra needs, then
+#                                   every repo beside this checkout (or under the dirs given) that has
+#                                   astra tools, with its sets, update state and hook wiring
 #   astra upgrade [--list] [tool...]  refresh machine software without touching any repo: runs each
 #                                   tool's deps.sh (software only; never an install.sh)
 #   astra sync [dir...]             once per machine or fresh clone: wire the hooks
@@ -24,16 +31,17 @@ set -euo pipefail
 A="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 T="$A/tools/lib/template.py"
 cmd="${1:-}"; [ $# -gt 0 ] && shift
-repo=""; names=(); plan_only=0
+repo=""; names=(); plan_only=0; kind=""
 while [ $# -gt 0 ]; do case "$1" in
   --into) repo="${2:-}"; shift 2 ;;
   --list) plan_only=1; shift ;;
+  --kind) kind="${2:-}"; shift 2 ;;
   -*) echo "astra: unknown flag $1" >&2; exit 64 ;;
   *) names+=("$1"); shift ;;
 esac; done
 # sync and list work from anywhere; every other command acts on one repo.
 case "$cmd" in
-  sync|list|upgrade) ;;
+  sync|list|tree|doctor|upgrade|new) ;;
   *) [ -n "$repo" ] || repo="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "astra: not in a git repo; pass --into <repo>" >&2; exit 64; } ;;
 esac
 case "$cmd" in
@@ -46,18 +54,51 @@ case "$cmd" in
   status)
     python3 "$A/tools/lib/astra_manifest.py" status "$repo"
     [ -x "$repo/.astra/astra-update" ] && "$repo/.astra/astra-update" || true ;;
-  sync)
+  sync|doctor)
     roots=("${names[@]+"${names[@]}"}"); [ ${#roots[@]} -gt 0 ] || roots=("$(dirname "$A")")   # the directory astra sits in, not a fixed home path
-    seen=" "
+    seen=" "; total=0; bad=0
+    if [ "$cmd" = doctor ]; then
+      echo "── this machine"
+      for tool in git python3 jq; do
+        if command -v "$tool" >/dev/null 2>&1; then echo "  ok       $tool  ($(command -v "$tool"))"; else echo "  MISSING  $tool"; bad=$((bad+1)); fi
+      done
+      if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then echo "  ok       python3 is 3.9 or newer"; else echo "  TOO OLD  python3 must be 3.9 or newer"; bad=$((bad+1)); fi
+      if command -v brew >/dev/null 2>&1; then echo "  ok       brew  ($(command -v brew))"; else echo "  absent   brew (only the machine-level tools need it; 'astra upgrade --list' names them)"; fi
+    fi
     for root in "${roots[@]}"; do
       while IFS= read -r m; do
         r="$(cd "$(dirname "$m")/.." && pwd -P)"
         case "$seen" in *" $r "*) continue ;; esac; seen="$seen$r "
         git -C "$r" rev-parse --git-dir >/dev/null 2>&1 || continue
-        python3 "$A/tools/lib/astra_manifest.py" finish "$r" && "$r/.astra/astra-update" --pull >/dev/null 2>&1 || true
-        echo "synced $r"
-      done < <(find -L "$root" -maxdepth 4 -path '*/.astra/manifest.json' -not -path '*/node_modules/*' -not -path '*/tmp/*' 2>/dev/null)
-    done ;;
+        total=$((total+1))
+        if [ "$cmd" = doctor ]; then
+          echo; echo "── $r"
+          python3 "$A/tools/lib/astra_manifest.py" status "$r" | sed 's/^/  /'
+          if [ -x "$r/.astra/astra-update" ]; then
+            "$r/.astra/astra-update" 2>&1 | sed 's/^/  /'
+            [ "${PIPESTATUS[0]}" -eq 0 ] || bad=$((bad+1))
+          else
+            echo "  MISSING  .astra/astra-update (run: astra sync)"; bad=$((bad+1))
+          fi
+        else
+          # Say what went wrong. This used to discard every error and print "synced" regardless.
+          # Wiring the hooks failing is a failure. The updater exiting nonzero is not: it means a
+          # file was edited by hand and kept, so show its notes under the repo and carry on.
+          if out="$(python3 "$A/tools/lib/astra_manifest.py" finish "$r" 2>&1)"; then
+            echo "synced $r"
+            if ! upd="$("$r/.astra/astra-update" --pull 2>&1)"; then printf '%s\n' "$upd" | sed 's/^/    /'; fi
+          else
+            echo "astra sync: FAILED $r" >&2; printf '%s\n' "$out" | sed 's/^/    /' >&2; bad=$((bad+1))
+          fi
+        fi
+      done < <(find -L "$root" -maxdepth 4 -path '*/.astra/manifest.json' -not -path '*/node_modules/*' -not -path '*/tmp/*')
+    done
+    echo; echo "astra $cmd: $total repo(s), $bad problem(s)"
+    [ "$bad" -eq 0 ] ;;
+  new)
+    exec bash "$A/tools/lib/new-tool.sh" "${names[0]:-}" "$kind" ;;
+  tree)
+    python3 "$T" tree "${names[@]+"${names[@]}"}" ;;
   upgrade)
     # The machine half of an update. Re-running a repo install already upgrades a tool's dependencies,
     # but it also rewrites the repo, and software on the machine belongs to no repo. So this runs each

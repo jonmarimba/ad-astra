@@ -160,10 +160,22 @@ def place(repo, tool, pairs):
         # through it into whatever it points at.
         if dest.is_symlink():
             dest.unlink()
-        copy_atomic(src, dest)
         key = dest_rel
-        files[key] = sha(dest)
         paths[key] = {"src": src_rel, "dest": dest_rel}
+        # A file the user edited after astra placed it is theirs. Re-running an install is the
+        # documented update path, so it must not silently throw the edit away: keep the file, keep
+        # the recorded hash (astra-update then keeps reporting LOCAL EDITS), and say so.
+        # ASTRA_FORCE=1 overwrites. A file with no record, or one the user has not touched, is
+        # copied as before.
+        was = recorded_hashes(tool, old).get(dest_rel)
+        if (was and dest.is_file() and sha(dest) != was and sha(dest) != sha(src)
+                and os.environ.get("ASTRA_FORCE") != "1"):
+            print(f"astra: kept your edited {dest_rel} (it differs from what astra placed; "
+                  f"ASTRA_FORCE=1 overwrites it)", file=sys.stderr)
+            files[key] = was
+            continue
+        copy_atomic(src, dest)
+        files[key] = sha(dest)
     for stale in set(old_dests(tool, old)) - {p["dest"] for p in paths.values()}:
         remove_file(repo, stale)
     entry = {"source": recorded_source(repo), "files": files, "paths": paths}
@@ -175,6 +187,13 @@ def place(repo, tool, pairs):
         entry["source_remote"] = remote
     data.setdefault("tools", {})[tool] = entry
     save(repo, data)
+
+
+def recorded_hashes(tool, entry):
+    """dest path -> the hash astra recorded when it placed that file."""
+    paths = entry.get("paths", {})
+    return {(paths.get(f, {}).get("dest") or f".astra/{tool}/{f}"): h
+            for f, h in entry.get("files", {}).items()}
 
 
 def old_dests(tool, entry):
@@ -287,7 +306,14 @@ def unplace(repo, tool):
         print(f"astra: {tool} is not recorded in {manifest_path(repo)}; nothing to remove")
         return
     remove_hooks(repo, tool, entry.get("hooks"))
+    was = recorded_hashes(tool, entry)
     for dest in old_dests(tool, entry):
+        p = repo / dest
+        if (was.get(dest) and p.is_file() and not p.is_symlink() and sha(p) != was[dest]
+                and os.environ.get("ASTRA_FORCE") != "1"):
+            print(f"astra: kept your edited {dest} (it differs from what astra placed; "
+                  f"delete it yourself, or run again with ASTRA_FORCE=1)", file=sys.stderr)
+            continue
         remove_file(repo, dest)
     save(repo, data)
     print(f"astra: removed {tool}")

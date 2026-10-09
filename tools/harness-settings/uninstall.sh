@@ -15,6 +15,7 @@ if [ -d "$BK" ]; then
   latest="$(ls -1t "$BK" 2>/dev/null | head -1)"
   echo "  backups live at: $BK  (newest: ${latest:-none})"
   echo "  to restore, e.g.:  cp \"$BK/$latest/settings.json\" \"$HOME/.claude/settings.json\""
+  echo "  or restore the newest backup in one step:  tools/harness-settings/harness-settings.sh undo"
 else
   echo "  (no backup dir at $BK — nothing to restore from)"
 fi

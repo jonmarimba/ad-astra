@@ -81,7 +81,9 @@ HOOK="$HOOKS/pre-commit"
 BEGIN="# >>> pdf-sidecars (managed by astra) >>>"
 END="# <<< pdf-sidecars <<<"
 
-if [ -f "$HOOK" ]; then
+# Back up only a hook this installer has not managed before. Once the managed block is in the
+# file, a re-run changes nothing but that block, so another backup would only pile up.
+if [ -f "$HOOK" ] && ! grep -qF "$BEGIN" "$HOOK"; then
   cp -p "$HOOK" "$HOOK.bak.$(date +%Y%m%d-%H%M%S)"
   echo "backed up existing pre-commit"
 fi
@@ -108,11 +110,15 @@ for line in lines:
         continue
     if not skipping:
         out.append(line)
-# Drop the old hand-rolled sidecar hook, which the managed block replaces. It is
-# recognised by its own call, not by position.
-text = "\n".join(out)
-if "generate_pdf_sidecars" in text and begin not in text:
-    text = "#!/bin/bash"
+# The old hand-rolled sidecar call is what the managed block replaces. Turn each line
+# that makes the call into a no-op, never delete it, because the line may be the body of an if statement,
+# and every other line of the hook that belongs to the repo must survive. A hook left with nothing but
+# those no-ops collapses to its shebang.
+out = [(": # astra: replaced by the managed pdf-sidecars block below; was: " + l.strip())
+       if "generate_pdf_sidecars" in l and not l.lstrip().startswith("#") else l
+       for l in out]
+live = [l for l in out if l.strip() and not l.lstrip().startswith("#") and not l.startswith(": # astra:")]
+text = "\n".join(out) if live else "#!/bin/bash"
 print(text.rstrip() or "#!/bin/bash")
 PY
 )"
