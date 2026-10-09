@@ -21,6 +21,10 @@ place    copies each file from the astra checkout into the repo, atomically,
          and records it in .astra/manifest.json with its src and dest. A file
          can land anywhere in the repo (a skill under .claude/skills/, doctrine
          under .doctrine/), so .astra/astra-update can keep it current.
+         --hook=EVENT|MATCHER|script registers a Claude Code hook, and
+         --settings=<entries file> writes config entries into agent config
+         files (.claude/settings.json, .qwen/settings.json, .codex/config.toml);
+         both are recorded so unplace removes exactly them.
 unplace  deletes exactly the files the manifest records for that tool and the
          tool's entry. With the entry gone, no automatic update can bring the
          tool back: astra-update only ever touches what the manifest lists.
@@ -189,8 +193,7 @@ def place(repo, tool, pairs):
     apply_settings(repo, tool, data, settings, old.get("settings"), edited_settings)
     if settings:
         # An edited leaf keeps the value astra last wrote on record, as an edited file keeps its hash.
-        entry["settings"] = [{"path": e["path"], "value": edited_settings.get(json.dumps(e["path"]), e["value"])}
-                             for e in settings]
+        entry["settings"] = [dict(e, value=edited_settings.get(_leaf_key(e), e["value"])) for e in settings]
     remote = source_remote()
     if remote:
         entry["source_remote"] = remote
@@ -307,14 +310,30 @@ def add_hooks(repo, tool, specs, old_specs=None):
     sp.write_text(json.dumps(cfg, indent=2) + "\n")
 
 
-# ---- Claude Code settings entries, per repo ---------------------------------
-# A tool may also own plain entries in <repo>/.claude/settings.json, such as a
-# statusLine or an enabled plugin. It ships them as a JSON file of
-# {"entries": [{"path": [key, ...], "value": ...}]}, passed as
-# --settings=<astra-relative file>. Each path names one leaf, so a tool owns
-# enabledPlugins["x@y"] without owning the rest of enabledPlugins. The manifest
-# records each leaf with its value: uninstall removes a leaf only while it still
-# holds that value, and install refuses to replace a value it did not write.
+# ---- agent config entries, per repo -----------------------------------------
+# A tool may also own plain entries in an agent's repo config: a statusLine in
+# .claude/settings.json, ui.statusLine in .qwen/settings.json, tui.status_line in
+# .codex/config.toml. It ships them as a JSON file of
+# {"entries": [{"file": <repo-relative config>, "path": [key, ...], "value": ...}]},
+# passed as --settings=<astra-relative file>. Each path names one leaf, so a tool
+# owns enabledPlugins["x@y"] without owning the rest of enabledPlugins. The
+# manifest records each leaf with its value: uninstall removes a leaf only while
+# it still holds that value, and install refuses to replace a value it did not
+# write.
+#
+# A .json file is edited as JSON. A .toml file is edited as text, one line per
+# leaf, because Python 3.9 has no TOML library: a TOML leaf is exactly
+# [table].key, its value is a string, number, bool or flat list of those
+# (written as JSON, which TOML reads the same), and a value on more than one
+# line is never edited.
+
+_MISSING = object()
+_TOML_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _label(e):
+    return f"{'.'.join(e['path'])} in {e['file']}"
+
 
 def load_settings_entries(src_rel):
     src = ASTRA / src_rel
@@ -325,43 +344,57 @@ def load_settings_entries(src_rel):
     if not isinstance(entries, list) or not entries:
         die(f"{src}: 'entries' must be a non-empty list")
     for e in entries:
-        path = e.get("path") if isinstance(e, dict) else None
+        if not isinstance(e, dict):
+            die(f"{src}: each entry must be an object: {e}")
+        path, file = e.get("path"), e.get("file")
         if (not isinstance(path, list) or not path or not all(isinstance(k, str) and k for k in path)
                 or "value" not in e):
             die(f"{src}: each entry needs a non-empty 'path' list of keys and a 'value': {e}")
-    return [{"path": e["path"], "value": e["value"]} for e in entries]
+        if (not isinstance(file, str) or file.startswith("/") or ".." in Path(file).parts
+                or Path(file).suffix not in (".json", ".toml")):
+            die(f"{src}: 'file' must be a repo-relative .json or .toml path: {e}")
+        if Path(file).suffix == ".toml":
+            v = e["value"]
+            scalar = (str, int, float, bool)
+            if (len(path) != 2 or not all(_TOML_KEY.match(k) for k in path)
+                    or not (isinstance(v, scalar) or (isinstance(v, list) and all(isinstance(x, scalar) for x in v)))):
+                die(f"{src}: a TOML entry is [table].key with a scalar or flat-list value: {e}")
+    return [{"file": e["file"], "path": e["path"], "value": e["value"]} for e in entries]
 
 
-def _read_settings(repo):
-    sp = _settings_path(repo)
-    if not sp.exists():
+def _write_atomic(repo, rel, text):
+    p = Path(repo) / rel
+    if not text.strip():
+        if p.exists():
+            p.unlink()
+            prune(Path(repo), p.parent)
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".astra-tmp")
+    tmp.write_text(text)
+    os.replace(tmp, p)
+
+
+# -- JSON
+
+def _read_json(repo, rel):
+    p = Path(repo) / rel
+    if not p.exists():
         return {}
     try:
-        cfg = json.loads(sp.read_text())
+        cfg = json.loads(p.read_text())
     except Exception as e:
-        die(f"{sp} is unreadable ({e}); refusing to edit it")
+        die(f"{p} is unreadable ({e}); refusing to edit it")
     if not isinstance(cfg, dict):
-        die(f"{sp} does not hold a JSON object; refusing to edit it")
+        die(f"{p} does not hold a JSON object; refusing to edit it")
     return cfg
 
 
-def _write_settings(repo, cfg):
-    sp = _settings_path(repo)
-    if not cfg:
-        if sp.exists():
-            sp.unlink()
-            prune(Path(repo), sp.parent)
-        return
-    sp.parent.mkdir(parents=True, exist_ok=True)
-    tmp = sp.with_name(sp.name + ".astra-tmp")
-    tmp.write_text(json.dumps(cfg, indent=2) + "\n")
-    os.replace(tmp, sp)
+def _write_json(repo, rel, cfg):
+    _write_atomic(repo, rel, json.dumps(cfg, indent=2) + "\n" if cfg else "")
 
 
-_MISSING = object()
-
-
-def _get_leaf(cfg, path):
+def _json_get(cfg, path):
     node = cfg
     for key in path:
         if not isinstance(node, dict) or key not in node:
@@ -370,7 +403,22 @@ def _get_leaf(cfg, path):
     return node
 
 
-def _drop_leaf(cfg, path):
+def _json_check_shape(repo, e):
+    node = _read_json(repo, e["file"])
+    for key in e["path"][:-1]:
+        node = node.get(key, {})
+        if not isinstance(node, dict):
+            die(f"{Path(repo) / e['file']}: {key} is not an object; cannot set {'.'.join(e['path'])}")
+
+
+def _json_set(cfg, path, value):
+    node = cfg
+    for key in path[:-1]:
+        node = node.setdefault(key, {})
+    node[path[-1]] = value
+
+
+def _json_drop(cfg, path):
     """Delete one leaf and every object it leaves empty on the way up."""
     parents = [cfg]
     for key in path[:-1]:
@@ -382,10 +430,112 @@ def _drop_leaf(cfg, path):
         del parents[depth - 1][path[depth - 1]]
 
 
-def _claimed_by_others(data, tool, path):
-    return any(e["path"] == path
+# -- TOML (text, one line per leaf)
+
+def _toml_lines(repo, rel):
+    p = Path(repo) / rel
+    return p.read_text().splitlines() if p.exists() else []
+
+
+def _toml_table_span(lines, table):
+    """(header index, end index) of [table], or None. End is the next header or EOF."""
+    header = re.compile(r"^\s*\[\s*" + re.escape(table) + r"\s*\]\s*(#.*)?$")
+    start = next((i for i, l in enumerate(lines) if header.match(l)), None)
+    if start is None:
+        return None
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"^\s*\[", lines[i])), len(lines))
+    return start, end
+
+
+def _toml_find(repo, e):
+    """(lines, span, line index, parsed value) for e's leaf. Refuses a layout this
+    editor cannot change safely: the key set outside its [table], or a value it
+    cannot read as one line."""
+    p = Path(repo) / e["file"]
+    lines = _toml_lines(repo, e["file"])
+    table, key = e["path"]
+    dotted = re.compile(r"^\s*" + re.escape(table) + r"\s*\.")
+    if any(dotted.match(l) for l in lines):
+        die(f"{p} sets {table}.* with dotted keys; edit {'.'.join(e['path'])} by hand")
+    span = _toml_table_span(lines, table)
+    if span is None:
+        return lines, None, None, _MISSING
+    key_line = re.compile(r"^\s*" + re.escape(key) + r"\s*=\s*(.*?)\s*$")
+    for i in range(span[0] + 1, span[1]):
+        m = key_line.match(lines[i])
+        if m:
+            try:
+                return lines, span, i, json.loads(m.group(1))
+            except ValueError:
+                die(f"{p}: cannot read {'.'.join(e['path'])} = {m.group(1)}; edit it by hand")
+    return lines, span, None, _MISSING
+
+
+def _toml_set(repo, e):
+    lines, span, at, _ = _toml_find(repo, e)
+    table, key = e["path"]
+    line = f"{key} = {json.dumps(e['value'])}"
+    if at is not None:
+        lines[at] = line
+    elif span is not None:
+        lines.insert(span[0] + 1, line)
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines += [f"[{table}]", line]
+    _write_atomic(repo, e["file"], "\n".join(lines) + "\n")
+
+
+def _toml_drop(repo, e):
+    lines, span, at, _ = _toml_find(repo, e)
+    del lines[at]
+    end = span[1] - 1
+    # A table this left with no keys goes too, with the blank line that set it off.
+    if not any(l.strip() and not l.strip().startswith("#") for l in lines[span[0] + 1:end]):
+        del lines[span[0]:end]
+        if span[0] > 0 and span[0] <= len(lines) and not lines[span[0] - 1].strip():
+            del lines[span[0] - 1]
+    _write_atomic(repo, e["file"], "\n".join(lines) + "\n" if lines else "")
+
+
+# -- one interface over both
+
+def _is_toml(e):
+    return e["file"].endswith(".toml")
+
+
+def _get_leaf(repo, e):
+    if _is_toml(e):
+        return _toml_find(repo, e)[3]
+    return _json_get(_read_json(repo, e["file"]), e["path"])
+
+
+def _set_leaf(repo, e):
+    if _is_toml(e):
+        _toml_set(repo, e)
+        return
+    cfg = _read_json(repo, e["file"])
+    _json_set(cfg, e["path"], e["value"])
+    _write_json(repo, e["file"], cfg)
+
+
+def _drop_leaf(repo, e):
+    if _is_toml(e):
+        _toml_drop(repo, e)
+        return
+    cfg = _read_json(repo, e["file"])
+    _json_drop(cfg, e["path"])
+    _write_json(repo, e["file"], cfg)
+
+
+def _leaf_key(e):
+    return json.dumps([e["file"], e["path"]])
+
+
+def _claimed_by_others(data, tool, e):
+    return any(_leaf_key(o) == _leaf_key(e)
                for other, entry in data.get("tools", {}).items() if other != tool
-               for e in entry.get("settings", []))
+               for o in entry.get("settings", []))
 
 
 def check_settings(repo, tool, entries, old_entries):
@@ -393,74 +543,61 @@ def check_settings(repo, tool, entries, old_entries):
     already set to another value. A leaf this tool wrote and the user changed
     since is kept, as an edited file is. Any other value belongs to the repo:
     replacing a repo's own statusLine without asking would silently change its
-    behaviour, so that refuses. ASTRA_FORCE=1 overwrites both.
-    Returns {json path: value astra last wrote} for the kept leaves."""
+    behaviour, so that refuses. ASTRA_FORCE=1 overwrites both. A config this
+    cannot edit safely refuses even then.
+    Returns {leaf key: value astra last wrote} for the kept leaves."""
     edited = {}
     if not entries:
         return edited
-    cfg = _read_settings(repo)
+    current = {}
     for e in entries:
-        node = cfg
-        for key in e["path"][:-1]:
-            node = node.get(key, {})
-            if not isinstance(node, dict):
-                die(f"{_settings_path(repo)}: {key} is not an object; cannot set {'.'.join(e['path'])}")
+        if not _is_toml(e):
+            _json_check_shape(repo, e)
+        current[_leaf_key(e)] = _get_leaf(repo, e)
     if os.environ.get("ASTRA_FORCE") == "1":
         return edited
-    ours = {json.dumps(e["path"]): e["value"] for e in (old_entries or [])}
+    ours = {_leaf_key(e): e["value"] for e in (old_entries or [])}
     for e in entries:
-        key = json.dumps(e["path"])
-        current = _get_leaf(cfg, e["path"])
-        if current is _MISSING or current == e["value"] or ours.get(key, _MISSING) == current:
+        key = _leaf_key(e)
+        now = current[key]
+        if now is _MISSING or now == e["value"] or ours.get(key, _MISSING) == now:
             continue
         if key in ours:
-            print(f"astra: kept your edited setting {'.'.join(e['path'])} in .claude/settings.json "
+            print(f"astra: kept your edited setting {_label(e)} "
                   f"(it differs from what astra wrote; ASTRA_FORCE=1 overwrites it)", file=sys.stderr)
             edited[key] = ours[key]
             continue
-        die(f"{_settings_path(repo)} already sets {'.'.join(e['path'])} to {json.dumps(current)}; "
+        die(f"{Path(repo) / e['file']} already sets {'.'.join(e['path'])} to {json.dumps(now)}; "
             f"{tool} would replace it. Remove that entry first, or run again with ASTRA_FORCE=1 "
             f"to overwrite it.")
     return edited
 
 
-def remove_settings(repo, tool, data, entries, keep_paths=()):
+def remove_settings(repo, tool, data, entries, keep=()):
     """Remove the leaves this tool recorded, except ones the user changed since
     (kept, and reported) and ones another installed tool also records."""
-    if not entries:
-        return
-    cfg = _read_settings(repo)
-    keep = {json.dumps(p) for p in keep_paths}
-    for e in entries:
-        if json.dumps(e["path"]) in keep or _claimed_by_others(data, tool, e["path"]):
+    keep = {_leaf_key(e) for e in keep}
+    for e in entries or []:
+        if _leaf_key(e) in keep or _claimed_by_others(data, tool, e):
             continue
-        current = _get_leaf(cfg, e["path"])
-        if current is _MISSING:
+        now = _get_leaf(repo, e)
+        if now is _MISSING:
             continue
-        if current != e["value"] and os.environ.get("ASTRA_FORCE") != "1":
-            print(f"astra: kept your edited setting {'.'.join(e['path'])} in .claude/settings.json "
+        if now != e["value"] and os.environ.get("ASTRA_FORCE") != "1":
+            print(f"astra: kept your edited setting {_label(e)} "
                   f"(it differs from what astra wrote; ASTRA_FORCE=1 removes it)", file=sys.stderr)
             continue
-        _drop_leaf(cfg, e["path"])
-    _write_settings(repo, cfg)
+        _drop_leaf(repo, e)
 
 
 def apply_settings(repo, tool, data, entries, old_entries, edited):
     """Write this tool's leaves, after removing any leaf an older install wrote
     that this one no longer ships. check_settings has already run; the leaves
     it reported as edited stay as the user left them."""
-    remove_settings(repo, tool, data, old_entries, keep_paths=[e["path"] for e in entries])
-    if not entries:
-        return
-    cfg = _read_settings(repo)
+    remove_settings(repo, tool, data, old_entries, keep=entries)
     for e in entries:
-        if json.dumps(e["path"]) in edited:
-            continue
-        node = cfg
-        for key in e["path"][:-1]:
-            node = node.setdefault(key, {})
-        node[e["path"][-1]] = e["value"]
-    _write_settings(repo, cfg)
+        if _leaf_key(e) not in edited:
+            _set_leaf(repo, e)
 
 
 def unplace(repo, tool):

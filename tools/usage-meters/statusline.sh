@@ -3,8 +3,8 @@
 # Claude Code status line: current directory, plus remaining 5-hour session and
 # 7-day weekly subscription usage as colored bars.
 #
-# Installed per repo as .astra/claude-usage-meters/statusline.sh by
-# tools/claude-usage-meters/install.sh. Edit the copy in astra, not the installed
+# Installed per repo as .astra/usage-meters/statusline.sh by
+# tools/usage-meters/install.sh. Edit the copy in astra, not the installed
 # one; the repo's post-commit hook keeps the installed copy current.
 #
 # Input schema: https://code.claude.com/docs/en/statusline

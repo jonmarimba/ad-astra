@@ -1,0 +1,27 @@
+{
+  "entries": [
+    {
+      "file": ".claude/settings.json",
+      "path": ["statusLine"],
+      "value": {
+        "type": "command",
+        "command": "\"$CLAUDE_PROJECT_DIR\"/.astra/usage-meters/statusline.sh",
+        "refreshInterval": 60
+      }
+    },
+    {
+      "file": ".qwen/settings.json",
+      "path": ["ui", "statusLine"],
+      "value": {
+        "type": "command",
+        "command": "./.astra/usage-meters/statusline-qwen.sh",
+        "respectUserColors": true
+      }
+    },
+    {
+      "file": ".codex/config.toml",
+      "path": ["tui", "status_line"],
+      "value": ["project-root", "context-used", "five-hour-limit", "weekly-limit", "used-tokens"]
+    }
+  ]
+}
