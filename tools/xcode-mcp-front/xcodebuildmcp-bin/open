@@ -1,0 +1,31 @@
+#!/bin/bash
+# XcodeBuildMCP opens devices:// URLs without choosing an Xcode installation.
+# Launch Services can send those URLs to a different Device Hub than xcode-select.
+set -euo pipefail
+
+open_bin="${XCODEBUILDMCP_OPEN_BIN:-/usr/bin/open}"
+if [[ "$#" -eq 1 && "$1" == devices://* ]]; then
+    developer_dir="${DEVELOPER_DIR:-$(xcode-select -p)}"
+    device_hub="${developer_dir%/Developer}/Applications/DeviceHub.app"
+    if [[ ! -d "$device_hub" ]]; then
+        printf 'xcodebuildmcp-open: no Device Hub at %s\n' "$device_hub" >&2
+        exit 66
+    fi
+    "$open_bin" -a "$device_hub" "$1" || exit $?
+    if [[ "$1" == *'?id='* ]]; then
+        device_id="${1#*?id=}"
+        device_id="${device_id%%&*}"
+        device_info="$HOME/Library/Developer/CoreSimulator/Devices/$device_id/device.plist"
+        if [[ -f "$device_info" ]]; then
+            if simulator_name=$(/usr/libexec/PlistBuddy -c 'Print :name' "$device_info"); then
+                helper="$(cd "$(dirname "$0")/.." && pwd)/close-device-hub-management.swift"
+                if ! /usr/bin/swift "$helper" "$device_hub" "$simulator_name"; then
+                    printf 'xcodebuildmcp-open: Device Hub management window remained open\n' >&2
+                fi
+            fi
+        fi
+    fi
+    exit 0
+fi
+
+exec "$open_bin" "$@"

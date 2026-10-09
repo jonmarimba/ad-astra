@@ -38,6 +38,7 @@ cat > "$SB/_mcp_info.json" <<EOF
         {"tool": "nudge", "name": "poke_beta", "why": "aggregate coherence: 'nudge' reads wrong beside alpha's verbs", "description": "Poke beta and await its pong."},
         {"tool": "gone-tool", "name": "never_served", "why": "stale entry — the upstream never offered this; the degrade test wants it"}
       ]},
+    "xbm": {"command": "python3", "args": ["$STUB", "--name", "xbm", "--tool", "session_set_defaults=defaults-set", "--tool", "build_run_sim=sim-app-launched"]},
     "pager": {"command": "python3", "args": ["$STUB", "--name", "pager", "--page-size", "1", "--tool", "first=page-one", "--tool", "second=page-two"]},
     "muzzled": {"command": "python3", "args": ["$STUB", "--name", "muzzled", "--tool", "a=muzzled-a", "--tool", "b=muzzled-b"],
       "block": [
@@ -90,12 +91,16 @@ printf '%s' "$list" > "$SB/list.out"
 assert_contains "$SB/list.out" "alpha__ping" "tools/list serves alpha's tools under the alpha__ prefix"
 assert_contains "$SB/list.out" "alpha__build" "tools/list serves alpha's second tool"
 assert_contains "$SB/list.out" "beta__ping" "tools/list serves beta's tools under the beta__ prefix"
+assert_contains "$SB/list.out" "xbm__build_run_sim" "tools/list serves the simulator run tool"
 
 # Same tool name on both upstreams routes by prefix, not by luck.
 mcp_call tools/call '{"name":"alpha__ping","arguments":{}}' > "$SB/alpha.out"
 assert_contains "$SB/alpha.out" "alpha-pong" "alpha__ping routes to the alpha stub"
 mcp_call tools/call '{"name":"beta__ping","arguments":{}}' > "$SB/beta.out"
 assert_contains "$SB/beta.out" "beta-pong" "beta__ping routes to the beta stub, same bare name"
+mcp_call tools/call '{"name":"xbm__build_run_sim","arguments":{}}' > "$SB/xbm-run.out"
+assert_contains "$SB/xbm-run.out" "sim-app-launched" \
+  "the recommended simulator run tool routes to the configured upstream"
 
 # --- Phase 4.1: the daemon is a notification relay, and says so ---
 # The surface genuinely changes (upstream flaps, upstream listChanged), so the daemon
@@ -109,6 +114,14 @@ init_body="$(curl -s --max-time 10 -X POST "http://127.0.0.1:8899/mcp" \
 printf '%s' "$init_body" > "$SB/init.out"
 assert_contains "$SB/init.out" '"listChanged":true' \
   "initialize advertises tools.listChanged — the list is a moving target and says so"
+assert_contains "$SB/init.out" "xbm__session_set_defaults" \
+  "the combined surface names the simulator setup tool"
+assert_contains "$SB/init.out" "xbm__build_run_sim" \
+  "the combined surface directs simulator runs to the verified build-and-launch route"
+assert_contains "$SB/init.out" "only dispatches a launch" \
+  "the instructions distinguish an unmonitored dispatch from a verified launch"
+assert_contains "$SB/init.out" "windowtab-" \
+  "the instructions point Apple's Run tool at the visible workspace"
 
 # --- Phase 4.2: a version mismatch warns in-band and persists for the human ---
 assert_contains "$SB/init.out" "9.9.9" \
